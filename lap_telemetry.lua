@@ -516,40 +516,6 @@ function lap_telemetry.draw(dt)
         if showRefPicker then ghostFiles = nil end
     end
     
-    -- Reference lap picker
-    if showRefPicker then
-        ui.setCursor(vec2(windowSize.x - 150, headerH + 5))
-        
-        local files = scanGhostFiles()
-        if #files == 0 then
-            ui.textColored("No CSV files", colors.textDim)
-        else
-            for _, filename in ipairs(files) do
-                if ui.button(filename, vec2(140, 0)) and not isLoadingRef then
-                    isLoadingRef = true
-                    showRefPicker = false
-                    
-                    local filePath = __dirname .. "/tracks/" .. filename
-                    local loaded = lap.fromCSV(filePath, state.track, state.car)
-                    
-                    if loaded then
-                        referenceLap = loaded
-                        table.insert(state.historyReferences, loaded)
-                        ac.setMessage("Reference Loaded", "Loaded " .. loaded:length() .. " samples")
-                    else
-                        ac.setMessage("Load Error", "Failed to load " .. filename)
-                    end
-                    
-                    isLoadingRef = false
-                end
-            end
-        end
-        
-        if ui.button("Cancel##ref", vec2(140, 0)) then
-            showRefPicker = false
-        end
-    end
-    
     -- Controls bar
     local controlsY = headerH + 5
     local controlsH = 25
@@ -736,7 +702,51 @@ function lap_telemetry.draw(dt)
         y = y + traceH
         
         -- Throttle
-        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "throttle", colors.throttle, colors.refThrottle, 0, 1, "Throttle", "")
+        local throttleY = y
+        local throttleH = traceH - 5
+        drawTimeTrace(graphX, y, graphW, throttleH, startTime, endTime, selectedLap, referenceLap, "throttle", colors.throttle, colors.refThrottle, 0, 1, "Throttle", "")
+        
+        -- Draw TC markers on throttle trace (current session laps only)
+        if selectedLap.tcActive and #selectedLap.tcActive > 0 then
+            local tcColor = rgbm(1, 0.5, 0, 1)  -- Orange for TC
+            
+            for i = 1, selectedLap:length() do
+                if selectedLap.tcActive[i] then
+                    local sampleTime
+                    if selectedLap.times and selectedLap.times[i] then
+                        sampleTime = selectedLap.times[i]
+                    else
+                        sampleTime = (i - 1) / lap.SAMPLE_RATE
+                    end
+                    
+                    -- Check if sample is in visible range
+                    if sampleTime >= startTime and sampleTime <= endTime then
+                        local px = graphX + ((sampleTime - startTime) / (endTime - startTime)) * graphW
+                        local throttleVal = selectedLap.throttle[i] or 0
+                        local py = throttleY + throttleH - throttleVal * throttleH
+                        
+                        -- TC marker (small orange triangle pointing down)
+                        ui.drawTriangleFilled(
+                            vec2(px - 3, py - 8),
+                            vec2(px + 3, py - 8),
+                            vec2(px, py - 2),
+                            tcColor
+                        )
+                    end
+                end
+            end
+            
+            -- Legend
+            ui.setCursor(vec2(graphX + 70, throttleY + 2))
+            ui.pushFont(ui.Font.Small)
+            ui.drawTriangleFilled(vec2(graphX + 70, throttleY + 4), vec2(graphX + 76, throttleY + 4), vec2(graphX + 73, throttleY + 10), tcColor)
+            ui.setCursor(vec2(graphX + 80, throttleY + 2))
+            ui.pushStyleColor(ui.StyleColor.Text, tcColor)
+            ui.text("TC")
+            ui.popStyleColor()
+            ui.popFont()
+        end
+        
         y = y + traceH
         
         -- Brake
@@ -978,6 +988,122 @@ function lap_telemetry.draw(dt)
         ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
         ui.text("Complete a lap to see telemetry")
         ui.popStyleColor()
+    end
+    
+    -- Reference lap picker dialog (drawn last to be on top)
+    if showRefPicker then
+        local dialogW = 280
+        local dialogH = 300
+        local dialogX = windowSize.x - dialogW - 10
+        local dialogY = headerH + 5
+        
+        -- Dialog background
+        ui.drawRectFilled(vec2(dialogX, dialogY), vec2(dialogX + dialogW, dialogY + dialogH), rgbm(0.1, 0.1, 0.12, 0.98), 4)
+        ui.drawRect(vec2(dialogX, dialogY), vec2(dialogX + dialogW, dialogY + dialogH), colors.gridMajor, 2)
+        
+        local py = dialogY + 10
+        local itemW = dialogW - 20
+        
+        -- Header
+        ui.setCursor(vec2(dialogX + 10, py))
+        ui.pushFont(ui.Font.Main)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+        ui.text("Select Reference Lap")
+        ui.popStyleColor()
+        ui.popFont()
+        py = py + 25
+        
+        ui.drawLine(vec2(dialogX + 5, py), vec2(dialogX + dialogW - 5, py), colors.grid, 1)
+        py = py + 10
+        
+        -- Session Laps section
+        ui.setCursor(vec2(dialogX + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text("Session Laps:")
+        ui.popStyleColor()
+        ui.popFont()
+        py = py + 18
+        
+        if #state.history > 0 then
+            for i, histLap in ipairs(state.history) do
+                if i <= 8 then  -- Limit to 8 laps to fit
+                    local lapTimeS = histLap.time / 1000
+                    local mins = math.floor(lapTimeS / 60)
+                    local secs = lapTimeS - mins * 60
+                    local lapLabel = string.format("Lap %d: %d:%05.2f", i, mins, secs)
+                    if histLap == state.bestLap then
+                        lapLabel = lapLabel .. " (best)"
+                    end
+                    
+                    ui.setCursor(vec2(dialogX + 10, py))
+                    if ui.button(lapLabel .. "##hist" .. i, vec2(itemW, 0)) then
+                        state.setBestLap(histLap)
+                        showRefPicker = false
+                        ac.setMessage("Reference Set", string.format("Using lap %d:%05.2f", mins, secs))
+                    end
+                    py = py + 22
+                end
+            end
+        else
+            ui.setCursor(vec2(dialogX + 15, py))
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+            ui.text("No session laps yet")
+            ui.popStyleColor()
+            py = py + 20
+        end
+        
+        py = py + 5
+        ui.drawLine(vec2(dialogX + 5, py), vec2(dialogX + dialogW - 5, py), colors.grid, 1)
+        py = py + 10
+        
+        -- CSV Files section
+        ui.setCursor(vec2(dialogX + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text("CSV Files:")
+        ui.popStyleColor()
+        ui.popFont()
+        py = py + 18
+        
+        local files = scanGhostFiles()
+        if #files > 0 then
+            for _, filename in ipairs(files) do
+                ui.setCursor(vec2(dialogX + 10, py))
+                if ui.button(filename .. "##csv", vec2(itemW, 0)) and not isLoadingRef then
+                    isLoadingRef = true
+                    showRefPicker = false
+                    
+                    local filePath = __dirname .. "/tracks/" .. filename
+                    local loaded = lap.fromCSV(filePath, state.track, state.car)
+                    
+                    if loaded then
+                        state.setBestLap(loaded)
+                        table.insert(state.historyReferences, loaded)
+                        ac.setMessage("Reference Loaded", string.format("Loaded %d:%05.2f from CSV", 
+                            math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
+                    else
+                        ac.setMessage("Load Error", "Failed to load " .. filename)
+                    end
+                    
+                    isLoadingRef = false
+                end
+                py = py + 22
+            end
+        else
+            ui.setCursor(vec2(dialogX + 15, py))
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+            ui.text("No CSV files in tracks/")
+            ui.popStyleColor()
+            py = py + 20
+        end
+        
+        -- Cancel button at bottom
+        py = dialogY + dialogH - 30
+        ui.setCursor(vec2(dialogX + 10, py))
+        if ui.button("Cancel##refdlg", vec2(itemW, 0)) then
+            showRefPicker = false
+        end
     end
 end
 

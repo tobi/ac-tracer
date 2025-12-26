@@ -499,6 +499,18 @@ end
 -- Update Loop
 --------------------------------------------------------------------------------
 
+-- Track previous state for detecting resets/teleports
+local prevInPit = false
+local prevPosition = 0
+local prevLapTimeMs = 0
+
+--- Discard current lap and start fresh
+local function discardCurrentLap()
+    state.currentLap = lap.new(state.track, state.car, state.sessionId)
+    state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
+    ac.log("Traces: Discarded current lap (teleport/pit/reset)")
+end
+
 --- Update state (call from script.update)
 ---@param dt number Delta time in seconds
 ---@param car table Car state from ac.getCar()
@@ -511,6 +523,30 @@ function state.update(dt, car)
     -- Skip if paused
     if ac.getSim().isPaused then return end
     
+    -- Detect teleport to pits or session reset
+    local inPit = car.isInPitlane or car.isInPit
+    local lapTimeReset = car.lapTimeMs < prevLapTimeMs - 1000 and car.lapTimeMs < 1000  -- Lap time went backwards significantly
+    local bigPositionJump = math.abs(car.splinePosition - prevPosition) > 0.3 and prevPosition > 0  -- Teleported
+    
+    -- Entering pits (wasn't in pit, now in pit)
+    if inPit and not prevInPit then
+        discardCurrentLap()
+    end
+    
+    -- Teleport detection (big position jump without crossing start/finish)
+    if bigPositionJump and not (prevPosition > 0.9 and car.splinePosition < 0.1) then
+        discardCurrentLap()
+    end
+    
+    -- Session/lap reset (lap time goes to 0 without completing)
+    if lapTimeReset and state.currentLap and state.currentLap:length() > 10 then
+        discardCurrentLap()
+    end
+    
+    prevInPit = inPit
+    prevPosition = car.splinePosition
+    prevLapTimeMs = car.lapTimeMs
+    
     -- Sample at 15 Hz
     sampleTimer = sampleTimer + dt
     if sampleTimer >= 1 / SAMPLE_RATE then
@@ -522,8 +558,8 @@ function state.update(dt, car)
             state.currentLap.fuelLeftAtStart = car.fuel
         end
         
-        -- Add sample if valid
-        if car.lapTimeMs > 0 and car.splinePosition >= 0 then
+        -- Add sample if valid (and not in pits)
+        if car.lapTimeMs > 0 and car.splinePosition >= 0 and not inPit then
             state.currentLap:addSample(car)
         end
     end

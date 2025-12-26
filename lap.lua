@@ -35,6 +35,7 @@ function lap.new(track, car, sessionId)
         speed = {},            -- km/h
         pos = {},              -- spline position 0.0 to 1.0
         times = {},            -- seconds (elapsed lap time at each sample)
+        tcActive = {},         -- boolean: traction control active
     }, lap)
 end
 
@@ -71,6 +72,7 @@ function lap:addSample(car)
     table.insert(self.speed, car.speedKmh)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
+    table.insert(self.tcActive, car.tractionControlInAction or false)
 end
 
 --- Get number of samples in this lap
