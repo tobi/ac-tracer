@@ -681,12 +681,11 @@ local function drawScoreGauge(cx, cy, radius, score)
 end
 
 --- Main window rendering
-function corner_analysis.draw(dt, useKmh, isRecording)
+function corner_analysis.draw(dt, useKmh)
     local car = ac.getCar(0)
     
     -- Auto-hide when traveling above speed threshold
     if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
-        -- Draw minimal collapsed indicator
         ui.drawRectFilled(vec2(0, 0), vec2(115, 22), rgbm(0.08, 0.1, 0.08, 0.9), 4)
         ui.setCursor(vec2(8, 3))
         ui.pushFont(ui.Font.Small)
@@ -699,13 +698,35 @@ function corner_analysis.draw(dt, useKmh, isRecording)
     
     local windowSize = ui.availableSpace()
     local padding = 8
-
+    local panelX = windowSize.x * 0.68
+    local graphWidth = panelX - padding * 2
+    local graphY = 22
+    local graphHeight = windowSize.y - padding - graphY
+    
+    -- Fixed layout constants
+    local gaugeRadius = 25
+    local gaugeCenterX = windowSize.x - gaugeRadius - 15
+    local gaugeCenterY = 35
+    local statsStartY = gaugeCenterY + gaugeRadius + 26
+    local lineH = 18
+    local labelW = 45
+    local speedUnit = useKmh and "km/h" or "mph"
+    
+    -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, colors.background, 4)
-
-    local graphWidth = windowSize.x * 0.68 - padding * 2
-    local panelWidth = windowSize.x * 0.32 - padding
-    local contentHeight = windowSize.y - padding * 2
-
+    
+    -- Graph area background
+    ui.drawRectFilled(
+        vec2(padding, graphY),
+        vec2(padding + graphWidth, graphY + graphHeight),
+        colors.graphBg,
+        4
+    )
+    
+    -- Score gauge (always visible, same position)
+    drawScoreGauge(gaugeCenterX, gaugeCenterY, gaugeRadius, displayScore)
+    
+    -- Header text
     ui.setCursor(vec2(padding, 4))
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
@@ -717,150 +738,135 @@ function corner_analysis.draw(dt, useKmh, isRecording)
     end
     ui.popStyleColor()
     ui.popFont()
-
-    local graphY = 22
-    local graphHeight = contentHeight - 18
-
-    ui.drawRectFilled(
-        vec2(padding, graphY),
-        vec2(padding + graphWidth, graphY + graphHeight),
-        colors.graphBg,
-        4
-    )
-
+    
+    -- Helper functions for stats (defined once, used below)
+    local statsY = statsStartY
+    
+    local function drawStatRow(label, delta, unit)
+        if delta == nil then return end
+        local sign = delta >= 0 and "+" or ""
+        local rounded = math.floor(math.abs(delta) + 0.5)
+        local valueColor = colors.textBright
+        if rounded ~= 0 then
+            valueColor = delta > 0 and rgbm(0.3, 1, 0.3, 1) or rgbm(1, 0.4, 0.4, 1)
+        end
+        ui.setCursor(vec2(panelX, statsY))
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text(label)
+        ui.popStyleColor()
+        ui.sameLine(panelX + labelW)
+        ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+        ui.text(string.format("%s%d %s", sign, rounded, unit))
+        ui.popStyleColor()
+        statsY = statsY + lineH
+    end
+    
+    local function drawPosRow(label, meters)
+        if meters == nil then return end
+        local rounded = math.abs(math.floor(meters + 0.5))
+        local direction = meters >= 0 and "later" or "earlier"
+        local valueColor = colors.textBright
+        if rounded ~= 0 then
+            valueColor = meters > 0 and rgbm(0.3, 1, 0.3, 1) or rgbm(1, 0.4, 0.4, 1)
+        end
+        ui.setCursor(vec2(panelX, statsY))
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text(label)
+        ui.popStyleColor()
+        ui.sameLine(panelX + labelW)
+        ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+        ui.text(string.format("%dm %s", rounded, direction))
+        ui.popStyleColor()
+        statsY = statsY + lineH
+    end
+    
     if displayData then
+        -- Graph outline (blue for frozen, green for live)
+        local outlineColor = frozenCorner.active 
+            and rgbm(0.4, 0.7, 1, 0.8)
+            or rgbm(0.6, 0.8, 0.4, 0.6)
+        ui.drawRect(
+            vec2(padding, graphY),
+            vec2(padding + graphWidth, graphY + graphHeight),
+            outlineColor, 4, 2
+        )
+        
+        -- Graph content
         drawFilledComparison(
             padding + 4, graphY + 4,
             graphWidth - 8, graphHeight - 8,
             displayData.currentSpeeds,
-            displayData.refStartPos,
-            displayData.refEndPos,
-            displayData.refApexPos
+            displayData.refStartPos, displayData.refEndPos, displayData.refApexPos
         )
-
         drawMarkerLines(
             padding + 4, graphY + 4,
             graphWidth - 8, graphHeight - 8,
-            displayData.currentSpeeds,
-            displayData
+            displayData.currentSpeeds, displayData
         )
-
-        local panelX = padding + graphWidth + padding
-        local statsWidth = panelWidth
         
-        -- Score gauge in top right
-        local scoreCenterX = windowSize.x - 45
-        local scoreY = 25
-        drawScoreGauge(scoreCenterX, scoreY, 25, displayScore)
-
-        ui.setCursor(vec2(panelX, 4))
-        ui.pushFont(ui.Font.Small)
-        if frozenCorner.active then
-            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.4, 0.7, 1, 1))  -- Blue to indicate frozen/focused
-            ui.text("Corner " .. displayData.number .. " (frozen)")
-        else
-            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text("Corner " .. displayData.number)
-        end
-        ui.popStyleColor()
-        ui.popFont()
-
-        local statsY = graphY + 10
-        local lineH = 16
-        ui.pushFont(ui.Font.Main)
-        
-        -- Time delta (most important - shown first and larger)
+        -- Time delta (left of gauge, vertically centered)
         if displayData.timeDelta then
             local sign = displayData.timeDelta >= 0 and "+" or ""
             local deltaColor = displayData.timeDelta >= 0 and rgbm(1, 0.3, 0.3, 1) or rgbm(0.3, 1, 0.3, 1)
+            local deltaText = string.format("%s%.2fs", sign, displayData.timeDelta)
             ui.pushFont(ui.Font.Title)
+            local textSize = ui.measureText(deltaText)
+            ui.setCursor(vec2(gaugeCenterX - gaugeRadius - textSize.x - 15, gaugeCenterY - textSize.y / 2))
             ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("%s%.2fs", sign, displayData.timeDelta))
+            ui.text(deltaText)
             ui.popStyleColor()
             ui.popFont()
-            statsY = statsY + 26
         end
         
-        ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
-        
-        -- Speed deltas
-        if displayData.entrySpeedDelta then
-            local speedUnit = useKmh and "km/h" or "mph"
-            local sign = displayData.entrySpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Entry: %s%d %s", sign, math.floor(displayData.entrySpeedDelta + 0.5), speedUnit))
-        end
-        statsY = statsY + lineH
-        
-        if displayData.apexSpeedDelta then
-            local speedUnit = useKmh and "km/h" or "mph"
-            local sign = displayData.apexSpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Apex: %s%d %s", sign, math.floor(displayData.apexSpeedDelta + 0.5), speedUnit))
-        end
-        statsY = statsY + lineH
-        
-        if displayData.exitSpeedDelta then
-            local speedUnit = useKmh and "km/h" or "mph"
-            local sign = displayData.exitSpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Exit: %s%d %s", sign, math.floor(displayData.exitSpeedDelta + 0.5), speedUnit))
-        end
-        statsY = statsY + lineH
-        
-        -- Brake/liftoff meters
-        local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        if brakeMeters then
-            local brakeText = brakeMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Brake: %dm %s", math.abs(math.floor(brakeMeters + 0.5)), brakeText))
-        end
-        statsY = statsY + lineH
-        
-        if liftOffMeters then
-            local liftText = liftOffMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Lift: %dm %s", math.abs(math.floor(liftOffMeters + 0.5)), liftText))
-        end
-        statsY = statsY + lineH
-        
-        -- Apex position difference in meters
-        if displayData.currentApexPos and displayData.refApexPos then
-            local apexPosDelta = (displayData.currentApexPos - displayData.refApexPos) * 1000  -- Approximate meters
-            local apexText = apexPosDelta >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Apex: %dm %s", math.abs(math.floor(apexPosDelta + 0.5)), apexText))
-        end
-        
+        -- Corner label
+        ui.setCursor(vec2(panelX, gaugeCenterY + gaugeRadius + 8))
+        ui.pushFont(ui.Font.Small)
+        local labelColor = frozenCorner.active and rgbm(0.4, 0.7, 1, 1) or colors.textDim
+        ui.pushStyleColor(ui.StyleColor.Text, labelColor)
+        ui.text("Corner " .. displayData.number .. (frozenCorner.active and " (frozen)" or ""))
         ui.popStyleColor()
         ui.popFont()
-
+        
+        -- Stats panel
+        ui.pushFont(ui.Font.Main)
+        
+        -- SPEED section
+        ui.setCursor(vec2(panelX, statsY))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.5, 0.5, 1))
+        ui.text("SPEED")
+        ui.popStyleColor()
+        ui.popFont()
+        statsY = statsY + 14
+        
+        drawStatRow("Entry", displayData.entrySpeedDelta, speedUnit)
+        drawStatRow("Apex", displayData.apexSpeedDelta, speedUnit)
+        drawStatRow("Exit", displayData.exitSpeedDelta, speedUnit)
+        statsY = statsY + 4
+        
+        -- POSITION section
+        ui.setCursor(vec2(panelX, statsY))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.5, 0.5, 1))
+        ui.text("POSITION")
+        ui.popStyleColor()
+        ui.popFont()
+        statsY = statsY + 14
+        
+        local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
+        drawPosRow("Brake", brakeMeters)
+        drawPosRow("Lift", liftOffMeters)
+        if displayData.currentApexPos and displayData.refApexPos then
+            drawPosRow("Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000)
+        end
+        
+        ui.popFont()
     else
+        -- Empty state: message in graph area
         ui.setCursor(vec2(padding + graphWidth / 2 - 60, graphY + graphHeight / 2 - 10))
         ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-        if not state.hasBestLap() then
-            ui.text("Load a ghost lap first")
-        else
-            ui.text("Waiting for corner exit...")
-        end
+        ui.text(state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first")
         ui.popStyleColor()
-
-        -- Score gauge in top right (empty state)
-        local scoreCenterX = windowSize.x - 45
-        drawScoreGauge(scoreCenterX, 25, 25, 0)
-    end
-
-    if isRecording then
-        local recColor = rgbm(1, 0.2, 0.2, 1)
-        ui.pushFont(ui.Font.Title)
-        ui.setCursor(vec2(padding + 10, graphY + 10))
-        ui.pushStyleColor(ui.StyleColor.Text, recColor)
-        ui.text("REC")
-        ui.popStyleColor()
-        ui.popFont()
-        local flash = (math.sin(os.clock() * 6) + 1) / 2
-        ui.drawCircleFilled(vec2(padding + 50, graphY + 18), 6, rgbm(1, 0, 0, 0.5 + flash * 0.5), 12)
     end
 end
 

@@ -119,45 +119,64 @@ local function drawBar(origin, x, y, w, h, val, color)
 end
 
 local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
-    local innerR = r * 0.75
+    local innerR = r * 0.70
     local center = origin + vec2(cx, cy)
+    local arcThickness = r - innerR
+    local indicatorR = (innerR + r) / 2
     
+    -- Background wheel ring
     ui.drawCircleFilled(center, r, colors.wheelBg, 48)
     ui.drawCircleFilled(center, innerR, colors.background, 48)
     
-    -- White outline
-    ui.drawCircle(center, r, rgbm(1, 1, 1, 0.8), 48, 1)
-    ui.drawCircle(center, innerR, rgbm(1, 1, 1, 0.8), 48, 1)
+    -- Center notch (always visible, subtle gray marker at top/center)
+    local notchAngle = 0  -- Top = center/straight
+    local notchLen = arcThickness * 0.6
+    local notchInner = innerR + (arcThickness - notchLen) / 2
+    local notchOuter = notchInner + notchLen
+    local notchX1 = center.x + math.sin(notchAngle) * notchInner
+    local notchY1 = center.y - math.cos(notchAngle) * notchInner
+    local notchX2 = center.x + math.sin(notchAngle) * notchOuter
+    local notchY2 = center.y - math.cos(notchAngle) * notchOuter
+    ui.drawLine(vec2(notchX1, notchY1), vec2(notchX2, notchY2), rgbm(0.5, 0.5, 0.5, 0.6), 2)
 
-    -- Ghost steering
+    -- Ghost steering (more visible)
     if ghostSteerDeg then
         local ghostAngle = math.rad(ghostSteerDeg)
         ui.pathClear()
-        ui.pathArcTo(center, (innerR + r) / 2, -math.pi/2 + ghostAngle - 0.2, -math.pi/2 + ghostAngle + 0.2, 16)
-        ui.pathStroke(colors.ghostWheel, false, r - innerR)
+        ui.pathArcTo(center, indicatorR, -math.pi/2 + ghostAngle - 0.25, -math.pi/2 + ghostAngle + 0.25, 16)
+        ui.pathStroke(rgbm(0.6, 0.6, 0.6, 0.7), false, arcThickness * 0.7)
+        
+        -- Ghost center line
+        local ghostInnerX = center.x + math.sin(ghostAngle) * innerR
+        local ghostInnerY = center.y - math.cos(ghostAngle) * innerR
+        local ghostOuterX = center.x + math.sin(ghostAngle) * r
+        local ghostOuterY = center.y - math.cos(ghostAngle) * r
+        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), rgbm(0.5, 0.5, 0.5, 0.5), 2)
     end
 
-    -- Current steering
+    -- Current steering indicator
     local angle = math.rad(steerDeg)
-    local indicatorR = (innerR + r) / 2
     ui.pathClear()
-    ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.2, -math.pi/2 + angle + 0.2, 16)
-    ui.pathStroke(colors.wheelIndicator, false, r - innerR)
+    ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.25, -math.pi/2 + angle + 0.25, 16)
+    ui.pathStroke(colors.wheelIndicator, false, arcThickness)
     
-    -- Red center line
+    -- Red center line (current position)
     local lineInnerX = center.x + math.sin(angle) * innerR
     local lineInnerY = center.y - math.cos(angle) * innerR
     local lineOuterX = center.x + math.sin(angle) * r
     local lineOuterY = center.y - math.cos(angle) * r
-    ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), rgbm(1, 0, 0, 1), 1)
+    ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), rgbm(1, 0.2, 0.2, 1), 2)
 end
 
 local function drawGear(origin, cx, cy, r, gear)
     local text = gear < 0 and "R" or (gear == 0 and "N" or tostring(gear))
-    local innerR = r * 0.75
-    ui.pushFont(ui.Font.Title)
-    ui.setCursor(origin + vec2(cx - innerR, cy - innerR))
-    ui.textAligned(text, vec2(0.5, 0.5), vec2(innerR * 2, innerR * 2))
+    local innerR = r * 0.70
+    local center = origin + vec2(cx, cy)
+    -- Draw gear number larger, centered in wheel
+    ui.pushFont(ui.Font.Huge)
+    local textSize = ui.measureText(text)
+    ui.setCursor(center - textSize / 2)
+    ui.text(text)
     ui.popFont()
 end
 
@@ -204,7 +223,7 @@ function script.windowMain(dt)
     local w = windowSize.x - pad * 2
     local h = windowSize.y - pad * 2
 
-    local wheelR = h * 0.38
+    local wheelR = h * 0.48
     local wheelW = wheelR * 2
     local barW = h * 0.08
     local barGap = 5
@@ -392,7 +411,7 @@ end
 
 function script.windowCorners(dt)
     -- corner_analysis.update() handles corner tracking internally
-    corner_analysis.draw(dt, settings.useKMH, corner.isRecording())
+    corner_analysis.draw(dt, settings.useKMH)
 end
 
 function script.windowTelemetry(dt)
