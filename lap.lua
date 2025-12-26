@@ -16,11 +16,12 @@ local STEERING_CAP = math.pi  -- 180 degrees in radians
 ---@param track string Track ID
 ---@param car string Car ID
 ---@return table lap New lap instance
-function lap.new(track, car)
+function lap.new(track, car, sessionId)
     return setmetatable({
         -- Metadata
         track = track or '',
         car = car or '',
+        sessionId = sessionId or nil,  -- Identifies which session this lap belongs to
         completed = false,
         valid = true,
         time = 0,              -- milliseconds
@@ -33,6 +34,7 @@ function lap.new(track, car)
         steering = {},         -- 0.0 to 1.0 (normalized, 0.5 = straight)
         speed = {},            -- km/h
         pos = {},              -- spline position 0.0 to 1.0
+        times = {},            -- seconds (elapsed lap time at each sample)
     }, lap)
 end
 
@@ -68,6 +70,7 @@ function lap:addSample(car)
     table.insert(self.steering, lap.normalizeSteer(car.steer))
     table.insert(self.speed, car.speedKmh)
     table.insert(self.pos, car.splinePosition)
+    table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
 end
 
 --- Get number of samples in this lap
@@ -131,12 +134,19 @@ function lap:getTimeAtPos(targetPos)
     
     local p1, p2 = self.pos[lo], self.pos[hi]
     
-    -- Handle edge case
+    -- If we have actual time data, use it
+    if self.times and #self.times >= hi then
+        local t1, t2 = self.times[lo], self.times[hi]
+        if p1 == p2 then return t1 end
+        local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
+        return t1 + (t2 - t1) * t
+    end
+    
+    -- Fallback: derive time from sample index (for in-game recorded laps)
     if p1 == p2 then
         return (lo - 1) / lap.SAMPLE_RATE
     end
     
-    -- Interpolate index, then convert to time
     local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
     local index = lo + t * (hi - lo)
     return (index - 1) / lap.SAMPLE_RATE
@@ -287,6 +297,7 @@ function lap:serialize()
     local data = {
         track = self.track,
         car = self.car,
+        sessionId = self.sessionId,
         completed = self.completed,
         valid = self.valid,
         time = self.time,
@@ -297,6 +308,7 @@ function lap:serialize()
         steering = self.steering,
         speed = self.speed,
         pos = self.pos,
+        times = self.times,  -- Actual elapsed time at each sample
     }
     return stringify(data)
 end
@@ -446,6 +458,9 @@ function lap.fromCSV(filePath, track, car)
     end
     
     local firstTime = nil
+    local finishTime = nil
+    local lastPos = nil
+    local crossedFinish = false
     
     for line in f:lines() do
         lineNum = lineNum + 1
@@ -458,11 +473,19 @@ function lap.fromCSV(filePath, track, car)
                 if not firstTime then firstTime = time end
                 
                 if time >= lastSampleTime + SAMPLE_INTERVAL then
-                    lastSampleTime = time
-                    
                     local pos = tonumber(fields.pos)
                     if pos then
                         if pos > 1 then pos = pos / 100 end
+                        
+                        -- Detect finish line crossing (position wraps from high to low)
+                        if lastPos and lastPos > 0.9 and pos < 0.1 then
+                            finishTime = time
+                            crossedFinish = true
+                            break  -- Stop at finish line
+                        end
+                        
+                        lastSampleTime = time
+                        lastPos = pos
                         
                         local speed = tonumber(fields.speed) or 0
                         local throttle = tonumber(fields.throttle) or 0
@@ -481,6 +504,8 @@ function lap.fromCSV(filePath, track, car)
                         -- Normalize steering
                         local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
                         
+                        local sampleTime = time - firstTime  -- Time since lap start
+                        table.insert(l.times, sampleTime)
                         table.insert(l.pos, pos)
                         table.insert(l.throttle, throttle)
                         table.insert(l.brake, brake)
@@ -500,33 +525,21 @@ function lap.fromCSV(filePath, track, car)
         return nil
     end
     
-    -- Sort by position
-    local sorted = {}
-    for i = 1, #l.pos do
-        sorted[i] = {
-            pos = l.pos[i],
-            throttle = l.throttle[i],
-            brake = l.brake[i],
-            clutch = l.clutch[i],
-            steering = l.steering[i],
-            speed = l.speed[i]
-        }
-    end
-    table.sort(sorted, function(a, b) return a.pos < b.pos end)
+    -- Note: We keep data in time order, not sorted by position.
+    -- For a normal lap, positions naturally increase from 0 to ~1.
+    -- The times array preserves actual elapsed time at each sample.
+    -- Times start at 0 for the first sample - no normalization needed.
+    -- Delta calculations will be correct as long as both laps have consistent time=0 at similar positions.
     
-    for i = 1, #sorted do
-        l.pos[i] = sorted[i].pos
-        l.throttle[i] = sorted[i].throttle
-        l.brake[i] = sorted[i].brake
-        l.clutch[i] = sorted[i].clutch
-        l.steering[i] = sorted[i].steering
-        l.speed[i] = sorted[i].speed
-    end
+    l.completed = crossedFinish
+    -- Use finish time if detected, otherwise last sample time
+    local endTime = finishTime or lastSampleTime
+    l.time = (endTime - (firstTime or 0)) * 1000  -- ms
     
-    l.completed = true
-    l.time = (lastSampleTime - (firstTime or 0)) * 1000  -- ms
-    
-    ac.log(string.format("lap.fromCSV: Loaded %d samples (%.3fs)", #l.pos, l.time / 1000))
+    ac.log(string.format("lap.fromCSV: Loaded %d samples (%.3fs, finish detected: %s)", 
+        #l.pos, l.time / 1000, crossedFinish and "yes" or "no"))
+    ac.log(string.format("lap.fromCSV: pos range [%.4f - %.4f], times range [%.3f - %.3f]s",
+        l.pos[1], l.pos[#l.pos], l.times[1], l.times[#l.times]))
     return l
 end
 

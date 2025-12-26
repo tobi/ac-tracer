@@ -8,9 +8,8 @@ local settings = require('app_settings')
 local lap_telemetry = {}
 
 -- View state
-local selectedLapIndex = 1  -- Index into state.history (1 = most recent)
-local referenceLapIndex = 0  -- 0 = from CSV, 1+ = from state.historyReferences
-local referenceLap = nil  -- Current reference lap
+local selectedLapIndex = nil  -- nil = auto-select fastest, or index into state.history
+local autoSelectFastest = true  -- Auto-select fastest lap from session
 
 local viewStartTime = 0  -- Start time of visible window (seconds)
 local viewDuration = 0   -- Duration of visible window (seconds, 0 = full lap)
@@ -94,28 +93,68 @@ local function scanGhostFiles()
     return ghostFiles
 end
 
--- Get selected lap from state.history
+-- Get selected lap from state.history (auto-select fastest if enabled)
 local function getSelectedLap()
     if #state.history == 0 then return nil end
+    
+    if autoSelectFastest then
+        local fastest, idx = state.getFastestSessionLap()
+        if fastest then
+            selectedLapIndex = idx
+            return fastest
+        end
+    end
+    
+    if not selectedLapIndex then selectedLapIndex = 1 end
     local idx = math.clamp(selectedLapIndex, 1, #state.history)
     return state.history[idx]
 end
 
--- Get value at time from lap (using sample rate conversion)
+-- Get reference lap (defaults to state.bestLap)
+local function getReferenceLap()
+    return state.bestLap
+end
+
+-- Get value at time from lap (using times array if available, else sample rate)
 local function getValueAtTime(lapObj, time, field)
     if not lapObj or lapObj:length() < 2 then return nil end
     
-    -- Convert time to index (assuming 15 Hz)
-    local index = time * lap.SAMPLE_RATE + 1
-    local lo = math.floor(index)
-    local hi = math.ceil(index)
+    local lo, hi, t
+    
+    -- If lap has times array, use binary search to find indices
+    if lapObj.times and #lapObj.times >= lapObj:length() then
+        local times = lapObj.times
+        lo, hi = 1, #times
+        
+        -- Binary search for surrounding time indices
+        while hi - lo > 1 do
+            local mid = math.floor((lo + hi) / 2)
+            if times[mid] <= time then
+                lo = mid
+            else
+                hi = mid
+            end
+        end
+        
+        local t1, t2 = times[lo], times[hi]
+        if t1 == t2 then
+            t = 0
+        else
+            t = math.clamp((time - t1) / (t2 - t1), 0, 1)
+        end
+    else
+        -- Fallback: Convert time to index (assuming 15 Hz from time 0)
+        local index = time * lap.SAMPLE_RATE + 1
+        lo = math.floor(index)
+        hi = math.ceil(index)
+        t = index - lo
+    end
     
     lo = math.clamp(lo, 1, lapObj:length())
     hi = math.clamp(hi, 1, lapObj:length())
     
     if lo == hi then return lapObj[field][lo] end
     
-    local t = index - lo
     local v1 = lapObj[field][lo]
     local v2 = lapObj[field][hi]
     
@@ -135,6 +174,7 @@ local function getTimeRange(selectedLap)
 end
 
 -- Draw time-based trace with proper scaling
+-- Note: Reference lap is compared by POSITION, not time (for proper alignment)
 local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, field, color, refColor, minVal, maxVal, label, unit)
     if not lapObj or lapObj:length() < 2 then return end
     if endTime <= startTime then return end
@@ -144,24 +184,30 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
     
     local values = {}
     local refValues = {}
+    local positions = {}  -- Track positions for position-based ref lookup
     local actualMin = minVal or math.huge
     local actualMax = maxVal or -math.huge
     
     for i = 0, numSamples do
         local t = startTime + i * timeStep
         local val = getValueAtTime(lapObj, t, field)
+        local pos = getValueAtTime(lapObj, t, "pos")
+        
         if val ~= nil then
             table.insert(values, val)
+            table.insert(positions, pos)
             if not minVal or not maxVal then
                 actualMin = math.min(actualMin, val)
                 actualMax = math.max(actualMax, val)
             end
         else
             table.insert(values, 0)
+            table.insert(positions, nil)
         end
         
-        if refLapObj then
-            local refVal = getValueAtTime(refLapObj, t, field)
+        -- Get reference value at SAME POSITION (not same time) for proper alignment
+        if refLapObj and pos then
+            local refVal = refLapObj:getValueAtPos(field, pos)
             if refVal ~= nil then
                 table.insert(refValues, refVal)
                 if not minVal or not maxVal then
@@ -171,6 +217,8 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
             else
                 table.insert(refValues, 0)
             end
+        elseif refLapObj then
+            table.insert(refValues, 0)
         end
     end
     
@@ -225,14 +273,16 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
         local cursorX = x + ((cursorTime - startTime) / (endTime - startTime)) * w
         
         local cursorVal = getValueAtTime(lapObj, cursorTime, field)
+        local cursorPos = getValueAtTime(lapObj, cursorTime, "pos")
         if cursorVal ~= nil then
             local cursorY = y + h - ((cursorVal - minVal) / range) * h
             ui.drawCircleFilled(vec2(cursorX, cursorY), 6, color, 16)
             ui.drawCircle(vec2(cursorX, cursorY), 6, colors.cursorLine, 16, 2)
         end
         
-        if refLapObj then
-            local refVal = getValueAtTime(refLapObj, cursorTime, field)
+        -- Get reference value at SAME POSITION (not same time)
+        if refLapObj and cursorPos then
+            local refVal = refLapObj:getValueAtPos(field, cursorPos)
             if refVal ~= nil then
                 local refY = y + h - ((refVal - minVal) / range) * h
                 ui.drawCircleFilled(vec2(cursorX, refY), 5, refColor, 12)
@@ -249,7 +299,23 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
     ui.popFont()
 end
 
--- Draw delta time trace
+-- Helper: convert position to X coordinate in the graph
+local function posToGraphX(pos, selectedLap, startTime, endTime, graphX, graphW)
+    if not pos or not selectedLap then return nil end
+    
+    -- Find the time at this position in the selected lap
+    local timeAtPos = selectedLap:getTimeAtPos(pos)
+    if not timeAtPos then return nil end
+    
+    -- Check if within visible time range
+    if timeAtPos < startTime or timeAtPos > endTime then return nil end
+    
+    -- Convert to X coordinate
+    local normalizedTime = (timeAtPos - startTime) / (endTime - startTime)
+    return graphX + normalizedTime * graphW
+end
+
+-- Draw delta time trace with corner highlighting
 local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, refLapObj)
     if not selectedLap or not refLapObj then return end
     if endTime <= startTime then return end
@@ -257,6 +323,8 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     local numSamples = math.max(10, math.floor(w / 2))
     local timeStep = (endTime - startTime) / numSamples
     
+    -- Build position-to-delta map for corner delta calculations
+    local posDeltas = {}
     local deltas = {}
     local maxDelta = 0.1
     
@@ -264,12 +332,14 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
         local t = startTime + i * timeStep
         local pos = getValueAtTime(selectedLap, t, "pos")
         if pos then
-            local selectedTime = t
+            -- Get time at this position for both laps
+            local selectedTime = selectedLap:getTimeAtPos(pos)
             local refTime = refLapObj:getTimeAtPos(pos)
             
             if selectedTime and refTime then
                 local delta = selectedTime - refTime
                 table.insert(deltas, delta)
+                posDeltas[pos] = delta
                 maxDelta = math.max(math.abs(maxDelta), math.abs(delta))
             else
                 table.insert(deltas, 0)
@@ -280,6 +350,63 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     end
     
     if maxDelta == 0 then maxDelta = 0.1 end
+    
+    -- Draw corner zones (before other elements)
+    local corners = state.trackCorners
+    if corners then
+        local cornerColors = {
+            rgbm(0.3, 0.3, 0.5, 0.25),  -- Alternating colors for visibility
+            rgbm(0.3, 0.5, 0.3, 0.25),
+        }
+        
+        for i, corner in ipairs(corners) do
+            if corner.startPos and corner.endPos then
+                local startX = posToGraphX(corner.startPos, selectedLap, startTime, endTime, x, w)
+                local endX = posToGraphX(corner.endPos, selectedLap, startTime, endTime, x, w)
+                
+                if startX and endX then
+                    -- Draw corner zone background
+                    local cornerColor = cornerColors[(i % 2) + 1]
+                    ui.drawRectFilled(vec2(startX, y), vec2(endX, y + h), cornerColor, 0)
+                    
+                    -- Corner number label
+                    local centerX = (startX + endX) / 2
+                    ui.pushFont(ui.Font.Small)
+                    local numText = tostring(corner.number or i)
+                    local textW = ui.measureText(numText).x
+                    ui.setCursor(vec2(centerX - textW / 2, y + 2))
+                    ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, 0.7))
+                    ui.text(numText)
+                    ui.popStyleColor()
+                    
+                    -- Calculate corner delta (delta at exit - delta at entry)
+                    local entryDelta = selectedLap:getTimeAtPos(corner.startPos)
+                    local exitDelta = selectedLap:getTimeAtPos(corner.endPos)
+                    local refEntryTime = refLapObj:getTimeAtPos(corner.startPos)
+                    local refExitTime = refLapObj:getTimeAtPos(corner.endPos)
+                    
+                    if entryDelta and exitDelta and refEntryTime and refExitTime then
+                        local currentCornerTime = exitDelta - entryDelta
+                        local refCornerTime = refExitTime - refEntryTime
+                        local cornerTimeDelta = currentCornerTime - refCornerTime
+                        
+                        -- Draw corner delta
+                        local sign = cornerTimeDelta >= 0 and "+" or ""
+                        local deltaText = string.format("%s%.2f", sign, cornerTimeDelta)
+                        local deltaColor = cornerTimeDelta >= 0 and rgbm(1, 0.4, 0.4, 0.9) or rgbm(0.4, 1, 0.4, 0.9)
+                        
+                        local deltaTextW = ui.measureText(deltaText).x
+                        ui.setCursor(vec2(centerX - deltaTextW / 2, y + h - 14))
+                        ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
+                        ui.text(deltaText)
+                        ui.popStyleColor()
+                    end
+                    
+                    ui.popFont()
+                end
+            end
+        end
+    end
     
     -- Zero line
     ui.drawLine(vec2(x, y + h / 2), vec2(x + w, y + h / 2), colors.gridMajor, 2)
@@ -324,7 +451,6 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
     ui.text("Delta-T")
     ui.popStyleColor()
-    ui.popFont()
 end
 
 -- Draw time axis
@@ -426,28 +552,33 @@ function lap_telemetry.draw(dt)
     ui.pushFont(ui.Font.Small)
     
     local selectedLap = getSelectedLap()
+    local referenceLap = getReferenceLap()
+    
     if selectedLap then
         ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
         local lapTimeS = selectedLap.time / 1000
         local mins = math.floor(lapTimeS / 60)
         local secs = lapTimeS - mins * 60
-        ui.text(string.format("Lap: %d:%05.2f", mins, secs))
+        local autoLabel = autoSelectFastest and " (fastest)" or ""
+        ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, autoLabel))
         ui.popStyleColor()
         
-        ui.sameLine(150)
+        ui.sameLine(180)
         if #state.history > 1 then
             if ui.button("<", vec2(30, 0)) then
-                selectedLapIndex = math.max(1, selectedLapIndex - 1)
+                autoSelectFastest = false
+                selectedLapIndex = math.max(1, (selectedLapIndex or 1) - 1)
                 viewStartTime = 0
                 viewDuration = 0
             end
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text(string.format("%d/%d", selectedLapIndex, #state.history))
+            ui.text(string.format("%d/%d", selectedLapIndex or 1, #state.history))
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) then
-                selectedLapIndex = math.min(#state.history, selectedLapIndex + 1)
+                autoSelectFastest = false
+                selectedLapIndex = math.min(#state.history, (selectedLapIndex or 1) + 1)
                 viewStartTime = 0
                 viewDuration = 0
             end
@@ -455,12 +586,15 @@ function lap_telemetry.draw(dt)
         
         ui.sameLine(300)
         if referenceLap then
-            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.3, 1, 0.3, 1))
-            ui.text("Reference: Loaded")
+            local refTimeS = referenceLap.time / 1000
+            local refMins = math.floor(refTimeS / 60)
+            local refSecs = refTimeS - refMins * 60
+            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.6, 0.6, 1, 1))
+            ui.text(string.format("vs Best: %d:%05.2f", refMins, refSecs))
             ui.popStyleColor()
         else
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text("Reference: None")
+            ui.text("No reference lap")
             ui.popStyleColor()
         end
         
@@ -515,30 +649,31 @@ function lap_telemetry.draw(dt)
         local startTime, endTime, lapTime = getTimeRange(selectedLap)
         if viewDuration == 0 then endTime = lapTime end
         
-        -- Mouse interaction
-        local mousePos = ui.getMousePos()
-        local graphArea = vec2(graphX, contentY)
-        local graphSize = vec2(graphW, contentH)
+        -- Mouse interaction (convert screen coords to window-local)
+        local windowPos = ui.windowPos()
+        local mousePos = ui.mousePos()
+        local localMouseX = mousePos.x - windowPos.x
+        local localMouseY = mousePos.y - windowPos.y
         
-        if mousePos.x >= graphArea.x and mousePos.x <= graphArea.x + graphSize.x and
-           mousePos.y >= graphArea.y and mousePos.y <= graphArea.y + graphSize.y then
+        if localMouseX >= graphX and localMouseX <= graphX + graphW and
+           localMouseY >= contentY and localMouseY <= contentY + contentH then
             
-            local mouseX = mousePos.x - graphArea.x
+            local mouseX = localMouseX - graphX
             cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
             cursorTime = math.clamp(cursorTime, startTime, endTime)
             
-            if ui.isMouseClicked(1) and viewDuration > 0 then
+            if ui.mouseClicked(ui.MouseButton.Right) and viewDuration > 0 then
                 panningView = true
                 panStartMouseX = mousePos.x
                 panStartTime = viewStartTime
-            elseif ui.isMouseClicked(0) then
+            elseif ui.mouseClicked(ui.MouseButton.Left) then
                 draggingCursor = true
             end
         end
         
         -- Panning
         if panningView then
-            if ui.isMouseDown(1) and viewDuration > 0 then
+            if ui.mouseDown(ui.MouseButton.Right) and viewDuration > 0 then
                 local deltaX = mousePos.x - panStartMouseX
                 local timeDelta = (deltaX / graphW) * (endTime - startTime)
                 viewStartTime = math.max(0, math.min(panStartTime - timeDelta, lapTime - viewDuration))
@@ -549,8 +684,8 @@ function lap_telemetry.draw(dt)
         
         -- Cursor dragging
         if draggingCursor then
-            if ui.isMouseDown(0) then
-                local mouseX = math.clamp(mousePos.x - graphArea.x, 0, graphW)
+            if ui.mouseDown(ui.MouseButton.Left) then
+                local mouseX = math.clamp(localMouseX - graphX, 0, graphW)
                 cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
                 cursorTime = math.clamp(cursorTime, startTime, endTime)
             else
@@ -558,12 +693,34 @@ function lap_telemetry.draw(dt)
             end
         end
         
-        -- Keyboard scrubbing
-        if cursorTime then
-            if ui.isKeyPressed(ui.Key.LeftArrow) then
-                cursorTime = math.max(startTime, cursorTime - 0.1)
-            elseif ui.isKeyPressed(ui.Key.RightArrow) then
-                cursorTime = math.min(endTime, cursorTime + 0.1)
+        -- Mouse wheel zoom (centered on cursor position)
+        local wheel = ui.mouseWheel()
+        if wheel ~= 0 and localMouseX >= graphX and localMouseX <= graphX + graphW and
+           localMouseY >= contentY and localMouseY <= contentY + contentH then
+            
+            -- Get time at mouse position (zoom center)
+            local mouseX = localMouseX - graphX
+            local mouseTime = startTime + (mouseX / graphW) * (endTime - startTime)
+            
+            local currentDuration = endTime - startTime
+            local zoomFactor = wheel > 0 and 0.8 or 1.25  -- Scroll up = zoom in
+            local newDuration = currentDuration * zoomFactor
+            
+            if newDuration >= lapTime then
+                -- Fully zoomed out
+                viewStartTime = 0
+                viewDuration = 0
+            else
+                -- Keep mouse position at same relative spot after zoom
+                local mouseRatio = (mouseTime - startTime) / currentDuration
+                local newStartTime = mouseTime - mouseRatio * newDuration
+                
+                -- Clamp to valid range
+                viewStartTime = math.max(0, math.min(newStartTime, lapTime - newDuration))
+                viewDuration = math.min(newDuration, lapTime - viewStartTime)
+                
+                -- Minimum zoom level
+                if viewDuration < 1 then viewDuration = 1 end
             end
         end
         
@@ -777,7 +934,16 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
                     ui.text(string.format("%.3f", cursorValues.pos))
                     ui.popStyleColor()
-                    ui.popFont()
+                    py = py + lineH
+                    -- position in meters
+                    ui.setCursor(vec2(panelX + 10, py))
+                    ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                    ui.text("Meters:")
+                    ui.popStyleColor()
+                    ui.sameLine(panelX + 70)
+                    ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+                    ui.text(string.format("%d m", math.floor(cursorValues.pos * 1000)))
+                    ui.popStyleColor()
                 end
                 
                 -- Help text
@@ -787,7 +953,6 @@ function lap_telemetry.draw(dt)
                 ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
                 ui.text("← → : Scrub")
                 ui.popStyleColor()
-                ui.popFont()
                 py = py + 15
                 ui.setCursor(vec2(panelX + 10, py))
                 ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)

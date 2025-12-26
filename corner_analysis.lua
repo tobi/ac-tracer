@@ -654,49 +654,65 @@ function corner_analysis.draw(dt, useKmh, isRecording)
         ui.popStyleColor()
         ui.popFont()
 
-        local statsY = graphY + 25
-        local lineH = 18
+        local statsY = graphY + 20
+        local lineH = 16
         ui.pushFont(ui.Font.Main)
+        
+        -- Time delta (most important - shown first and larger)
+        if displayData.timeDelta then
+            local sign = displayData.timeDelta >= 0 and "+" or ""
+            local deltaColor = displayData.timeDelta >= 0 and rgbm(1, 0.3, 0.3, 1) or rgbm(0.3, 1, 0.3, 1)
+            ui.pushFont(ui.Font.Title)
+            ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
+            ui.setCursor(vec2(panelX, statsY))
+            ui.text(string.format("%s%.2fs", sign, displayData.timeDelta))
+            ui.popStyleColor()
+            ui.popFont()
+            statsY = statsY + 28
+        end
+        
         ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
         
-        local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        if brakeMeters then
-            local brakeText = brakeMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY))
-            ui.text(string.format("Brake point: %dm %s", math.abs(math.floor(brakeMeters + 0.5)), brakeText))
-        end
-        
-        if liftOffMeters then
-            local liftText = liftOffMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY + lineH))
-            ui.text(string.format("Liftoff point: %dm %s", math.abs(math.floor(liftOffMeters + 0.5)), liftText))
-        end
-        
+        -- Speed deltas
         if displayData.entrySpeedDelta then
             local speedUnit = useKmh and "km/h" or "mph"
             local sign = displayData.entrySpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY + lineH * 2))
-            ui.text(string.format("Entry speed: %s%d %s", sign, math.floor(displayData.entrySpeedDelta + 0.5), speedUnit))
+            ui.setCursor(vec2(panelX, statsY))
+            ui.text(string.format("Entry: %s%d %s", sign, math.floor(displayData.entrySpeedDelta + 0.5), speedUnit))
         end
         
         if displayData.apexSpeedDelta then
             local speedUnit = useKmh and "km/h" or "mph"
             local sign = displayData.apexSpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY + lineH * 3))
-            ui.text(string.format("Apex speed: %s%d %s", sign, math.floor(displayData.apexSpeedDelta + 0.5), speedUnit))
+            ui.setCursor(vec2(panelX, statsY + lineH))
+            ui.text(string.format("Apex: %s%d %s", sign, math.floor(displayData.apexSpeedDelta + 0.5), speedUnit))
         end
         
         if displayData.exitSpeedDelta then
             local speedUnit = useKmh and "km/h" or "mph"
             local sign = displayData.exitSpeedDelta >= 0 and "+" or ""
+            ui.setCursor(vec2(panelX, statsY + lineH * 2))
+            ui.text(string.format("Exit: %s%d %s", sign, math.floor(displayData.exitSpeedDelta + 0.5), speedUnit))
+        end
+        
+        -- Brake/liftoff meters
+        local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
+        if brakeMeters then
+            local brakeText = brakeMeters >= 0 and "later" or "earlier"
+            ui.setCursor(vec2(panelX, statsY + lineH * 3))
+            ui.text(string.format("Brake: %dm %s", math.abs(math.floor(brakeMeters + 0.5)), brakeText))
+        end
+        
+        if liftOffMeters then
+            local liftText = liftOffMeters >= 0 and "later" or "earlier"
             ui.setCursor(vec2(panelX, statsY + lineH * 4))
-            ui.text(string.format("Exit speed: %s%d %s", sign, math.floor(displayData.exitSpeedDelta + 0.5), speedUnit))
+            ui.text(string.format("Lift: %dm %s", math.abs(math.floor(liftOffMeters + 0.5)), liftText))
         end
         
         ui.popStyleColor()
         ui.popFont()
 
-        local gaugeY = graphY + 35
+        local gaugeY = graphY + graphHeight - 50
         drawScoreGauge(scoreCenterX, gaugeY, 28, displayScore)
 
     else
@@ -713,7 +729,7 @@ function corner_analysis.draw(dt, useKmh, isRecording)
         local statsWidth = panelWidth * 0.6
         local scoreX = panelX + statsWidth + 5
         local scoreCenterX = scoreX + (panelWidth - statsWidth - 5) / 2
-        drawScoreGauge(scoreCenterX, graphY + 35, 28, 0)
+        drawScoreGauge(scoreCenterX, graphY + graphHeight - 50, 28, 0)
     end
 
     if isRecording then

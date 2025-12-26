@@ -12,6 +12,7 @@ local state = {}
 -- Session info (set once at start)
 state.track = nil              -- string: track ID
 state.car = nil                -- string: car ID
+state.sessionId = nil          -- string: unique ID for this session
 
 -- Track data
 state.trackCorners = {}        -- array of corner definitions
@@ -227,6 +228,47 @@ local function loadBestLap()
 end
 
 --------------------------------------------------------------------------------
+-- Persistence: History
+--------------------------------------------------------------------------------
+
+--- Save history to ac.storage
+local function saveHistory()
+    if not state.history or #state.history == 0 then return end
+    
+    local serialized = {}
+    for i, lapData in ipairs(state.history) do
+        if i <= MAX_HISTORY then
+            table.insert(serialized, lapData:serialize())
+        end
+    end
+    
+    local key = getStorageKey('history')
+    ac.storage[key] = stringify(serialized)
+    ac.log("Traces: Saved " .. #serialized .. " laps to history")
+end
+
+--- Load history from ac.storage
+local function loadHistory()
+    local key = getStorageKey('history')
+    local data = ac.storage[key]
+    if not data then return false end
+    
+    local ok, serialized = pcall(function() return stringify.parse(data) end)
+    if not ok or not serialized then return false end
+    
+    state.history = {}
+    for _, lapStr in ipairs(serialized) do
+        local loaded = lap.deserialize(lapStr)
+        if loaded and loaded:length() > 10 then
+            table.insert(state.history, loaded)
+        end
+    end
+    
+    ac.log("Traces: Loaded " .. #state.history .. " laps from history")
+    return #state.history > 0
+end
+
+--------------------------------------------------------------------------------
 -- Auto-Detection: Corners from Best Lap
 --------------------------------------------------------------------------------
 
@@ -426,23 +468,27 @@ function state.init(car)
     if initialized then return end
     
     state.track = ac.getTrackID()
-    state.car = ac.getCarId(0)
+    state.car = car.id
+    state.sessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
     state.lapNumber = car.lapCount
     state.trackPosition = car.splinePosition
+    
+    ac.log("Traces: Session ID: " .. state.sessionId)
     
     -- Load corners (file first, then storage)
     if not loadCornersFromFile() then
         loadCornersFromStorage()
     end
     
-    -- Load best lap
+    -- Load best lap and history
     loadBestLap()
+    loadHistory()
     
     -- Auto-detect corners if no manual corners and we have a best lap
     updateAutoDetectedCorners()
     
     -- Initialize current lap
-    state.currentLap = lap.new(state.track, state.car)
+    state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = car.fuel
     
     initialized = true
@@ -472,7 +518,7 @@ function state.update(dt, car)
         
         -- Ensure current lap exists
         if not state.currentLap then
-            state.currentLap = lap.new(state.track, state.car)
+            state.currentLap = lap.new(state.track, state.car, state.sessionId)
             state.currentLap.fuelLeftAtStart = car.fuel
         end
         
@@ -495,6 +541,7 @@ function state.update(dt, car)
             while #state.history > MAX_HISTORY do
                 table.remove(state.history)
             end
+            saveHistory()
             
             -- Update best lap if this is faster and valid
             if state.currentLap.valid and state.currentLap.time > 0 then
@@ -509,7 +556,7 @@ function state.update(dt, car)
         end
         
         -- Reset for new lap
-        state.currentLap = lap.new(state.track, state.car)
+        state.currentLap = lap.new(state.track, state.car, state.sessionId)
         state.currentLap.fuelLeftAtStart = car.fuel
         state.lapNumber = car.lapCount
     end
@@ -563,6 +610,27 @@ end
 ---@return table|nil
 function state.getBestLap()
     return state.bestLap
+end
+
+--- Get fastest lap from current session only
+---@return table|nil lap, number|nil index
+function state.getFastestSessionLap()
+    if not state.history or #state.history == 0 then return nil, nil end
+    if not state.sessionId then return nil, nil end
+    
+    local fastest = nil
+    local fastestIdx = nil
+    for i, lapData in ipairs(state.history) do
+        -- Only consider laps from current session
+        if lapData.sessionId == state.sessionId and 
+           lapData.valid and lapData.time and lapData.time > 0 then
+            if not fastest or lapData.time < fastest.time then
+                fastest = lapData
+                fastestIdx = i
+            end
+        end
+    end
+    return fastest, fastestIdx
 end
 
 --- Set best lap directly
@@ -656,14 +724,17 @@ end
 ---@return table|nil Corner definition
 function state.getCornerAt(pos)
     for _, c in ipairs(state.trackCorners) do
-        local inside
-        if c.startPos <= c.endPos then
-            inside = pos >= c.startPos and pos <= c.endPos
-        else
-            inside = pos >= c.startPos or pos <= c.endPos
-        end
-        if inside then
-            return c
+        -- Skip corners with nil positions (placeholders for numbering)
+        if c.startPos and c.endPos then
+            local inside
+            if c.startPos <= c.endPos then
+                inside = pos >= c.startPos and pos <= c.endPos
+            else
+                inside = pos >= c.startPos or pos <= c.endPos
+            end
+            if inside then
+                return c
+            end
         end
     end
     return nil

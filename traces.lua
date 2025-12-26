@@ -201,83 +201,6 @@ local function drawSpeed(origin, cx, y, w, car)
     ui.popFont()
 end
 
-local lastCornerRightX = nil
-
-local function drawCornerZones(origin, x, y, w, h, positions, cornerNums, cornerData)
-    if not cornerNums or #cornerNums < 2 then
-        lastCornerRightX = nil
-        return
-    end
-
-    local step = w / (#cornerNums - 1)
-    local currentCorner = 0
-    local zoneStart = nil
-    local currentCornerNum = cornerData and cornerData.number or 0
-
-    lastCornerRightX = nil
-
-    for i = 1, #cornerNums do
-        local num = cornerNums[i]
-
-        if num ~= currentCorner then
-            if currentCorner > 0 and zoneStart then
-                local zoneEnd = x + (i - 1) * step
-                if currentCorner == currentCornerNum then
-                    lastCornerRightX = zoneEnd
-                end
-
-                ui.drawRectFilled(origin + vec2(zoneStart, y), origin + vec2(zoneEnd, y + h), rgbm(1, 1, 1, 0.03))
-                ui.drawRect(origin + vec2(zoneStart, y), origin + vec2(zoneEnd, y + h), colors.cornerOutline, 1)
-                
-                ui.pushFont(ui.Font.Main)
-                ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, 0.4))
-                ui.setCursor(origin + vec2(zoneStart + 4, y + 2))
-                ui.text(tostring(currentCorner))
-                ui.popStyleColor()
-                ui.popFont()
-
-                if currentCorner == currentCornerNum and cornerData and cornerData.leftCorner then
-                    local delta = cornerData.cornerTimeDelta
-                    if delta then
-                        local sign = delta >= 0 and "+" or ""
-                        local deltaColor = delta >= 0 and colors.deltaPos or colors.deltaNeg
-                        ui.pushFont(ui.Font.Main)
-                        ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-                        ui.setCursor(origin + vec2(zoneEnd + 4, y + h - 16))
-                        ui.text(string.format("%s%.2f", sign, delta))
-                        ui.popStyleColor()
-                        ui.popFont()
-                    end
-                end
-            end
-
-            currentCorner = num
-            if num > 0 then
-                zoneStart = x + (i - 1) * step
-            else
-                zoneStart = nil
-            end
-        end
-    end
-
-    if currentCorner > 0 and zoneStart then
-        local zoneEnd = x + w
-        if currentCorner == currentCornerNum then
-            lastCornerRightX = zoneEnd
-        end
-
-        ui.drawRectFilled(origin + vec2(zoneStart, y), origin + vec2(zoneEnd, y + h), rgbm(1, 1, 1, 0.03))
-        ui.drawRect(origin + vec2(zoneStart, y), origin + vec2(zoneEnd, y + h), colors.cornerOutline, 1)
-        
-        ui.pushFont(ui.Font.Main)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, 0.4))
-        ui.setCursor(origin + vec2(zoneStart + 4, y + 2))
-        ui.text(tostring(currentCorner))
-        ui.popStyleColor()
-        ui.popFont()
-    end
-end
-
 local function posToX(pos, positions, x, w)
     if not positions or #positions < 2 then return nil end
     for i = 1, #positions - 1 do
@@ -292,89 +215,6 @@ local function posToX(pos, positions, x, w)
         end
     end
     return nil
-end
-
-local function drawCornerSpeedsAbove(windowOrigin, traceOrigin, x, y, w, positions, cornerData, padTop)
-    if not cornerData then return end
-
-    local conv = settings.useKMH and 1 or 0.621371
-    local labelY = windowOrigin.y + 3
-
-    ui.pushFont(ui.Font.Small)
-
-    -- Entry speed
-    if cornerData.entryPos then
-        local entryX = posToX(cornerData.entryPos, positions, x, w)
-        if entryX then
-            local entrySpeed = (cornerData.currentEntrySpeed or cornerData.ghostEntrySpeed) * conv
-            local entryDelta = cornerData.entryDelta and (cornerData.entryDelta * conv) or nil
-            local entryDeltaRounded = entryDelta and math.floor(entryDelta + 0.5) or 0
-
-            ui.pushStyleColor(ui.StyleColor.Text, colors.cornerText)
-            ui.setCursor(vec2(traceOrigin.x + entryX, labelY))
-            ui.text(string.format("%.0f", entrySpeed))
-            ui.popStyleColor()
-
-            if entryDelta and entryDeltaRounded ~= 0 then
-                local sign = entryDelta >= 0 and "+" or ""
-                local deltaColor = entryDelta >= 0 and colors.deltaNeg or colors.deltaPos
-                ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-                ui.setCursor(vec2(traceOrigin.x + entryX + 28, labelY))
-                ui.text(string.format("%s%.0f", sign, entryDelta))
-                ui.popStyleColor()
-            end
-        end
-    end
-
-    -- Apex speed
-    if cornerData.apexPos and cornerData.passedApex then
-        local apexX = posToX(cornerData.apexPos, positions, x, w)
-        if apexX then
-            local apexSpeed = (cornerData.currentApexSpeed or cornerData.ghostApexSpeed) * conv
-            local apexDelta = cornerData.apexDelta and (cornerData.apexDelta * conv) or nil
-            local apexDeltaRounded = apexDelta and math.floor(apexDelta + 0.5) or 0
-
-            ui.pushStyleColor(ui.StyleColor.Text, colors.cornerText)
-            ui.setCursor(vec2(traceOrigin.x + apexX, labelY))
-            ui.text(string.format("%.0f", apexSpeed))
-            ui.popStyleColor()
-
-            if apexDelta and apexDeltaRounded ~= 0 then
-                local sign = apexDelta >= 0 and "+" or ""
-                local deltaColor = apexDelta >= 0 and colors.deltaNeg or colors.deltaPos
-                ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-                ui.setCursor(vec2(traceOrigin.x + apexX + 28, labelY))
-                ui.text(string.format("%s%.0f", sign, apexDelta))
-                ui.popStyleColor()
-            end
-        end
-    end
-
-    -- Exit speed
-    if cornerData.exitPos and cornerData.currentExitSpeed then
-        local exitX = posToX(cornerData.exitPos, positions, x, w)
-        if exitX then
-            local exitSpeed = cornerData.currentExitSpeed * conv
-            local exitDelta = cornerData.exitDelta and (cornerData.exitDelta * conv) or nil
-            local exitDeltaRounded = exitDelta and math.floor(exitDelta + 0.5) or 0
-
-            ui.pushStyleColor(ui.StyleColor.Text, colors.cornerText)
-            ui.setCursor(vec2(traceOrigin.x + exitX, labelY))
-            ui.text(string.format("%.0f", exitSpeed))
-            ui.popStyleColor()
-
-            if exitDelta and cornerData.leftCorner and exitDeltaRounded ~= 0 then
-                local sign = exitDelta >= 0 and "+" or ""
-                local deltaColor = exitDelta >= 0 and colors.deltaNeg or colors.deltaPos
-                ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-                ui.setCursor(vec2(traceOrigin.x + exitX + 28, labelY))
-                ui.text(string.format("%s%.0f", sign, exitDelta))
-                ui.popStyleColor()
-            end
-        end
-    end
-
-    ui.popFont()
 end
 
 function script.windowMain(dt)
@@ -417,29 +257,20 @@ function script.windowMain(dt)
 
     local traceW = math.max(0, cursor)
 
-    local cornerNums = corner.getCornersForPositions(history.pos)
-    local cornerData = corner_analysis.getCurrentCornerData()
-
     local trackLength = ac.getSim().trackLengthM
     if traceW > 10 then
         drawGrid(origin, 0, 0, traceW, h, history.pos, trackLength)
-        drawCornerZones(origin, 0, 0, traceW, h, history.pos, cornerNums, cornerData)
 
+        -- Start/finish line
         local sfX = posToX(0, history.pos, 0, traceW)
         if sfX then
             ui.drawLine(origin + vec2(sfX, 0), origin + vec2(sfX, h), colors.startFinishLine, 2)
         end
 
-        if cornerData and cornerData.apexPos then
-            local apexX = posToX(cornerData.apexPos, history.pos, 0, traceW)
-            if apexX then
-                ui.drawLine(origin + vec2(apexX, 0), origin + vec2(apexX, h), colors.apexLine, 1)
-            end
-        end
-
         local ghostTraces = state.getGhostTraces(history.pos)
         local maxSpeed = getMaxSpeed(ghostTraces)
         
+        -- Ghost traces (reference)
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
             if display.speed and ghostTraces.speed then drawSpeedTrace(origin, 0, 0, traceW, h, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
             if display.steering then drawTrace(origin, 0, 0, traceW, h, ghostTraces.steering, colors.ghostSteering) end
@@ -448,15 +279,12 @@ function script.windowMain(dt)
             if display.brake then drawTrace(origin, 0, 0, traceW, h, ghostTraces.brake, colors.ghostBrake) end
         end
 
+        -- Current traces
         if display.speed then drawSpeedTrace(origin, 0, 0, traceW, h, history.speed, colors.speed, maxSpeed) end
         if display.steering then drawTrace(origin, 0, 0, traceW, h, history.steering, colors.steering) end
         if display.clutch then drawTrace(origin, 0, 0, traceW, h, history.clutch, colors.clutch) end
         if display.throttle then drawTrace(origin, 0, 0, traceW, h, history.throttle, colors.throttle) end
         if display.brake then drawTrace(origin, 0, 0, traceW, h, history.brake, colors.brake) end
-
-        if cornerData then
-            drawCornerSpeedsAbove(windowOrigin, origin, 0, 0, traceW, history.pos, cornerData, pad)
-        end
     end
 
     drawBar(origin, brakeX, barY, barW, barH, car.brake, colors.brake)
@@ -481,12 +309,7 @@ function script.windowSettings(dt)
 end
 
 function script.windowCorners(dt)
-    if corner_analysis.justExitedCorner() then
-        local cornerData = corner_analysis.getLastCompletedCorner()
-        if cornerData then
-            corner_analysis.onCornerComplete(cornerData)
-        end
-    end
+    -- corner_analysis.update() handles corner tracking internally
     corner_analysis.draw(dt, settings.useKMH, corner.isRecording())
 end
 
