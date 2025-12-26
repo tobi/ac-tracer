@@ -695,6 +695,16 @@ function state.getGhostLiftPointInRange(startPos, endPos)
     return state.bestLap:findLiftPoint(startPos, endPos)
 end
 
+--- Get apex (minimum speed point) in range from best lap
+---@param startPos number
+---@param endPos number
+---@return number|nil apexPos
+---@return number|nil apexSpeed
+function state.getGhostApexInRange(startPos, endPos)
+    if not state.bestLap then return nil, nil end
+    return state.bestLap:findApex(startPos, endPos)
+end
+
 --------------------------------------------------------------------------------
 -- Corner Management
 --------------------------------------------------------------------------------

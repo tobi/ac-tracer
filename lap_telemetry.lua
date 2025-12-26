@@ -241,7 +241,12 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
         ui.setCursor(vec2(x - 50, py - 7))
         ui.pushFont(ui.Font.Small)
         ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-        local labelText = string.format("%.1f", val)
+        local labelText
+        if unit and unit:find("km") then
+            labelText = string.format("%d", val)  -- Integer for speed
+        else
+            labelText = string.format("%.1f", val)
+        end
         if unit then labelText = labelText .. unit end
         ui.text(labelText)
         ui.popStyleColor()
@@ -749,7 +754,7 @@ function lap_telemetry.draw(dt)
             end
         end
         maxSpeed = math.max(100, math.ceil(maxSpeed / 50) * 50)
-        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "speed", colors.speed, colors.refSpeed, 0, maxSpeed, "Speed", " km/h")
+        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "speed", colors.speed, colors.refSpeed, 0, maxSpeed, "Speed", " kmh")
         y = y + traceH
         
         -- Steering
@@ -813,11 +818,17 @@ function lap_telemetry.draw(dt)
                 ui.drawLine(vec2(panelX + 5, py), vec2(panelX + panelW - 5, py), colors.grid, 1)
                 py = py + 8
                 
-                -- Time
+                -- Time (formatted as m:ss.sss)
                 ui.setCursor(vec2(panelX + 10, py))
                 ui.pushFont(ui.Font.Main)
                 ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
-                ui.text(string.format("%.3fs", cursorTime))
+                local mins = math.floor(cursorTime / 60)
+                local secs = cursorTime - mins * 60
+                if mins > 0 then
+                    ui.text(string.format("%d:%06.3f", mins, secs))
+                else
+                    ui.text(string.format("%.3fs", secs))
+                end
                 ui.popStyleColor()
                 ui.popFont()
                 py = py + lineH + 5
@@ -932,17 +943,18 @@ function lap_telemetry.draw(dt)
                     ui.popStyleColor()
                     ui.sameLine(panelX + 70)
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
-                    ui.text(string.format("%.3f", cursorValues.pos))
+                    ui.text(string.format("%.1f%%", cursorValues.pos * 100))
                     ui.popStyleColor()
                     py = py + lineH
-                    -- position in meters
+                    -- position in meters (using actual track length)
+                    local trackLength = ac.getSim().trackLengthM or 5000
                     ui.setCursor(vec2(panelX + 10, py))
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
                     ui.text("Meters:")
                     ui.popStyleColor()
                     ui.sameLine(panelX + 70)
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
-                    ui.text(string.format("%d m", math.floor(cursorValues.pos * 1000)))
+                    ui.text(string.format("%d m", math.floor(cursorValues.pos * trackLength)))
                     ui.popStyleColor()
                 end
                 

@@ -212,11 +212,15 @@ local function onCornerExit()
     
     -- Get ghost data from best lap
     local ghostEntrySpeed = state.getGhostValueAt('speed', cornerInfo.startPos) or 0
-    local ghostApexSpeed = state.getGhostValueAt('speed', cornerInfo.apexPos) or 0
     local ghostExitSpeed = state.getGhostValueAt('speed', cornerInfo.endPos) or 0
     local ghostMaxSteeringDeg = state.getGhostMaxSteeringInRange(cornerInfo.startPos, cornerInfo.endPos)
     local refBrakePos = state.getGhostBrakePointInRange(cornerInfo.startPos, cornerInfo.endPos)
     local refLiftOffPos = state.getGhostLiftPointInRange(cornerInfo.startPos, cornerInfo.endPos)
+    
+    -- Get ghost's actual apex (minimum speed point) in the corner range
+    local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
+    ghostApexPos = ghostApexPos or cornerInfo.apexPos
+    ghostApexSpeed = ghostApexSpeed or 0
     
     -- Build comparison data
     displayData = {
@@ -225,7 +229,7 @@ local function onCornerExit()
         refEntrySpeed = ghostEntrySpeed,
         refApexSpeed = ghostApexSpeed,
         refExitSpeed = ghostExitSpeed,
-        refApexPos = cornerInfo.apexPos,
+        refApexPos = ghostApexPos,
         refStartPos = cornerInfo.startPos,
         refEndPos = cornerInfo.endPos,
         refBrakePos = refBrakePos,
@@ -240,7 +244,7 @@ local function onCornerExit()
         currentBrakePos = liveCorner.brakePos,
         currentLiftOffPos = liveCorner.liftOffPos,
         currentMaxSteeringDeg = liveCorner.maxSteeringDeg,
-        -- Deltas
+        -- Deltas (apex speed uses each lap's own apex, not same position)
         timeDelta = timeDelta,
         entrySpeedDelta = liveCorner.entrySpeed and ghostEntrySpeed > 0 and 
                           (liveCorner.entrySpeed - ghostEntrySpeed) or nil,
@@ -643,9 +647,12 @@ function corner_analysis.draw(dt, useKmh, isRecording)
         )
 
         local panelX = padding + graphWidth + padding
-        local statsWidth = panelWidth * 0.6
-        local scoreX = panelX + statsWidth + 5
-        local scoreCenterX = scoreX + (panelWidth - statsWidth - 5) / 2
+        local statsWidth = panelWidth
+        
+        -- Score gauge in top right
+        local scoreCenterX = windowSize.x - 45
+        local scoreY = 25
+        drawScoreGauge(scoreCenterX, scoreY, 25, displayScore)
 
         ui.setCursor(vec2(panelX, 4))
         ui.pushFont(ui.Font.Small)
@@ -654,7 +661,7 @@ function corner_analysis.draw(dt, useKmh, isRecording)
         ui.popStyleColor()
         ui.popFont()
 
-        local statsY = graphY + 20
+        local statsY = graphY + 10
         local lineH = 16
         ui.pushFont(ui.Font.Main)
         
@@ -668,7 +675,7 @@ function corner_analysis.draw(dt, useKmh, isRecording)
             ui.text(string.format("%s%.2fs", sign, displayData.timeDelta))
             ui.popStyleColor()
             ui.popFont()
-            statsY = statsY + 28
+            statsY = statsY + 26
         end
         
         ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
@@ -680,40 +687,50 @@ function corner_analysis.draw(dt, useKmh, isRecording)
             ui.setCursor(vec2(panelX, statsY))
             ui.text(string.format("Entry: %s%d %s", sign, math.floor(displayData.entrySpeedDelta + 0.5), speedUnit))
         end
+        statsY = statsY + lineH
         
         if displayData.apexSpeedDelta then
             local speedUnit = useKmh and "km/h" or "mph"
             local sign = displayData.apexSpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY + lineH))
+            ui.setCursor(vec2(panelX, statsY))
             ui.text(string.format("Apex: %s%d %s", sign, math.floor(displayData.apexSpeedDelta + 0.5), speedUnit))
         end
+        statsY = statsY + lineH
         
         if displayData.exitSpeedDelta then
             local speedUnit = useKmh and "km/h" or "mph"
             local sign = displayData.exitSpeedDelta >= 0 and "+" or ""
-            ui.setCursor(vec2(panelX, statsY + lineH * 2))
+            ui.setCursor(vec2(panelX, statsY))
             ui.text(string.format("Exit: %s%d %s", sign, math.floor(displayData.exitSpeedDelta + 0.5), speedUnit))
         end
+        statsY = statsY + lineH
         
         -- Brake/liftoff meters
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
         if brakeMeters then
             local brakeText = brakeMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY + lineH * 3))
+            ui.setCursor(vec2(panelX, statsY))
             ui.text(string.format("Brake: %dm %s", math.abs(math.floor(brakeMeters + 0.5)), brakeText))
         end
+        statsY = statsY + lineH
         
         if liftOffMeters then
             local liftText = liftOffMeters >= 0 and "later" or "earlier"
-            ui.setCursor(vec2(panelX, statsY + lineH * 4))
+            ui.setCursor(vec2(panelX, statsY))
             ui.text(string.format("Lift: %dm %s", math.abs(math.floor(liftOffMeters + 0.5)), liftText))
+        end
+        statsY = statsY + lineH
+        
+        -- Apex position difference in meters
+        if displayData.currentApexPos and displayData.refApexPos then
+            local apexPosDelta = (displayData.currentApexPos - displayData.refApexPos) * 1000  -- Approximate meters
+            local apexText = apexPosDelta >= 0 and "later" or "earlier"
+            ui.setCursor(vec2(panelX, statsY))
+            ui.text(string.format("Apex: %dm %s", math.abs(math.floor(apexPosDelta + 0.5)), apexText))
         end
         
         ui.popStyleColor()
         ui.popFont()
-
-        local gaugeY = graphY + graphHeight - 50
-        drawScoreGauge(scoreCenterX, gaugeY, 28, displayScore)
 
     else
         ui.setCursor(vec2(padding + graphWidth / 2 - 60, graphY + graphHeight / 2 - 10))
@@ -725,11 +742,9 @@ function corner_analysis.draw(dt, useKmh, isRecording)
         end
         ui.popStyleColor()
 
-        local panelX = padding + graphWidth + padding
-        local statsWidth = panelWidth * 0.6
-        local scoreX = panelX + statsWidth + 5
-        local scoreCenterX = scoreX + (panelWidth - statsWidth - 5) / 2
-        drawScoreGauge(scoreCenterX, graphY + graphHeight - 50, 28, 0)
+        -- Score gauge in top right (empty state)
+        local scoreCenterX = windowSize.x - 45
+        drawScoreGauge(scoreCenterX, 25, 25, 0)
     end
 
     if isRecording then

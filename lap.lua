@@ -287,6 +287,40 @@ function lap:findMaxSteering(startPos, endPos)
     return maxDeg
 end
 
+--- Find apex (minimum speed point) in a position range
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@return number|nil apexPos Position of minimum speed
+---@return number|nil apexSpeed Speed at apex
+function lap:findApex(startPos, endPos)
+    local minSpeed = math.huge
+    local apexPos = nil
+    
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        -- Handle wrap-around
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+        
+        if inRange then
+            local speed = self.speed[i]
+            if speed and speed < minSpeed then
+                minSpeed = speed
+                apexPos = pos
+            end
+        end
+    end
+    
+    if apexPos then
+        return apexPos, minSpeed
+    end
+    return nil, nil
+end
+
 --------------------------------------------------------------------------------
 -- Serialization
 --------------------------------------------------------------------------------
