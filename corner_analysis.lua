@@ -4,6 +4,7 @@
 local state = require('state')
 local lap = require('lap')
 local scoring = require('scoring')
+local settings = require('app_settings')
 
 local corner_analysis = {}
 
@@ -603,6 +604,21 @@ end
 
 --- Main window rendering
 function corner_analysis.draw(dt, useKmh, isRecording)
+    local car = ac.getCar(0)
+    
+    -- Auto-hide when traveling above speed threshold
+    if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
+        -- Draw minimal collapsed indicator
+        ui.drawRectFilled(vec2(0, 0), vec2(115, 22), rgbm(0.08, 0.1, 0.08, 0.9), 4)
+        ui.setCursor(vec2(8, 3))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.7, 0.4, 1))
+        ui.text("Corner Analysis")
+        ui.popStyleColor()
+        ui.popFont()
+        return
+    end
+    
     local windowSize = ui.availableSpace()
     local padding = 8
 

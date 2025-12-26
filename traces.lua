@@ -102,46 +102,15 @@ local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed)
 end
 
 local function drawGrid(origin, x, y, w, h, positions, trackLength)
-    -- Border
+    -- Border only (removed cluttered 50m vertical lines)
     ui.drawLine(origin + vec2(x, y), origin + vec2(x + w, y), colors.grid, 1)
     ui.drawLine(origin + vec2(x + w, y), origin + vec2(x + w, y + h), colors.grid, 1)
     ui.drawLine(origin + vec2(x + w, y + h), origin + vec2(x, y + h), colors.grid, 1)
     ui.drawLine(origin + vec2(x, y + h), origin + vec2(x, y), colors.grid, 1)
 
-    -- Horizontal lines
-    for j = 1, 3 do
-        local ly = y + h * j / 4
-        ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), colors.grid, 1)
-    end
-
-    -- Vertical lines based on distance
-    if positions and #positions >= 2 and trackLength and trackLength > 0 then
-        local distanceInterval = 50
-        local step = w / (#positions - 1)
-        local startDist = positions[1] * trackLength
-        local endDist = positions[#positions] * trackLength
-        if endDist < startDist then endDist = endDist + trackLength end
-
-        local firstMarker = math.ceil(startDist / distanceInterval) * distanceInterval
-        for dist = firstMarker, endDist, distanceInterval do
-            local normalizedDist = dist
-            if normalizedDist >= trackLength then normalizedDist = normalizedDist - trackLength end
-            local splinePos = normalizedDist / trackLength
-
-            for i = 1, #positions - 1 do
-                local p1, p2 = positions[i], positions[i + 1]
-                if p2 < p1 then p2 = p2 + 1 end
-                local sp = splinePos
-                if sp < p1 and p1 > 0.5 then sp = sp + 1 end
-                if sp >= p1 and sp <= p2 then
-                    local t = (sp - p1) / (p2 - p1)
-                    local lx = x + (i - 1 + t) * step
-                    ui.drawLine(origin + vec2(lx, y), origin + vec2(lx, y + h), colors.grid, 1)
-                    break
-                end
-            end
-        end
-    end
+    -- Horizontal lines at 50% only (cleaner)
+    local ly = y + h / 2
+    ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), colors.grid, 1)
 end
 
 local function drawBar(origin, x, y, w, h, val, color)
@@ -257,33 +226,46 @@ function script.windowMain(dt)
 
     local traceW = math.max(0, cursor)
     
-    -- Offset trace origin (button area reserved for future use)
     local traceOrigin = origin
 
     local trackLength = ac.getSim().trackLengthM
     if traceW > 10 then
         drawGrid(traceOrigin, 0, 0, traceW, h, history.pos, trackLength)
 
-        -- Draw faint corner zones
+        -- Draw corner zones (very faint, with partial corner support)
         local corners = state.trackCorners
         local currentPos = car.splinePosition
         local currentCornerName = nil
+        local currentCornerStartX = nil
+        local currentCornerEndX = nil
         
         if corners and #corners > 0 then
+            -- Get position range from history
+            local minPos, maxPos = nil, nil
+            if history.pos and #history.pos > 1 then
+                minPos = history.pos[1]
+                maxPos = history.pos[#history.pos]
+            end
+            
             for _, c in ipairs(corners) do
                 if c.startPos and c.endPos then
+                    -- Try to get X positions (may be nil if outside visible range)
                     local cStartX = posToX(c.startPos, history.pos, 0, traceW)
                     local cEndX = posToX(c.endPos, history.pos, 0, traceW)
                     
-                    if cStartX and cEndX then
-                        -- Faint corner zone background
-                        ui.drawRectFilled(
-                            traceOrigin + vec2(cStartX, 0), 
-                            traceOrigin + vec2(cEndX, h), 
-                            rgbm(0.4, 0.4, 0.6, 0.1), 0)
-                        -- Faint corner edge lines
-                        ui.drawLine(traceOrigin + vec2(cStartX, 0), traceOrigin + vec2(cStartX, h), rgbm(0.5, 0.5, 0.7, 0.2), 1)
-                        ui.drawLine(traceOrigin + vec2(cEndX, 0), traceOrigin + vec2(cEndX, h), rgbm(0.5, 0.5, 0.7, 0.2), 1)
+                    -- Handle partial corners (clamp to visible area)
+                    local drawStartX = cStartX
+                    local drawEndX = cEndX
+                    
+                    if minPos and maxPos then
+                        -- If start is before visible range, clamp to left edge
+                        if not cStartX and c.startPos < minPos then
+                            drawStartX = 0
+                        end
+                        -- If end is after visible range, clamp to right edge
+                        if not cEndX and c.endPos > maxPos then
+                            drawEndX = traceW
+                        end
                     end
                     
                     -- Check if we're in this corner
@@ -291,11 +273,42 @@ function script.windowMain(dt)
                     if c.endPos >= c.startPos then
                         inCorner = currentPos >= c.startPos and currentPos <= c.endPos
                     else
-                        -- Wraps around
                         inCorner = currentPos >= c.startPos or currentPos <= c.endPos
                     end
-                    if inCorner then
-                        currentCornerName = c.name
+                    
+                    -- Draw if we have at least one valid edge
+                    if drawStartX and drawEndX then
+                        if inCorner then
+                            -- Active corner: slightly brighter with border
+                            ui.drawRectFilled(
+                                traceOrigin + vec2(drawStartX, 0), 
+                                traceOrigin + vec2(drawEndX, h), 
+                                rgbm(0.3, 0.3, 0.4, 0.06), 0)
+                            ui.drawRect(
+                                traceOrigin + vec2(drawStartX, 0), 
+                                traceOrigin + vec2(drawEndX, h), 
+                                rgbm(1, 1, 1, 0.15), 1)
+                            
+                            currentCornerName = c.name
+                            currentCornerStartX = drawStartX
+                            currentCornerEndX = drawEndX
+                        else
+                            -- Inactive corner: very faint dark fill
+                            ui.drawRectFilled(
+                                traceOrigin + vec2(drawStartX, 0), 
+                                traceOrigin + vec2(drawEndX, h), 
+                                rgbm(0.15, 0.15, 0.2, 0.01), 0)
+                        end
+                        
+                        -- Corner name in top left (for all visible corners)
+                        if c.name then
+                            ui.pushFont(ui.Font.Small)
+                            ui.setCursor(traceOrigin + vec2(drawStartX + 3, 2))
+                            ui.pushStyleColor(ui.StyleColor.Text, inCorner and rgbm(1, 1, 1, 0.7) or rgbm(1, 1, 1, 0.25))
+                            ui.text(c.name)
+                            ui.popStyleColor()
+                            ui.popFont()
+                        end
                     end
                 end
             end
@@ -353,15 +366,7 @@ function script.windowMain(dt)
         if display.throttle then drawTrace(traceOrigin, 0, 0, traceW, h, history.throttle, colors.throttle) end
         if display.brake then drawTrace(traceOrigin, 0, 0, traceW, h, history.brake, colors.brake) end
         
-        -- Display current corner name (faint, at top left of trace area)
-        if currentCornerName then
-            ui.pushFont(ui.Font.Small)
-            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.8, 0.8, 0.9, 0.4))
-            ui.setCursor(traceOrigin + vec2(5, 2))
-            ui.text(currentCornerName)
-            ui.popStyleColor()
-            ui.popFont()
-        end
+        -- Corner name is now rendered in the corner zone loop above
     end
 
     drawBar(origin, brakeX, barY, barW, barH, car.brake, colors.brake)

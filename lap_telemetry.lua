@@ -372,7 +372,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     
     if maxDelta == 0 then maxDelta = 0.1 end
     
-    -- Draw corner zones (before other elements)
+    -- Draw corner zones (before other elements) - with partial corner support
     local corners = state.trackCorners
     local mousePos = ui.mousePos()
     local winPos = ui.windowPos()
@@ -382,33 +382,42 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     local hoveredHandle = nil  -- "start" or "end" or nil
     
     if corners then
-        local cornerColors = {
-            rgbm(0.3, 0.3, 0.5, 0.25),  -- Alternating colors for visibility
-            rgbm(0.3, 0.5, 0.3, 0.25),
-        }
         -- Draw corners
         for i, corner in ipairs(corners) do
             if corner.startPos and corner.endPos then
                 local startX = posToGraphX(corner.startPos, selectedLap, startTime, endTime, x, w)
                 local endX = posToGraphX(corner.endPos, selectedLap, startTime, endTime, x, w)
                 
-                if startX and endX then
+                -- Handle partial corners (clamp to visible graph area)
+                local drawStartX = startX or x  -- Default to graph start if corner start is before visible range
+                local drawEndX = endX or (x + w)  -- Default to graph end if corner end is after visible range
+                
+                -- Skip if both are outside visible range on the same side
+                local cornerVisible = startX or endX or 
+                    (corner.startPos < startTime / (selectedLap.time / 1000) and 
+                     corner.endPos > endTime / (selectedLap.time / 1000))
+                
+                if cornerVisible or editMode then
                     local isSelected = editMode and selectedCorner == corner.number
                     
-                    -- Draw corner zone background
-                    local cornerColor = cornerColors[(i % 2) + 1]
+                    -- Draw corner zone background (very faint)
+                    local cornerColor
                     if isSelected then
                         cornerColor = colors.cornerSelected
+                    elseif editMode then
+                        -- Slightly more visible in edit mode
+                        cornerColor = (i % 2 == 0) and rgbm(0.2, 0.2, 0.35, 0.15) or rgbm(0.2, 0.35, 0.2, 0.15)
+                    else
+                        -- Very faint for normal view
+                        cornerColor = rgbm(0.15, 0.15, 0.2, 0.01)
                     end
-                    ui.drawRectFilled(vec2(startX, y), vec2(endX, y + h), cornerColor, 0)
+                    ui.drawRectFilled(vec2(drawStartX, y), vec2(drawEndX, y + h), cornerColor, 0)
                     
-                    -- Corner number/name label
-                    local centerX = (startX + endX) / 2
-                    ui.pushFont(ui.Font.Small)
+                    -- Corner name in top left of zone
                     local labelText = corner.name or tostring(corner.number or i)
-                    local textW = ui.measureText(labelText).x
-                    ui.setCursor(vec2(centerX - textW / 2, y + 2))
-                    ui.pushStyleColor(ui.StyleColor.Text, isSelected and rgbm(1, 1, 1, 1) or rgbm(1, 1, 1, 0.7))
+                    ui.pushFont(ui.Font.Small)
+                    ui.setCursor(vec2(drawStartX + 3, y + 2))
+                    ui.pushStyleColor(ui.StyleColor.Text, isSelected and rgbm(1, 1, 1, 1) or rgbm(1, 1, 1, 0.35))
                     ui.text(labelText)
                     ui.popStyleColor()
                     
@@ -423,13 +432,12 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                         local refCornerTime = refExitTime - refEntryTime
                         local cornerTimeDelta = currentCornerTime - refCornerTime
                         
-                        -- Draw corner delta
+                        -- Draw corner delta at bottom
                         local sign = cornerTimeDelta >= 0 and "+" or ""
                         local deltaText = string.format("%s%.2f", sign, cornerTimeDelta)
                         local deltaColor = cornerTimeDelta >= 0 and rgbm(1, 0.4, 0.4, 0.9) or rgbm(0.4, 1, 0.4, 0.9)
                         
-                        local deltaTextW = ui.measureText(deltaText).x
-                        ui.setCursor(vec2(centerX - deltaTextW / 2, y + h - 14))
+                        ui.setCursor(vec2(drawStartX + 3, y + h - 14))
                         ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
                         ui.text(deltaText)
                         ui.popStyleColor()
@@ -437,41 +445,43 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                     
                     ui.popFont()
                     
-                    -- Edit mode: check for hover and draw handles
+                    -- Edit mode: check for hover and draw handles (only if edges are visible)
                     if editMode then
                         local handleSize = 8
                         local handleHitSize = 12  -- Larger hit area
                         
                         -- Check if hovering this corner zone (for selection)
-                        if localMouseX >= startX and localMouseX <= endX and localMouseY >= y and localMouseY <= y + h then
+                        if localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h then
                             hoveredCorner = corner.number
                         end
                         
-                        -- Start handle
-                        local startHandleHover = math.abs(localMouseX - startX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
-                        if startHandleHover then
-                            hoveredCorner = corner.number
-                            hoveredHandle = "start"
+                        -- Start handle (only if visible)
+                        if startX then
+                            local startHandleHover = math.abs(localMouseX - startX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
+                            if startHandleHover then
+                                hoveredCorner = corner.number
+                                hoveredHandle = "start"
+                            end
+                            local startHandleColor = (startHandleHover or (isSelected and draggingHandle == "start")) 
+                                and colors.cornerHandleHover or colors.cornerHandle
+                            
+                            ui.drawRectFilled(vec2(startX - 2, y), vec2(startX + 2, y + h), startHandleColor, 0)
+                            ui.drawCircleFilled(vec2(startX, y + h / 2), handleSize, startHandleColor, 16)
                         end
-                        local startHandleColor = (startHandleHover or (isSelected and draggingHandle == "start")) 
-                            and colors.cornerHandleHover or colors.cornerHandle
                         
-                        -- Draw start handle (left edge)
-                        ui.drawRectFilled(vec2(startX - 2, y), vec2(startX + 2, y + h), startHandleColor, 0)
-                        ui.drawCircleFilled(vec2(startX, y + h / 2), handleSize, startHandleColor, 16)
-                        
-                        -- End handle
-                        local endHandleHover = math.abs(localMouseX - endX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
-                        if endHandleHover then
-                            hoveredCorner = corner.number
-                            hoveredHandle = "end"
+                        -- End handle (only if visible)
+                        if endX then
+                            local endHandleHover = math.abs(localMouseX - endX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
+                            if endHandleHover then
+                                hoveredCorner = corner.number
+                                hoveredHandle = "end"
+                            end
+                            local endHandleColor = (endHandleHover or (isSelected and draggingHandle == "end")) 
+                                and colors.cornerHandleHover or colors.cornerHandle
+                            
+                            ui.drawRectFilled(vec2(endX - 2, y), vec2(endX + 2, y + h), endHandleColor, 0)
+                            ui.drawCircleFilled(vec2(endX, y + h / 2), handleSize, endHandleColor, 16)
                         end
-                        local endHandleColor = (endHandleHover or (isSelected and draggingHandle == "end")) 
-                            and colors.cornerHandleHover or colors.cornerHandle
-                        
-                        -- Draw end handle (right edge)
-                        ui.drawRectFilled(vec2(endX - 2, y), vec2(endX + 2, y + h), endHandleColor, 0)
-                        ui.drawCircleFilled(vec2(endX, y + h / 2), handleSize, endHandleColor, 16)
                     end
                 end
             end
@@ -597,14 +607,15 @@ end
 
 -- Main window
 function lap_telemetry.draw(dt)
-    -- Auto-hide when traveling at high speed (if enabled)
     local car = ac.getCar(0)
+    
+    -- Auto-hide when traveling above speed threshold
     if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
-        -- Draw minimal indicator that window is hidden
-        ui.drawRectFilled(vec2(0, 0), vec2(80, 20), rgbm(0.1, 0.1, 0.1, 0.7), 4)
-        ui.setCursor(vec2(5, 2))
+        -- Draw minimal collapsed indicator
+        ui.drawRectFilled(vec2(0, 0), vec2(100, 22), rgbm(0.08, 0.08, 0.1, 0.9), 4)
+        ui.setCursor(vec2(8, 3))
         ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.5, 0.5, 0.8))
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.4, 0.5, 0.7, 1))
         ui.text("Telemetry")
         ui.popStyleColor()
         ui.popFont()
@@ -649,7 +660,7 @@ function lap_telemetry.draw(dt)
         ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, autoLabel))
         ui.popStyleColor()
         
-        ui.sameLine(180)
+        ui.sameLine(130)
         if #state.history > 1 then
             if ui.button("<", vec2(30, 0)) then
                 autoSelectFastest = false
@@ -659,7 +670,8 @@ function lap_telemetry.draw(dt)
             end
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text(string.format("%d/%d", selectedLapIndex or 1, #state.history))
+            
+            ui.text(string.format("lap %d", selectedLap or 1))
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) then

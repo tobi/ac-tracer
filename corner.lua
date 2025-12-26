@@ -5,6 +5,11 @@ local state = require('state')
 
 local corner = {}
 
+-- Exported icons for UI consistency
+corner.ICON_CUSTOM = "✓"
+corner.ICON_AUTO = "⚡"
+corner.ICON_NONE = "○"
+
 -- Track button state for recording
 local recordButtonWasDown = nil
 
@@ -40,6 +45,8 @@ end
 -- Settings UI
 --------------------------------------------------------------------------------
 
+local settings = require('app_settings')
+
 -- UI Colors (consistent with lap_telemetry)
 local colors = {
     textDim = rgbm(0.6, 0.6, 0.6, 1),
@@ -52,9 +59,7 @@ local colors = {
     numberValue = rgbm(0.3, 0.8, 1, 1),
 }
 
-local LABEL_COL = 0       -- Label column start
-local VALUE_COL = 100     -- Value column start
-local LINE_HEIGHT = 20
+local LINE_HEIGHT = 18
 
 function corner.settingsUI(recordButton)
     local startCursor = ui.getCursor()
@@ -68,107 +73,117 @@ function corner.settingsUI(recordButton)
     ui.popFont()
     
     ui.offsetCursorY(3)
-    ui.drawLine(
-        ui.getCursor(), 
-        ui.getCursor() + vec2(contentWidth, 0), 
-        colors.separator, 1
-    )
+    ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), colors.separator, 1)
     ui.offsetCursorY(8)
     
-    -- Record Corner row
-    local rowY = ui.getCursorY()
+    -- Current track info
+    local trackId = state.track or ac.getTrackID() or "Unknown"
+    local trackName = trackId:gsub("_", " "):gsub("^%l", string.upper)
+    
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-    ui.text("Record Corner:")
+    ui.text("Track:")
+    ui.popStyleColor()
+    ui.sameLine(50)
+    ui.pushStyleColor(ui.StyleColor.Text, colors.textHighlight)
+    ui.text(trackName)
     ui.popStyleColor()
     ui.popFont()
     
-    ui.setCursor(vec2(startCursor.x + VALUE_COL, rowY))
-    recordButton:control(vec2(120, 0))
+    ui.offsetCursorY(4)
     
-    ui.offsetCursorY(5)
+    -- Corner status
+    local cornerCount = state.getCornerCount()
+    local hasManual = corner.hasManualCorners()
+    
+    ui.pushFont(ui.Font.Small)
+    if hasManual then
+        -- Has custom corners
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textSuccess)
+        ui.text(string.format("✓ %d custom corners defined", cornerCount))
+        ui.popStyleColor()
+    elseif cornerCount > 0 then
+        -- Using auto-detected corners
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textWarning)
+        ui.text(string.format("⚡ %d auto-detected corners", cornerCount))
+        ui.popStyleColor()
+        ui.offsetCursorY(2)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text("(from best lap - may be inaccurate)")
+        ui.popStyleColor()
+    else
+        -- No corners yet
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text("No corners defined yet")
+        ui.popStyleColor()
+        ui.offsetCursorY(2)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textWarning)
+        ui.text("Complete a lap to auto-detect corners")
+        ui.popStyleColor()
+    end
+    ui.popFont()
+    
+    ui.offsetCursorY(10)
+    ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), colors.separator, 1)
+    ui.offsetCursorY(8)
+    
+    -- Manual recording hotkey
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-    ui.text("Hold to mark corner zone")
+    ui.text("Record Hotkey:")
+    ui.popStyleColor()
+    ui.popFont()
+    ui.sameLine(95)
+    recordButton:control(vec2(110, 0))
+    
+    ui.offsetCursorY(4)
+    ui.pushFont(ui.Font.Small)
+    ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+    ui.text("Hold while driving through corner")
     ui.popStyleColor()
     ui.popFont()
     
     ui.offsetCursorY(10)
-    ui.drawLine(
-        ui.getCursor(), 
-        ui.getCursor() + vec2(contentWidth, 0), 
-        colors.separator, 1
-    )
+    ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), colors.separator, 1)
     ui.offsetCursorY(8)
     
-    -- Corner count display
-    local cornerCount = state.getCornerCount()
-    local hasManual = corner.hasManualCorners()
-    
-    rowY = ui.getCursorY()
+    -- Edit corners info and button
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-    ui.text(hasManual and "Manual Corners:" or "Corners:")
+    ui.text("Edit corners in Lap Telemetry view")
     ui.popStyleColor()
     ui.popFont()
     
-    ui.setCursor(vec2(startCursor.x + VALUE_COL, rowY))
-    ui.pushFont(ui.Font.Main)
-    ui.pushStyleColor(ui.StyleColor.Text, colors.numberValue)
-    ui.text(string.format("%d", cornerCount))
-    ui.popStyleColor()
-    ui.popFont()
-    
-    ui.offsetCursorY(LINE_HEIGHT)
+    ui.offsetCursorY(5)
+    ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.35, 0.5, 1))
+    ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.45, 0.6, 1))
+    if ui.button("Open Lap Telemetry", vec2(140, 22)) then
+        settings.showWindow("telemetry")
+    end
+    ui.popStyleColor(2)
     
     if hasManual then
-        -- Action buttons for manual corners
-        ui.offsetCursorY(5)
-        
-        ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.15, 0.4, 0.15, 1))
-        ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.2, 0.5, 0.2, 1))
-        ui.pushStyleColor(ui.StyleColor.ButtonActive, rgbm(0.25, 0.55, 0.25, 1))
-        if ui.button("Save to File", vec2(95, 22)) then
-            if state.saveCornersToFile() then
-                ac.setMessage("Corners Saved", "Saved to corners.csv")
-            end
-        end
-        ui.popStyleColor(3)
-        
-        ui.sameLine(110)
+        ui.sameLine()
         ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.5, 0.15, 0.15, 1))
         ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.6, 0.2, 0.2, 1))
-        ui.pushStyleColor(ui.StyleColor.ButtonActive, rgbm(0.65, 0.25, 0.25, 1))
-        if ui.button("Clear All", vec2(70, 22)) then
+        if ui.button("Clear", vec2(50, 22)) then
             corner.clearManualCorners()
         end
-        ui.popStyleColor(3)
-    else
-        -- Hint text when no manual corners
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-        ui.text("Use hotkey to record manually")
-        ui.popStyleColor()
-        ui.popFont()
+        ui.popStyleColor(2)
     end
     
     -- Recording indicator
     if corner.isRecording() then
         ui.offsetCursorY(10)
-        ui.drawLine(
-            ui.getCursor(), 
-            ui.getCursor() + vec2(contentWidth, 0), 
-            colors.separator, 1
-        )
+        ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), colors.separator, 1)
         ui.offsetCursorY(8)
         
-        -- Blinking effect using time
         local alpha = 0.6 + 0.4 * math.sin(os.clock() * 6)
         local recColor = rgbm(1, 0.2, 0.2, alpha)
         
         ui.pushFont(ui.Font.Main)
         ui.pushStyleColor(ui.StyleColor.Text, recColor)
-        ui.text("● RECORDING")
+        ui.text("● RECORDING CORNER")
         ui.popStyleColor()
         ui.popFont()
     end

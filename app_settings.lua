@@ -101,10 +101,6 @@ M.display = {
     speed = toBool(rawSpeed, false),
 }
 
--- Telemetry auto-hide settings
-M.telemetryAutoHide = toBool(ini:get('TELEMETRY', 'auto_hide', true), true)
-M.telemetryAutoHideSpeed = tonumber(ini:get('TELEMETRY', 'auto_hide_speed', 100)) or 100
-
 -- Colors
 M.colors = {
     throttle = rgbm(0, 1, 0, 0.85),
@@ -167,32 +163,6 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     ui.sameLine(120)
     M.checkbox("Speed", "speed")
     ui.offsetCursorY(10)
-    
-    ui.separator()
-    ui.offsetCursorY(5)
-    ui.text("Lap Telemetry")
-    ui.offsetCursorY(5)
-    
-    if ui.checkbox("Auto-hide at speed", M.telemetryAutoHide) then
-        M.telemetryAutoHide = not M.telemetryAutoHide
-        ini:set('TELEMETRY', 'auto_hide', M.telemetryAutoHide and "True" or "False")
-        ini:save()
-    end
-    
-    if M.telemetryAutoHide then
-        ui.sameLine(160)
-        ui.setNextItemWidth(60)
-        local newSpeed = ui.slider("##autohidespeed", M.telemetryAutoHideSpeed, 50, 200, "%.0f")
-        if newSpeed ~= M.telemetryAutoHideSpeed then
-            M.telemetryAutoHideSpeed = newSpeed
-            ini:set('TELEMETRY', 'auto_hide_speed', tostring(math.floor(newSpeed)))
-            ini:save()
-        end
-        ui.sameLine()
-        ui.text("km/h")
-    end
-    
-    ui.offsetCursorY(5)
 
     if state.hasBestLap() then
         local bestTime = state.getBestLapTime()
