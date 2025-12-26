@@ -4,6 +4,22 @@ This file documents CSP (Custom Shaders Patch) Lua API discoveries for Assetto C
 
 **Important:** Update this file when new APIs are discovered.
 
+## ⚠️ Development Rules
+
+**NEVER use shell commands or external tools** (`io.popen`, `os.execute`, etc.) to solve problems. CSP provides comprehensive APIs for most tasks.
+
+Before implementing any functionality:
+1. **Check `reference/lib.lua`** for existing CSP APIs
+2. Use CSP's built-in functions (e.g., `io.scanDir` instead of `dir` command)
+3. Only fall back to shell if absolutely no CSP API exists
+
+Example discoveries from lib.lua:
+- `io.scanDir(directory, "*.csv")` - List files matching a pattern
+- `io.dirExists(path)` - Check if directory exists
+- `io.fileExists(path)` - Check if file exists
+- `io.fileSize(path)` - Get file size in bytes (-1 on error)
+- `io.getAttributes(path)` - Get file attributes (fileSize, creationTime, lastWriteTime, etc.)
+
 ## Track Information
 
 ### `ac.getTrackID()`

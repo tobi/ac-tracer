@@ -616,7 +616,7 @@ function state.init(car)
     math.randomseed(os.time() + os.clock() * 1000)
     
     state.track = ac.getTrackID()
-    state.car = car.id
+    state.car = car:id()
     
     -- Try to load existing session ID from storage to persist across reloads
     local sim = ac.getSim()
@@ -1229,28 +1229,26 @@ end
 --- Load lap from CSV and add to references
 ---@param filePath string Path to CSV file
 ---@return table|nil Loaded lap
----@return string|nil Error message if failed
 function state.loadCSV(filePath)
-    local loaded, err = lap.fromCSV(filePath, state.track, state.car)
+    local loaded = lap.fromCSV(filePath, state.track, state.car)
     if loaded then
         table.insert(state.historyReferences, loaded)
-        return loaded, nil
+        return loaded
     end
-    return nil, err
+    return nil
 end
 
 --- Load CSV and set as best lap
 ---@param filePath string Path to CSV file
 ---@return boolean Success
----@return string|nil Error message if failed
 function state.loadCSVAsBest(filePath)
-    local loaded, err = lap.fromCSV(filePath, state.track, state.car)
+    local loaded = lap.fromCSV(filePath, state.track, state.car)
     if loaded then
         state.setBestLap(loaded)
         table.insert(state.historyReferences, loaded)
-        return true, nil
+        return true
     end
-    return false, err
+    return false
 end
 
 return state

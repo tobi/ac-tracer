@@ -292,15 +292,14 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
                     else
                         -- Cache miss - parse CSV using lap module
                         local filePath = __dirname .. "/tracks/" .. filename
-                        local loadErr
-                        lapData, loadErr = lap.fromCSV(filePath, state.track, state.car)
+                        lapData = lap.fromCSV(filePath, state.track, state.car)
                         
                         if lapData then
                             ghostCache[filename] = lapData
                             state.setBestLap(lapData)
                             ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples from " .. filename)
                         else
-                            ac.setMessage("Load Error", loadErr or "Failed to load " .. filename)
+                            ac.setMessage("Load Error", "Failed to load " .. filename)
                         end
                     end
                     

@@ -71,14 +71,19 @@ local function fileExists(path)
     return false
 end
 
--- Check if file exists
-local function fileExists(path)
-    local f = io.open(path, "rb")
-    if f then f:close() return true end
-    return false
+-- Format file size for display
+local function formatFileSize(bytes)
+    if not bytes or bytes < 0 then return "?" end
+    if bytes >= 1024 * 1024 then
+        return string.format("%.1fMB", bytes / (1024 * 1024))
+    elseif bytes >= 1024 then
+        return string.format("%.0fKB", bytes / 1024)
+    else
+        return string.format("%dB", bytes)
+    end
 end
 
--- Scan for CSV files (returns array of {path, filename})
+-- Scan for CSV files (returns array of {path, filename, source, size})
 local function scanGhostFiles()
     local now = os.clock()
     if ghostFiles and (now - ghostFilesLastScan) < 5 then
@@ -86,32 +91,47 @@ local function scanGhostFiles()
     end
     
     ghostFiles = {}
-    local seenPaths = {}
+    local seenFiles = {}
     
-    local function addFile(dirPath, filename)
-        local fullPath = dirPath .. filename
-        if seenPaths[fullPath] then return end
-        
-        if fileExists(fullPath) then
-            seenPaths[fullPath] = true
-            table.insert(ghostFiles, {
-                path = fullPath,
-                filename = filename
-            })
+    -- 1. Scan tracks/ folder (exclude corners.csv)
+    local tracksPath = __dirname .. "/tracks/"
+    if io.dirExists(tracksPath) then
+        local trackFiles = io.scanDir(tracksPath, "*.csv")
+        if trackFiles then
+            for _, filename in ipairs(trackFiles) do
+                if filename:lower() ~= "corners.csv" and not seenFiles[filename:lower()] then
+                    seenFiles[filename:lower()] = true
+                    local fullPath = tracksPath .. filename
+                    table.insert(ghostFiles, {
+                        path = fullPath,
+                        filename = filename,
+                        source = "tracks",
+                        size = io.fileSize(fullPath)
+                    })
+                end
+            end
         end
     end
     
-    -- Check for current track's CSV
-    local trackId = ac.getTrackID()
-    if trackId then
-        local safeName = trackId:gsub("[/\\:]", "_") .. ".csv"
-        addFile(__dirname .. "/tracks/", safeName)
-        addFile("C:/MoTeC/Logged Data/", safeName)
-        addFile("C:/MoTeC/Logged Data/", trackId .. ".csv")
+    -- 2. Scan MoTeC folder
+    local motecPath = "C:\\MoTeC\\Logged Data\\"
+    if io.dirExists(motecPath) then
+        local motecFiles = io.scanDir(motecPath, "*.csv")
+        if motecFiles then
+            for _, filename in ipairs(motecFiles) do
+                if not seenFiles[filename:lower()] then
+                    seenFiles[filename:lower()] = true
+                    local fullPath = motecPath .. filename
+                    table.insert(ghostFiles, {
+                        path = fullPath,
+                        filename = filename,
+                        source = "motec",
+                        size = io.fileSize(fullPath)
+                    })
+                end
+            end
+        end
     end
-    
-    -- Also check for a generic reference lap
-    addFile(__dirname .. "/tracks/", "ier_daytona.csv")
     
     ghostFilesLastScan = now
     return ghostFiles
@@ -1341,7 +1361,7 @@ function lap_telemetry.draw(dt)
     -- Lap picker dialog (drawn last to be on top)
     if showRefPicker then
         local dialogW = 340
-        local dialogH = 420  -- Taller to fit more sections
+        local dialogH = 420
         -- Position dialog below the Load Lap button, right-aligned to button
         local buttonW = 90
         local dialogX = math.max(10, loadLapButtonPos.x + buttonW - dialogW)
@@ -1508,15 +1528,20 @@ function lap_telemetry.draw(dt)
                 if j <= 8 then  -- Limit CSV files shown
                     -- Truncate long filenames
                     local displayName = fileInfo.filename
-                    if #displayName > 22 then
-                        displayName = string.sub(displayName, 1, 19) .. "..."
+                    if #displayName > 18 then
+                        displayName = string.sub(displayName, 1, 15) .. "..."
                     end
                     
-                    -- File label
+                    -- File label with size
+                    local sizeStr = formatFileSize(fileInfo.size)
                     ui.setCursor(vec2(dialogX + 10, py + 2))
                     ui.pushFont(ui.Font.Small)
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
                     ui.text(displayName)
+                    ui.popStyleColor()
+                    ui.sameLine()
+                    ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                    ui.text(sizeStr)
                     ui.popStyleColor()
                     ui.popFont()
                     
@@ -1526,7 +1551,7 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
                     if ui.button("C##csvcur" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local loaded, loadErr = lap.fromCSV(fileInfo.path, state.track, state.car)
+                        local loaded = lap.fromCSV(fileInfo.path, state.track, state.car)
                         if loaded then
                             -- Add to history and select it
                             table.insert(state.history, 1, loaded)
@@ -1539,7 +1564,7 @@ function lap_telemetry.draw(dt)
                             ac.setMessage("Loaded as Current", string.format("CSV: %d:%05.2f", 
                                 math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
                         else
-                            ac.setMessage("Load Error", loadErr or "Failed to load CSV")
+                            ac.setMessage("Load Error", "Failed to load CSV")
                         end
                         isLoadingRef = false
                     end
@@ -1551,7 +1576,7 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.3, 0.5, 1))
                     if ui.button("R##csvref" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local loaded, loadErr = lap.fromCSV(fileInfo.path, state.track, state.car)
+                        local loaded = lap.fromCSV(fileInfo.path, state.track, state.car)
                         if loaded then
                             state.setBestLap(loaded)
                             table.insert(state.historyReferences, loaded)
@@ -1559,7 +1584,7 @@ function lap_telemetry.draw(dt)
                             ac.setMessage("Reference Loaded", string.format("CSV: %d:%05.2f", 
                                 math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
                         else
-                            ac.setMessage("Load Error", loadErr or "Failed to load CSV")
+                            ac.setMessage("Load Error", "Failed to load CSV")
                         end
                         isLoadingRef = false
                     end
@@ -1571,12 +1596,12 @@ function lap_telemetry.draw(dt)
         else
             ui.setCursor(vec2(dialogX + 15, py))
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text("No CSV files in tracks/")
+            ui.text("No CSV files found")
             ui.popStyleColor()
             py = py + 20
         end
         
-        -- Cancel button at bottom
+        -- Close button at bottom
         py = dialogY + dialogH - 30
         ui.setCursor(vec2(dialogX + 10, py))
         if ui.button("Close##refdlg", vec2(dialogW - 20, 0)) then
