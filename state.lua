@@ -2,6 +2,7 @@
 -- All state and persistence lives here. Other modules read from state.
 
 local lap = require('lap')
+local settings = require('app_settings')
 
 local state = {}
 
@@ -405,21 +406,11 @@ local function loadHistory()
     return #state.history > 0
 end
 
---------------------------------------------------------------------------------
 -- Auto-Detection: Corners from Best Lap
 --------------------------------------------------------------------------------
 
--- Detection parameters
-local SPEED_DROP_THRESHOLD = 0.25
-local BRAKE_THRESHOLD = 0.15
-local THROTTLE_ON_THRESHOLD = 0.7
-local LEAD_DISTANCE = 50
-local EXIT_TIME = 2.0
-local EXIT_TIME_THROTTLE_ONLY = 5.0
-local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
-
 local function isSteeringCentered(steeringNorm)
-    return math.abs(steeringNorm - 0.5) < STEERING_CENTER_THRESHOLD
+    return math.abs(steeringNorm - 0.5) < 0.042  -- ~15°
 end
 
 --- Auto-detect corners from a lap's telemetry
@@ -427,6 +418,14 @@ end
 ---@return table Array of corner definitions
 local function autoDetectCorners(lapData)
     if not lapData or lapData:length() < 30 then return {} end
+
+    -- Detection parameters from centralized config
+    local SPEED_DROP_THRESHOLD = settings.speedDropThreshold
+    local BRAKE_THRESHOLD = settings.brakeThreshold
+    local THROTTLE_ON_THRESHOLD = settings.throttleThreshold
+    local LEAD_DISTANCE = 50
+    local EXIT_TIME = 2.0
+    local EXIT_TIME_THROTTLE_ONLY = 5.0
 
     local trackLength = ac.getSim().trackLengthM or 5000
     local leadSpline = LEAD_DISTANCE / trackLength
@@ -542,11 +541,20 @@ local function autoDetectCorners(lapData)
 
                 if not shouldMerge then
                     cornerNum = cornerNum + 1
+                    local name = "Corner " .. cornerNum
+                    if ac.getTrackSectorName then
+                        local sectorName = ac.getTrackSectorName(lapData.pos[apexIdx])
+                        if sectorName and sectorName ~= "" and not sectorName:match("^Sector %d+$") then
+                            name = sectorName
+                        end
+                    end
+                    
                     table.insert(corners, {
                         number = cornerNum,
                         startPos = lapData.pos[entryIdx],
                         endPos = lapData.pos[exitIdx],
                         apexPos = lapData.pos[apexIdx],
+                        name = name,
                         endIdx = exitIdx,
                         apexSpeed = apexSpeed
                     })
@@ -604,9 +612,39 @@ end
 function state.init(car)
     if initialized then return end
     
+    -- Seed random for unique session IDs
+    math.randomseed(os.time() + os.clock() * 1000)
+    
     state.track = ac.getTrackID()
     state.car = car.id
-    state.sessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+    
+    -- Try to load existing session ID from storage to persist across reloads
+    local sim = ac.getSim()
+    local sessionKey = getStorageKey('current_session_id')
+    local storedSessionId = ac.storage[sessionKey]
+    -- Include session index to distinguish between Practice/Qualy/Race in the same event
+    local currentTrackCar = state.track .. "_" .. state.car .. "_" .. tostring(sim.currentSessionIndex or 0)
+    
+    if storedSessionId then
+        local parts = {}
+        for part in string.gmatch(storedSessionId, "([^|]+)") do
+            table.insert(parts, part)
+        end
+        -- parts[1] = sessionId, parts[2] = track_car_index
+        if parts[2] == currentTrackCar then
+            state.sessionId = parts[1]
+            ac.log("Traces: Resumed session ID " .. state.sessionId .. " for " .. currentTrackCar)
+        else
+            ac.log("Traces: Stored session ID was for " .. tostring(parts[2]) .. ", but we are now in " .. currentTrackCar)
+        end
+    end
+    
+    if not state.sessionId then
+        state.sessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
+        ac.storage[sessionKey] = state.sessionId .. "|" .. currentTrackCar
+        ac.log("Traces: Generated new session ID " .. state.sessionId .. " for " .. currentTrackCar)
+    end
+    
     state.lapNumber = car.lapCount
     state.trackPosition = car.splinePosition
     
@@ -640,6 +678,7 @@ end
 local prevInPit = false
 local prevPosition = 0
 local prevLapTimeMs = 0
+local prevResetCounter = 0
 
 --- Discard current lap and start fresh
 local function discardCurrentLap()
@@ -662,6 +701,7 @@ function state.update(dt, car)
     
     -- Detect state for teleport/pit checks
     local inPit = car.isInPitlane or car.isInPit
+    local resetDetected = (car.resetCounter or 0) > prevResetCounter
     local bigPositionJump = math.abs(car.splinePosition - prevPosition) > 0.3 and prevPosition > 0
     local crossingStartFinish = prevPosition > 0.9 and car.splinePosition < 0.1
     
@@ -682,8 +722,9 @@ function state.update(dt, car)
             end
             saveHistory()
             
-            ac.log(string.format("Traces: Lap completed - time: %.3fs, valid: %s, samples: %d", 
-                state.currentLap.time / 1000, tostring(state.currentLap.valid), state.currentLap:length()))
+            ac.log(string.format("Traces: Lap completed - time: %.3fs, valid: %s, samples: %d, sessionId: %s", 
+                state.currentLap.time / 1000, tostring(state.currentLap.valid), state.currentLap:length(),
+                tostring(state.currentLap.sessionId)))
             
             -- Update best lap if this is faster and valid
             if state.currentLap.valid and state.currentLap.time > 0 then
@@ -708,24 +749,25 @@ function state.update(dt, car)
     local lapTimeReset = car.lapTimeMs < prevLapTimeMs - 1000 and car.lapTimeMs < 1000  -- Lap time went backwards significantly
     
     -- Entering pits (wasn't in pit, now in pit)
-    if inPit and not prevInPit then
+    if (inPit and not prevInPit) or resetDetected then
         discardCurrentLap()
     end
     
     -- Teleport detection (big position jump without crossing start/finish)
-    if bigPositionJump and not crossingStartFinish then
+    if bigPositionJump and not crossingStartFinish and not resetDetected then
         discardCurrentLap()
     end
     
     -- Session/lap reset detection: lap time went to 0 but lap count didn't increment
     -- This happens on session restart, ESC to pits, etc.
-    if lapTimeReset and car.lapCount == state.lapNumber then
+    if lapTimeReset and car.lapCount == state.lapNumber and not resetDetected then
         discardCurrentLap()
     end
     
     prevInPit = inPit
     prevPosition = car.splinePosition
     prevLapTimeMs = car.lapTimeMs
+    prevResetCounter = car.resetCounter or 0
     
     -- Sample at 15 Hz
     sampleTimer = sampleTimer + dt
@@ -821,13 +863,23 @@ end
 function state.getCurrentSessionLaps()
     local laps = {}
     if not state.history or #state.history == 0 then return laps end
-    if not state.sessionId then return laps end
+    if not state.sessionId then 
+        ac.log("Traces: getCurrentSessionLaps - no sessionId set")
+        return laps 
+    end
     
     for i, lapData in ipairs(state.history) do
         if lapData.sessionId == state.sessionId then
             table.insert(laps, {lap = lapData, index = i})
         end
     end
+    
+    -- Debug: log session matching results
+    if #state.history > 0 and #laps == 0 then
+        ac.log(string.format("Traces: No current session laps found. SessionId: %s, First lap sessionId: %s", 
+            tostring(state.sessionId), tostring(state.history[1] and state.history[1].sessionId or "nil")))
+    end
+    
     return laps
 end
 
@@ -933,8 +985,8 @@ function state.analyzeCorners(lapData)
             entrySpeed = lapData:getValueAtPos('speed', corner.startPos),
             apexSpeed = lapData:getValueAtPos('speed', corner.apexPos),
             exitSpeed = lapData:getValueAtPos('speed', corner.endPos),
-            brakePos = lapData:findBrakePoint(corner.startPos, corner.apexPos),
-            liftOffPos = lapData:findLiftPoint(corner.startPos, corner.apexPos),
+            brakePos = lapData:findBrakePoint(corner.startPos, corner.apexPos, settings.brakeThreshold),
+            liftOffPos = lapData:findLiftPoint(corner.startPos, corner.apexPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
             maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)
         }
     end
@@ -1177,26 +1229,28 @@ end
 --- Load lap from CSV and add to references
 ---@param filePath string Path to CSV file
 ---@return table|nil Loaded lap
+---@return string|nil Error message if failed
 function state.loadCSV(filePath)
-    local loaded = lap.fromCSV(filePath, state.track, state.car)
+    local loaded, err = lap.fromCSV(filePath, state.track, state.car)
     if loaded then
         table.insert(state.historyReferences, loaded)
-        return loaded
+        return loaded, nil
     end
-    return nil
+    return nil, err
 end
 
 --- Load CSV and set as best lap
 ---@param filePath string Path to CSV file
 ---@return boolean Success
+---@return string|nil Error message if failed
 function state.loadCSVAsBest(filePath)
-    local loaded = lap.fromCSV(filePath, state.track, state.car)
+    local loaded, err = lap.fromCSV(filePath, state.track, state.car)
     if loaded then
         state.setBestLap(loaded)
         table.insert(state.historyReferences, loaded)
-        return true
+        return true, nil
     end
-    return false
+    return false, err
 end
 
 return state

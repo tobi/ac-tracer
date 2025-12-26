@@ -207,10 +207,10 @@ end
 --- Find brake point in a position range (first significant brake application)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param threshold number Brake threshold (default 0.15)
+---@param threshold number Brake threshold (default 0.03)
 ---@return number|nil Spline position of brake point
 function lap:findBrakePoint(startPos, endPos, threshold)
-    threshold = threshold or 0.15
+    threshold = threshold or 0.03
     
     for i = 1, #self.pos do
         local pos = self.pos[i]
@@ -232,12 +232,12 @@ end
 --- Find throttle lift point in a position range
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param onThreshold number Throttle "on" threshold (default 0.7)
----@param offThreshold number Throttle "off" threshold (default 0.5)
+---@param onThreshold number Throttle "on" threshold (default 0.10)
+---@param offThreshold number Throttle "off" threshold (default 0.08)
 ---@return number|nil Spline position of lift point
 function lap:findLiftPoint(startPos, endPos, onThreshold, offThreshold)
-    onThreshold = onThreshold or 0.7
-    offThreshold = offThreshold or 0.5
+    onThreshold = onThreshold or 0.10
+    offThreshold = offThreshold or 0.08
     
     local wasOnThrottle = false
     

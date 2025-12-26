@@ -127,6 +127,151 @@ Shows a toast-style message in the game UI.
 ### `ac.lapTimeToString(ms, allowHours)`
 Utility to format milliseconds into "M:SS.ms" format.
 
+## UI & Windows
+
+### Window Types
+
+Prefer these wrappers over `ui.beginWindow` / `ui.endWindow` as they handle crashes gracefully and provide standard styling.
+
+#### `ui.toolWindow(id, pos, size, noPadding, inputs, content)`
+Standard app window with background. Best for main app windows.
+
+```lua
+function script.windowMain(dt)
+    ui.toolWindow('MyAppMain', vec2(100, 100), vec2(400, 300), false, true, function()
+        -- Window content here
+        ui.text("Hello World")
+    end)
+end
+```
+
+#### `ui.transparentWindow(id, pos, size, noPadding, inputs, content)`
+Window with no background. Best for HUD overlays or non-intrusive elements.
+
+```lua
+function script.windowHUD(dt)
+    -- Transparent, pass-through inputs unless interactive
+    ui.transparentWindow('MyAppHUD', vec2(0, 0), ui.windowSize(), true, false, function()
+        ui.textColored("HUD Overlay", rgbm.colors.red)
+    end)
+end
+```
+
+### Layout Best Practices
+
+#### Scrollable Areas (`ui.beginChild`)
+Use child windows for scrollable content lists.
+
+```lua
+-- Reserve 30px at bottom for footer
+ui.beginChild('ScrollableList', vec2(0, -30), false, ui.WindowFlags.None)
+    for i = 1, 100 do
+        ui.text("Item " .. i)
+    end
+ui.endChild()
+
+-- Footer (pinned to bottom due to child height reservation)
+ui.button("Close", vec2(-1, 0)) -- -1 width = full width
+```
+
+#### Grouping & Layout
+- `ui.beginGroup()` / `ui.endGroup()`: Group items to treat them as one for hover checks or same-line layout.
+- `ui.sameLine(offset, spacing)`: Place next item on the same horizontal line.
+- `vec2(-1, 0)`: Use as size to fill remaining horizontal space.
+
+#### Styling
+Use `ui.pushFont`, `ui.pushStyleVar`, and `ui.pushStyleColor` to customize look, but ALWAYS pair with `ui.pop...`.
+
+```lua
+ui.pushFont(ui.Font.Title)
+ui.text("Title")
+ui.popFont()
+
+ui.pushStyleVar(ui.StyleVar.Alpha, 0.5)
+ui.button("Dimmed Button")
+ui.popStyleVar()
+```
+
+## Settings Integration
+
+### `ui.addSettings(params, callback)`
+Registers a settings window accessible via the taskbar context menu or settings apps. This is the ideal way to render configuration UI.
+
+```lua
+-- Call this once at script level (not inside update or window functions)
+ui.addSettings({
+    name = "My App Settings",
+    id = "MyAppSettings", -- Persists window state/position
+    icon = ui.Icons.Settings, -- Use standard icons
+    size = { 
+        default = vec2(400, 300), 
+        min = vec2(300, 200) 
+    }
+}, function()
+    -- Settings Content
+    
+    ui.header("General Options") -- Standard styled header
+    
+    -- Checkbox directly modifying storage
+    if ui.checkbox("Enable Feature", state.enabled) then
+        state.enabled = not state.enabled
+    end
+    
+    ui.separator()
+    
+    ui.header("Visuals")
+    
+    -- Slider with refnumber or return value
+    -- (Using return value pattern)
+    local newVal, changed = ui.slider("Opacity", state.opacity, 0, 1, "%.2f")
+    if changed then state.opacity = newVal end
+    
+    -- Combo box
+    ui.combo("Mode", state.mode, ui.ComboFlags.None, function()
+        if ui.selectable("Mode A", state.mode == "A") then state.mode = "A" end
+        if ui.selectable("Mode B", state.mode == "B") then state.mode = "B" end
+    end)
+    
+    -- Hotkey binding control
+    ui.text("Toggle Key:")
+    ui.sameLine()
+    myBindableHotkey:control(vec2(-1, 0))
+end)
+```
+
+### Window Visibility & Management
+
+Use `ac.getAppWindows()` to list all windows and check their status, and `ac.accessAppWindow()` to modify them.
+
+#### `ac.getAppWindows()`
+Returns an array of descriptors for all available windows (Python, Lua, or original AC apps).
+
+```lua
+local windows = ac.getAppWindows()
+for _, w in ipairs(windows) do
+    ac.log(string.format("Window: %s, Visible: %s", w.name, tostring(w.visible)))
+end
+```
+
+#### `ac.accessAppWindow(windowName)`
+Returns an `ac.AppWindowAccessor` for the specified window name. Window names for Lua apps are typically `appID/windowID` (e.g., `traces/corners`).
+
+```lua
+local window = ac.accessAppWindow("traces/corners")
+if window and window:valid() then
+    window:setVisible(true)
+    ac.log("Corner window is now " .. (window:visible() and "visible" or "hidden"))
+end
+```
+
+#### `ac.setAppWindowVisible(appID, windowFilter, visible)`
+Specifically useful for toggling windows that might be hidden or not yet initialized in the system list.
+
+```lua
+-- appID is the folder name, windowFilter is the window ID from manifest.ini
+ac.setAppWindowVisible("traces", "telemetry", true)
+```
+
 ## Sources
 
 - [Full API Reference (lib.lua)](./reference/lib.lua)

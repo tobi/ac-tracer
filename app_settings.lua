@@ -1,6 +1,5 @@
 -- Settings module for Traces app
 
-local state = require('state')
 local lap = require('lap')
 
 local M = {}
@@ -83,6 +82,11 @@ end
 -- General settings
 M.useKMH = toBool(ini:get('GENERAL', 'use_kmh', true), true)
 
+-- Detection parameters
+M.brakeThreshold = tonumber(ini:get('DETECTION', 'brake_threshold', 0.03)) or 0.03
+M.throttleThreshold = tonumber(ini:get('DETECTION', 'throttle_threshold', 0.10)) or 0.10
+M.speedDropThreshold = tonumber(ini:get('DETECTION', 'speed_drop_threshold', 0.05)) or 0.05
+
 -- Trace settings
 M.timeWindow = ini:get('TRACES', 'trace_time_window', 12)
 M.sampleRate = ini:get('TRACES', 'trace_sample_rate', 15)
@@ -138,6 +142,52 @@ end
 
 -- Settings window UI
 function M.windowSettings(corner, resetButton, recordCornerButton)
+    local state = require('state')
+
+    -- Window Toggles
+    ui.text("Windows")
+    ui.separator()
+    
+    local function isVisible(id)
+        local windows = ac.getAppWindows()
+        if not windows then return false end
+        local target = id:lower()
+        for _, w in ipairs(windows) do
+            -- Match either "traces/id" or just "id"
+            if w.name:lower() == "traces/" .. target or w.name:lower() == target then
+                return w.visible
+            end
+        end
+        return false
+    end
+
+    local function setVisible(id, visible)
+        -- Use accessAppWindow with name from getAppWindows for reliability
+        local windows = ac.getAppWindows()
+        if not windows then return end
+        local target = id:lower()
+        for _, w in ipairs(windows) do
+            if w.name:lower() == "traces/" .. target or w.name:lower() == target then
+                local acc = ac.accessAppWindow(w.name)
+                if acc then acc:setVisible(visible) end
+                return
+            end
+        end
+        -- Fallback: try directly if not found in list (might be hidden)
+        ac.setAppWindowVisible("traces", id, visible)
+    end
+
+    local showCorners = isVisible("corners")
+    if ui.checkbox("Corner Analysis", showCorners) then
+        setVisible("corners", not showCorners)
+    end
+    
+    local showTelemetry = isVisible("telemetry")
+    if ui.checkbox("Lap Telemetry", showTelemetry) then
+        setVisible("telemetry", not showTelemetry)
+    end
+
+    ui.offsetCursorY(10)
     ui.text("Ghost Lap")
     ui.separator()
 
@@ -162,6 +212,36 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     M.checkbox("Clutch", "clutch")
     ui.sameLine(120)
     M.checkbox("Speed", "speed")
+    ui.offsetCursorY(10)
+
+    ui.separator()
+    ui.offsetCursorY(5)
+    ui.text("Detection Thresholds")
+    ui.offsetCursorY(5)
+
+    local newBrake = ui.slider("Brake##det", M.brakeThreshold * 100, 1, 30, "%.0f%%")
+    if newBrake ~= M.brakeThreshold * 100 then
+        M.brakeThreshold = newBrake / 100
+        ini:set('DETECTION', 'brake_threshold', string.format("%.2f", M.brakeThreshold))
+        ini:save()
+    end
+
+    local newThrottle = ui.slider("Throttle##det", M.throttleThreshold * 100, 5, 95, "%.0f%%")
+    if newThrottle ~= M.throttleThreshold * 100 then
+        M.throttleThreshold = newThrottle / 100
+        ini:set('DETECTION', 'throttle_threshold', string.format("%.2f", M.throttleThreshold))
+        ini:save()
+    end
+
+    local newSpeedDrop = ui.slider("Speed Drop##det", M.speedDropThreshold * 100, 1, 50, "%.0f%%")
+    if newSpeedDrop ~= M.speedDropThreshold * 100 then
+        M.speedDropThreshold = newSpeedDrop / 100
+        ini:set('DETECTION', 'speed_drop_threshold', string.format("%.2f", M.speedDropThreshold))
+        ini:save()
+    end
+
+    ui.offsetCursorY(10)
+    ui.separator()
     ui.offsetCursorY(10)
 
     if state.hasBestLap() then
@@ -212,14 +292,15 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
                     else
                         -- Cache miss - parse CSV using lap module
                         local filePath = __dirname .. "/tracks/" .. filename
-                        lapData = lap.fromCSV(filePath, state.track, state.car)
+                        local loadErr
+                        lapData, loadErr = lap.fromCSV(filePath, state.track, state.car)
                         
                         if lapData then
                             ghostCache[filename] = lapData
                             state.setBestLap(lapData)
                             ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples from " .. filename)
                         else
-                            ac.setMessage("Load Error", "Failed to load " .. filename)
+                            ac.setMessage("Load Error", loadErr or "Failed to load " .. filename)
                         end
                     end
                     

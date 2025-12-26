@@ -532,19 +532,21 @@ C:\Users\<USERNAME>\Documents\Assetto Corsa\logs\custom_shaders_patch.log (Usern
 
 ### Reading Errors
 
+**MANDATORY**: When debugging, ALWAYS filter logs for the `traces/` folder to ignore noise from other CSP apps.
+
 **PowerShell - Last 1000 lines with ERROR filter:**
 ```powershell
 Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR"
 ```
 
-**Filter for traces.lua errors only:**
+**Filter for all errors in the traces app folder:**
 ```powershell
-Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR.*traces\.lua"
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR.*traces/"
 ```
 
 **Watch log in real-time:**
 ```powershell
-Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Wait | Select-String "ERROR"
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Wait | Select-String "ERROR.*traces/"
 ```
 
 ### Common Error Patterns

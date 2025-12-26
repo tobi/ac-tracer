@@ -12,8 +12,8 @@ local corner_analysis = {}
 -- Constants
 --------------------------------------------------------------------------------
 
-local BRAKE_THRESHOLD = 0.15
-local THROTTLE_ON_THRESHOLD = 0.7
+local BRAKE_THRESHOLD = settings.brakeThreshold
+local THROTTLE_ON_THRESHOLD = settings.throttleThreshold
 local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 
 --------------------------------------------------------------------------------
@@ -70,6 +70,13 @@ local currentLapTime = 0
 local displayData = nil
 local displayScore = 0
 
+-- Frozen corner state (when viewing from telemetry)
+local frozenCorner = {
+    active = false,
+    cornerNum = 0,
+    lapNumber = 0,
+}
+
 --------------------------------------------------------------------------------
 -- Helper Functions
 --------------------------------------------------------------------------------
@@ -119,8 +126,8 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         entrySpeed = lapData:getValueAtPos('speed', cornerDef.startPos),
         apexSpeed = lapData:getValueAtPos('speed', cornerDef.apexPos),
         exitSpeed = lapData:getValueAtPos('speed', cornerDef.endPos),
-        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.apexPos),
-        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.apexPos),
+        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.apexPos, settings.brakeThreshold),
+        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.apexPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
         maxSteeringDeg = lapData:findMaxSteering(cornerDef.startPos, cornerDef.endPos),
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
         exitTime = lapData:getTimeAtPos(cornerDef.endPos),
@@ -189,6 +196,72 @@ function corner_analysis.compareCorners(current, reference)
                          (current.exitSpeed - reference.exitSpeed) or nil,
         steeringDelta = (current.maxSteeringDeg or 0) - (reference.maxSteeringDeg or 0),
     }
+end
+
+--- Set a specific corner for display (called from lap_telemetry when clicking a corner)
+---@param cornerNum number Corner number to display
+---@param currentLap table Current lap data
+---@param referenceLap table Reference lap data
+function corner_analysis.setViewedCorner(cornerNum, currentLap, referenceLap)
+    if not cornerNum or not currentLap or not referenceLap then return end
+    
+    -- Find the corner definition
+    local cornerDef = state.getCornerInfo(cornerNum)
+    if not cornerDef then return end
+    
+    -- Analyze both laps for this corner
+    local currentAnalysis = corner_analysis.analyzeCorner(currentLap, cornerDef)
+    local refAnalysis = corner_analysis.analyzeCorner(referenceLap, cornerDef)
+    
+    if not currentAnalysis or not refAnalysis then return end
+    
+    -- Build comparison data (matching the displayData structure from live tracking)
+    displayData = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
+    
+    if displayData then
+        -- Generate currentSpeeds array by sampling the lap data through the corner
+        local speeds = {}
+        local startPos = cornerDef.startPos
+        local endPos = cornerDef.endPos
+        local numSamples = 50  -- Reasonable resolution for the speed trace
+        
+        for i = 0, numSamples do
+            local pos = startPos + (endPos - startPos) * (i / numSamples)
+            local speed = currentLap:getValueAtPos('speed', pos)
+            if speed then
+                table.insert(speeds, { pos = pos, speed = speed })
+            end
+        end
+        displayData.currentSpeeds = speeds
+        
+        -- Calculate score
+        displayScore = scoring.calculate(displayData)
+        
+        -- Set frozen state
+        frozenCorner.active = true
+        frozenCorner.cornerNum = cornerNum
+        frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
+        
+        ac.log(string.format("Traces: Viewing corner %d analysis from telemetry (lap %d)", 
+            cornerNum, frozenCorner.lapNumber))
+    end
+end
+
+--- Clear frozen corner state (return to live tracking)
+function corner_analysis.clearFrozenCorner()
+    frozenCorner.active = false
+    frozenCorner.cornerNum = 0
+    frozenCorner.lapNumber = 0
+end
+
+--- Check if viewing a frozen corner
+function corner_analysis.isFrozen()
+    return frozenCorner.active
+end
+
+--- Get the frozen corner number (0 if not frozen)
+function corner_analysis.getFrozenCornerNum()
+    return frozenCorner.active and frozenCorner.cornerNum or 0
 end
 
 --------------------------------------------------------------------------------
@@ -266,6 +339,11 @@ end
 ---@param car table Car state from ac.getCar()
 function corner_analysis.update(car)
     if not car then return end
+    
+    -- Clear frozen corner state when car starts moving (above 30 km/h)
+    if frozenCorner.active and car.speedKmh >= 30 then
+        corner_analysis.clearFrozenCorner()
+    end
     
     -- Reset on new lap
     if car.lapCount ~= lastLapCount then
@@ -631,7 +709,12 @@ function corner_analysis.draw(dt, useKmh, isRecording)
     ui.setCursor(vec2(padding, 4))
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-    ui.text("Corner Speed & Position vs. Reference Lap")
+    if frozenCorner.active then
+        local lapText = frozenCorner.lapNumber > 0 and string.format(" from lap %d", frozenCorner.lapNumber) or ""
+        ui.text(string.format("Focusing on corner %d%s", frozenCorner.cornerNum, lapText))
+    else
+        ui.text("Corner Speed & Position vs. Reference Lap")
+    end
     ui.popStyleColor()
     ui.popFont()
 
@@ -672,8 +755,13 @@ function corner_analysis.draw(dt, useKmh, isRecording)
 
         ui.setCursor(vec2(panelX, 4))
         ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-        ui.text("Corner " .. displayData.number)
+        if frozenCorner.active then
+            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.4, 0.7, 1, 1))  -- Blue to indicate frozen/focused
+            ui.text("Corner " .. displayData.number .. " (frozen)")
+        else
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+            ui.text("Corner " .. displayData.number)
+        end
         ui.popStyleColor()
         ui.popFont()
 
@@ -780,6 +868,7 @@ function corner_analysis.reset()
     displayData = nil
     displayScore = 0
     resetLiveCorner()
+    corner_analysis.clearFrozenCorner()
 end
 
 return corner_analysis

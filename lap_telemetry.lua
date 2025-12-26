@@ -4,6 +4,7 @@
 local state = require('state')
 local lap = require('lap')
 local settings = require('app_settings')
+local corner_analysis = require('corner_analysis')
 
 local lap_telemetry = {}
 
@@ -21,6 +22,7 @@ local panStartTime = 0
 
 -- Reference lap loading UI
 local showRefPicker = false
+local loadLapButtonPos = vec2(0, 0)  -- Track button position for dialog placement
 local ghostFiles = nil
 local ghostFilesLastScan = 0
 local isLoadingRef = false
@@ -69,7 +71,14 @@ local function fileExists(path)
     return false
 end
 
--- Scan for CSV files
+-- Check if file exists
+local function fileExists(path)
+    local f = io.open(path, "rb")
+    if f then f:close() return true end
+    return false
+end
+
+-- Scan for CSV files (returns array of {path, filename})
 local function scanGhostFiles()
     local now = os.clock()
     if ghostFiles and (now - ghostFilesLastScan) < 5 then
@@ -77,28 +86,32 @@ local function scanGhostFiles()
     end
     
     ghostFiles = {}
-    local tracksPath = __dirname .. "/tracks/"
+    local seenPaths = {}
     
+    local function addFile(dirPath, filename)
+        local fullPath = dirPath .. filename
+        if seenPaths[fullPath] then return end
+        
+        if fileExists(fullPath) then
+            seenPaths[fullPath] = true
+            table.insert(ghostFiles, {
+                path = fullPath,
+                filename = filename
+            })
+        end
+    end
+    
+    -- Check for current track's CSV
     local trackId = ac.getTrackID()
     if trackId then
         local safeName = trackId:gsub("[/\\:]", "_") .. ".csv"
-        if fileExists(tracksPath .. safeName) then
-            table.insert(ghostFiles, safeName)
-        end
+        addFile(__dirname .. "/tracks/", safeName)
+        addFile("C:/MoTeC/Logged Data/", safeName)
+        addFile("C:/MoTeC/Logged Data/", trackId .. ".csv")
     end
     
-    local knownFiles = {"ier_daytona.csv"}
-    for _, filename in ipairs(knownFiles) do
-        if fileExists(tracksPath .. filename) then
-            local found = false
-            for _, existing in ipairs(ghostFiles) do
-                if existing == filename then found = true; break end
-            end
-            if not found then
-                table.insert(ghostFiles, filename)
-            end
-        end
-    end
+    -- Also check for a generic reference lap
+    addFile(__dirname .. "/tracks/", "ier_daytona.csv")
     
     ghostFilesLastScan = now
     return ghostFiles
@@ -399,19 +412,36 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                 
                 if cornerVisible or editMode then
                     local isSelected = editMode and selectedCorner == corner.number
+                    local isFocused = corner_analysis.getFrozenCornerNum() == corner.number
                     
-                    -- Draw corner zone background (very faint)
+                    -- Draw corner zone background
                     local cornerColor
                     if isSelected then
                         cornerColor = colors.cornerSelected
+                    elseif isFocused then
+                        -- Highlighted when focused in corner_analysis
+                        cornerColor = rgbm(0.3, 0.4, 0.6, 0.2)
                     elseif editMode then
                         -- Slightly more visible in edit mode
                         cornerColor = (i % 2 == 0) and rgbm(0.2, 0.2, 0.35, 0.15) or rgbm(0.2, 0.35, 0.2, 0.15)
                     else
-                        -- Very faint for normal view
-                        cornerColor = rgbm(0.15, 0.15, 0.2, 0.01)
+                        -- Alternating colors for normal view (more visible now)
+                        cornerColor = (i % 2 == 0) and rgbm(0.25, 0.25, 0.35, 0.12) or rgbm(0.2, 0.3, 0.25, 0.12)
                     end
                     ui.drawRectFilled(vec2(drawStartX, y), vec2(drawEndX, y + h), cornerColor, 0)
+                    
+                    -- Draw blue outline around focused corner
+                    if isFocused then
+                        ui.drawRect(vec2(drawStartX, y), vec2(drawEndX, y + h), rgbm(0.4, 0.7, 1, 0.8), 0, 2)
+                    end
+                    
+                    -- Click detection for corner analysis (when not in edit mode)
+                    if not editMode and ui.mouseClicked(ui.MouseButton.Left) then
+                        if localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h then
+                            -- Show this corner in corner_analysis
+                            corner_analysis.setViewedCorner(corner.number, selectedLap, refLapObj)
+                        end
+                    end
                     
                     -- Corner name in top left of zone
                     local labelText = corner.name or tostring(corner.number or i)
@@ -432,7 +462,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                         local refCornerTime = refExitTime - refEntryTime
                         local cornerTimeDelta = currentCornerTime - refCornerTime
                         
-                        -- Draw corner delta at bottom
+                        -- Draw corner delta at bottom left
                         local sign = cornerTimeDelta >= 0 and "+" or ""
                         local deltaText = string.format("%s%.2f", sign, cornerTimeDelta)
                         local deltaColor = cornerTimeDelta >= 0 and rgbm(1, 0.4, 0.4, 0.9) or rgbm(0.4, 1, 0.4, 0.9)
@@ -440,6 +470,18 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                         ui.setCursor(vec2(drawStartX + 3, y + h - 14))
                         ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
                         ui.text(deltaText)
+                        ui.popStyleColor()
+                        
+                        -- Draw cumulative delta at bottom right (total delta up to this corner exit)
+                        local cumulativeDelta = exitDelta - refExitTime
+                        local cumSign = cumulativeDelta >= 0 and "+" or ""
+                        local cumText = string.format("%s%.2f >>", cumSign, cumulativeDelta)
+                        local cumColor = cumulativeDelta >= 0 and rgbm(1, 0.5, 0.5, 0.7) or rgbm(0.5, 1, 0.5, 0.7)
+                        
+                        local cumTextWidth = ui.measureText(cumText).x
+                        ui.setCursor(vec2(drawEndX - cumTextWidth - 3, y + h - 14))
+                        ui.pushStyleColor(ui.StyleColor.Text, cumColor)
+                        ui.text(cumText)
                         ui.popStyleColor()
                     end
                     
@@ -748,6 +790,7 @@ function lap_telemetry.draw(dt)
         
         -- Load Lap button
         ui.sameLine()
+        loadLapButtonPos = ui.getCursor()  -- Track button position
         if ui.button("Load Lap...", vec2(90, 0)) then
             showRefPicker = not showRefPicker
             if showRefPicker then ghostFiles = nil end
@@ -759,6 +802,7 @@ function lap_telemetry.draw(dt)
         
         -- Load Lap button (always available)
         ui.sameLine(windowSize.x - 110)
+        loadLapButtonPos = ui.getCursor()  -- Track button position
         if ui.button("Load Lap...", vec2(90, 0)) then
             showRefPicker = not showRefPicker
             if showRefPicker then ghostFiles = nil end
@@ -772,7 +816,10 @@ function lap_telemetry.draw(dt)
     local contentH = windowSize.y - contentY - 30
     if contentH < 100 then return end
     
-    local traceH = contentH / 5
+    -- Add 10px padding between traces (4 gaps for 5 traces)
+    local tracePadding = 10
+    local totalPadding = tracePadding * 4
+    local traceH = (contentH - totalPadding) / 5
     local graphX = padding + labelW
     local panelW = 180
     local graphW = windowSize.x - padding * 2 - labelW - panelW - 10
@@ -866,7 +913,7 @@ function lap_telemetry.draw(dt)
         
         -- Delta-T
         drawDeltaTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap)
-        y = y + traceH
+        y = y + traceH + tracePadding
         
         -- Throttle
         local throttleY = y
@@ -914,11 +961,11 @@ function lap_telemetry.draw(dt)
             ui.popFont()
         end
         
-        y = y + traceH
+        y = y + traceH + tracePadding
         
         -- Brake
         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "brake", colors.brake, colors.refBrake, 0, 1, "Brake", "")
-        y = y + traceH
+        y = y + traceH + tracePadding
         
         -- Speed
         local maxSpeed = 0
@@ -932,7 +979,7 @@ function lap_telemetry.draw(dt)
         end
         maxSpeed = math.max(100, math.ceil(maxSpeed / 50) * 50)
         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "speed", colors.speed, colors.refSpeed, 0, maxSpeed, "Speed", " kmh")
-        y = y + traceH
+        y = y + traceH + tracePadding
         
         -- Steering
         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "steering", colors.steering, colors.refSteering, 0, 1, "Steering", "")
@@ -1295,8 +1342,10 @@ function lap_telemetry.draw(dt)
     if showRefPicker then
         local dialogW = 340
         local dialogH = 420  -- Taller to fit more sections
-        local dialogX = windowSize.x - dialogW - 10
-        local dialogY = headerH + 5
+        -- Position dialog below the Load Lap button, right-aligned to button
+        local buttonW = 90
+        local dialogX = math.max(10, loadLapButtonPos.x + buttonW - dialogW)
+        local dialogY = loadLapButtonPos.y + 22  -- Just below button
         
         -- Dialog background
         ui.drawRectFilled(vec2(dialogX, dialogY), vec2(dialogX + dialogW, dialogY + dialogH), rgbm(0.1, 0.1, 0.12, 0.98), 4)
@@ -1333,7 +1382,10 @@ function lap_telemetry.draw(dt)
             local lapTimeS = lapData.time / 1000
             local mins = math.floor(lapTimeS / 60)
             local secs = lapTimeS - mins * 60
-            local lapLabel = string.format("%s%d:%05.2f", labelPrefix, mins, secs)
+            -- Include lap number if available
+            local lapNum = (lapData.lapNumberInSession and lapData.lapNumberInSession > 0) 
+                and string.format("L%d ", lapData.lapNumberInSession) or ""
+            local lapLabel = string.format("%s%s%d:%05.2f", lapNum, labelPrefix, mins, secs)
             local isBest = lapData == state.bestLap
             local isCurrent = (selectedLapIndex == idx) or (autoSelectFastest and lapData == state.getFastestSessionLap())
             
@@ -1452,12 +1504,12 @@ function lap_telemetry.draw(dt)
         
         local files = scanGhostFiles()
         if #files > 0 then
-            for j, filename in ipairs(files) do
-                if j <= 5 then  -- Limit CSV files shown
+            for j, fileInfo in ipairs(files) do
+                if j <= 8 then  -- Limit CSV files shown
                     -- Truncate long filenames
-                    local displayName = filename
-                    if #displayName > 20 then
-                        displayName = string.sub(displayName, 1, 17) .. "..."
+                    local displayName = fileInfo.filename
+                    if #displayName > 22 then
+                        displayName = string.sub(displayName, 1, 19) .. "..."
                     end
                     
                     -- File label
@@ -1474,8 +1526,7 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
                     if ui.button("C##csvcur" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local filePath = __dirname .. "/tracks/" .. filename
-                        local loaded = lap.fromCSV(filePath, state.track, state.car)
+                        local loaded, loadErr = lap.fromCSV(fileInfo.path, state.track, state.car)
                         if loaded then
                             -- Add to history and select it
                             table.insert(state.history, 1, loaded)
@@ -1488,7 +1539,7 @@ function lap_telemetry.draw(dt)
                             ac.setMessage("Loaded as Current", string.format("CSV: %d:%05.2f", 
                                 math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
                         else
-                            ac.setMessage("Load Error", "Failed to load " .. filename)
+                            ac.setMessage("Load Error", loadErr or "Failed to load CSV")
                         end
                         isLoadingRef = false
                     end
@@ -1500,8 +1551,7 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.3, 0.5, 1))
                     if ui.button("R##csvref" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local filePath = __dirname .. "/tracks/" .. filename
-                        local loaded = lap.fromCSV(filePath, state.track, state.car)
+                        local loaded, loadErr = lap.fromCSV(fileInfo.path, state.track, state.car)
                         if loaded then
                             state.setBestLap(loaded)
                             table.insert(state.historyReferences, loaded)
@@ -1509,7 +1559,7 @@ function lap_telemetry.draw(dt)
                             ac.setMessage("Reference Loaded", string.format("CSV: %d:%05.2f", 
                                 math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
                         else
-                            ac.setMessage("Load Error", "Failed to load " .. filename)
+                            ac.setMessage("Load Error", loadErr or "Failed to load CSV")
                         end
                         isLoadingRef = false
                     end
