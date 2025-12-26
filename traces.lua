@@ -256,15 +256,82 @@ function script.windowMain(dt)
     cursor = cursor - gap
 
     local traceW = math.max(0, cursor)
+    
+    -- Offset trace origin (button area reserved for future use)
+    local traceOrigin = origin
 
     local trackLength = ac.getSim().trackLengthM
     if traceW > 10 then
-        drawGrid(origin, 0, 0, traceW, h, history.pos, trackLength)
+        drawGrid(traceOrigin, 0, 0, traceW, h, history.pos, trackLength)
 
-        -- Start/finish line
-        local sfX = posToX(0, history.pos, 0, traceW)
-        if sfX then
-            ui.drawLine(origin + vec2(sfX, 0), origin + vec2(sfX, h), colors.startFinishLine, 2)
+        -- Draw faint corner zones
+        local corners = state.trackCorners
+        local currentPos = car.splinePosition
+        local currentCornerName = nil
+        
+        if corners and #corners > 0 then
+            for _, c in ipairs(corners) do
+                if c.startPos and c.endPos then
+                    local cStartX = posToX(c.startPos, history.pos, 0, traceW)
+                    local cEndX = posToX(c.endPos, history.pos, 0, traceW)
+                    
+                    if cStartX and cEndX then
+                        -- Faint corner zone background
+                        ui.drawRectFilled(
+                            traceOrigin + vec2(cStartX, 0), 
+                            traceOrigin + vec2(cEndX, h), 
+                            rgbm(0.4, 0.4, 0.6, 0.1), 0)
+                        -- Faint corner edge lines
+                        ui.drawLine(traceOrigin + vec2(cStartX, 0), traceOrigin + vec2(cStartX, h), rgbm(0.5, 0.5, 0.7, 0.2), 1)
+                        ui.drawLine(traceOrigin + vec2(cEndX, 0), traceOrigin + vec2(cEndX, h), rgbm(0.5, 0.5, 0.7, 0.2), 1)
+                    end
+                    
+                    -- Check if we're in this corner
+                    local inCorner = false
+                    if c.endPos >= c.startPos then
+                        inCorner = currentPos >= c.startPos and currentPos <= c.endPos
+                    else
+                        -- Wraps around
+                        inCorner = currentPos >= c.startPos or currentPos <= c.endPos
+                    end
+                    if inCorner then
+                        currentCornerName = c.name
+                    end
+                end
+            end
+        end
+
+        -- Start/finish line (checkered flag pattern) - only at position 0
+        -- Check if position 0 is within our sampled data range
+        local hasZeroCrossing = false
+        if history.pos and #history.pos > 1 then
+            for i = 1, #history.pos - 1 do
+                -- Detect wrap-around from high to low position (crossing 0)
+                if history.pos[i] > 0.9 and history.pos[i + 1] < 0.1 then
+                    hasZeroCrossing = true
+                    break
+                end
+            end
+        end
+        
+        if hasZeroCrossing then
+            local sfX = posToX(0, history.pos, 0, traceW)
+            if sfX then
+                local sfW = 5
+                local squareSize = 4
+                for row = 0, math.floor(h / squareSize) do
+                    for col = 0, 1 do
+                        local isWhite = (row + col) % 2 == 0
+                        local color = isWhite and rgbm(1, 1, 1, 0.9) or rgbm(0.1, 0.1, 0.1, 0.9)
+                        local px = sfX - sfW / 2 + col * (sfW / 2)
+                        local py = row * squareSize
+                        ui.drawRectFilled(
+                            traceOrigin + vec2(px, py), 
+                            traceOrigin + vec2(px + sfW / 2, math.min(py + squareSize, h)), 
+                            color, 0)
+                    end
+                end
+            end
         end
 
         local ghostTraces = state.getGhostTraces(history.pos)
@@ -272,19 +339,29 @@ function script.windowMain(dt)
         
         -- Ghost traces (reference)
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if display.speed and ghostTraces.speed then drawSpeedTrace(origin, 0, 0, traceW, h, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
-            if display.steering then drawTrace(origin, 0, 0, traceW, h, ghostTraces.steering, colors.ghostSteering) end
-            if display.clutch then drawTrace(origin, 0, 0, traceW, h, ghostTraces.clutch, colors.ghostClutch) end
-            if display.throttle then drawTrace(origin, 0, 0, traceW, h, ghostTraces.throttle, colors.ghostThrottle) end
-            if display.brake then drawTrace(origin, 0, 0, traceW, h, ghostTraces.brake, colors.ghostBrake) end
+            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
+            if display.steering then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.steering, colors.ghostSteering) end
+            if display.clutch then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.clutch, colors.ghostClutch) end
+            if display.throttle then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.throttle, colors.ghostThrottle) end
+            if display.brake then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.brake, colors.ghostBrake) end
         end
 
         -- Current traces
-        if display.speed then drawSpeedTrace(origin, 0, 0, traceW, h, history.speed, colors.speed, maxSpeed) end
-        if display.steering then drawTrace(origin, 0, 0, traceW, h, history.steering, colors.steering) end
-        if display.clutch then drawTrace(origin, 0, 0, traceW, h, history.clutch, colors.clutch) end
-        if display.throttle then drawTrace(origin, 0, 0, traceW, h, history.throttle, colors.throttle) end
-        if display.brake then drawTrace(origin, 0, 0, traceW, h, history.brake, colors.brake) end
+        if display.speed then drawSpeedTrace(traceOrigin, 0, 0, traceW, h, history.speed, colors.speed, maxSpeed) end
+        if display.steering then drawTrace(traceOrigin, 0, 0, traceW, h, history.steering, colors.steering) end
+        if display.clutch then drawTrace(traceOrigin, 0, 0, traceW, h, history.clutch, colors.clutch) end
+        if display.throttle then drawTrace(traceOrigin, 0, 0, traceW, h, history.throttle, colors.throttle) end
+        if display.brake then drawTrace(traceOrigin, 0, 0, traceW, h, history.brake, colors.brake) end
+        
+        -- Display current corner name (faint, at top left of trace area)
+        if currentCornerName then
+            ui.pushFont(ui.Font.Small)
+            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.8, 0.8, 0.9, 0.4))
+            ui.setCursor(traceOrigin + vec2(5, 2))
+            ui.text(currentCornerName)
+            ui.popStyleColor()
+            ui.popFont()
+        end
     end
 
     drawBar(origin, brakeX, barY, barW, barH, car.brake, colors.brake)

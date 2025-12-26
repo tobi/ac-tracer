@@ -25,6 +25,13 @@ local ghostFiles = nil
 local ghostFilesLastScan = 0
 local isLoadingRef = false
 
+-- Corner editing state
+local editMode = false
+local selectedCorner = nil  -- Corner number being edited
+local draggingHandle = nil  -- "start", "end", or nil
+local nameInputBuffer = ""
+local lastEditedCorner = nil  -- Track which corner we're editing to reset buffer
+
 -- Colors (MoTeC-style dark theme)
 local colors = {
     background = rgbm(0.05, 0.05, 0.05, 0.98),
@@ -49,6 +56,10 @@ local colors = {
     valuePanelBg = rgbm(0.08, 0.08, 0.08, 0.95),
     deltaPos = rgbm(0.3, 1, 0.3, 1),
     deltaNeg = rgbm(1, 0.3, 0.3, 1),
+    -- Edit mode
+    cornerSelected = rgbm(0.4, 0.6, 1, 0.5),
+    cornerHandle = rgbm(1, 1, 1, 0.9),
+    cornerHandleHover = rgbm(1, 0.8, 0.2, 1),
 }
 
 -- Check if file exists
@@ -325,6 +336,11 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     if not selectedLap or not refLapObj then return end
     if endTime <= startTime then return end
     
+    -- Apply 20px top/bottom margin for visual separation
+    local marginY = 20
+    local innerY = y + marginY
+    local innerH = h - marginY * 2
+    
     local numSamples = math.max(10, math.floor(w / 2))
     local timeStep = (endTime - startTime) / numSamples
     
@@ -358,30 +374,42 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     
     -- Draw corner zones (before other elements)
     local corners = state.trackCorners
+    local mousePos = ui.mousePos()
+    local winPos = ui.windowPos()
+    local localMouseX = mousePos.x - winPos.x
+    local localMouseY = mousePos.y - winPos.y
+    local hoveredCorner = nil
+    local hoveredHandle = nil  -- "start" or "end" or nil
+    
     if corners then
         local cornerColors = {
             rgbm(0.3, 0.3, 0.5, 0.25),  -- Alternating colors for visibility
             rgbm(0.3, 0.5, 0.3, 0.25),
         }
-        
+        -- Draw corners
         for i, corner in ipairs(corners) do
             if corner.startPos and corner.endPos then
                 local startX = posToGraphX(corner.startPos, selectedLap, startTime, endTime, x, w)
                 local endX = posToGraphX(corner.endPos, selectedLap, startTime, endTime, x, w)
                 
                 if startX and endX then
+                    local isSelected = editMode and selectedCorner == corner.number
+                    
                     -- Draw corner zone background
                     local cornerColor = cornerColors[(i % 2) + 1]
+                    if isSelected then
+                        cornerColor = colors.cornerSelected
+                    end
                     ui.drawRectFilled(vec2(startX, y), vec2(endX, y + h), cornerColor, 0)
                     
-                    -- Corner number label
+                    -- Corner number/name label
                     local centerX = (startX + endX) / 2
                     ui.pushFont(ui.Font.Small)
-                    local numText = tostring(corner.number or i)
-                    local textW = ui.measureText(numText).x
+                    local labelText = corner.name or tostring(corner.number or i)
+                    local textW = ui.measureText(labelText).x
                     ui.setCursor(vec2(centerX - textW / 2, y + 2))
-                    ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, 0.7))
-                    ui.text(numText)
+                    ui.pushStyleColor(ui.StyleColor.Text, isSelected and rgbm(1, 1, 1, 1) or rgbm(1, 1, 1, 0.7))
+                    ui.text(labelText)
                     ui.popStyleColor()
                     
                     -- Calculate corner delta (delta at exit - delta at entry)
@@ -408,45 +436,125 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                     end
                     
                     ui.popFont()
+                    
+                    -- Edit mode: check for hover and draw handles
+                    if editMode then
+                        local handleSize = 8
+                        local handleHitSize = 12  -- Larger hit area
+                        
+                        -- Check if hovering this corner zone (for selection)
+                        if localMouseX >= startX and localMouseX <= endX and localMouseY >= y and localMouseY <= y + h then
+                            hoveredCorner = corner.number
+                        end
+                        
+                        -- Start handle
+                        local startHandleHover = math.abs(localMouseX - startX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
+                        if startHandleHover then
+                            hoveredCorner = corner.number
+                            hoveredHandle = "start"
+                        end
+                        local startHandleColor = (startHandleHover or (isSelected and draggingHandle == "start")) 
+                            and colors.cornerHandleHover or colors.cornerHandle
+                        
+                        -- Draw start handle (left edge)
+                        ui.drawRectFilled(vec2(startX - 2, y), vec2(startX + 2, y + h), startHandleColor, 0)
+                        ui.drawCircleFilled(vec2(startX, y + h / 2), handleSize, startHandleColor, 16)
+                        
+                        -- End handle
+                        local endHandleHover = math.abs(localMouseX - endX) < handleHitSize and localMouseY >= y and localMouseY <= y + h
+                        if endHandleHover then
+                            hoveredCorner = corner.number
+                            hoveredHandle = "end"
+                        end
+                        local endHandleColor = (endHandleHover or (isSelected and draggingHandle == "end")) 
+                            and colors.cornerHandleHover or colors.cornerHandle
+                        
+                        -- Draw end handle (right edge)
+                        ui.drawRectFilled(vec2(endX - 2, y), vec2(endX + 2, y + h), endHandleColor, 0)
+                        ui.drawCircleFilled(vec2(endX, y + h / 2), handleSize, endHandleColor, 16)
+                    end
                 end
             end
         end
     end
     
-    -- Zero line
-    ui.drawLine(vec2(x, y + h / 2), vec2(x + w, y + h / 2), colors.gridMajor, 2)
+    -- Handle mouse interactions for edit mode
+    if editMode then
+        -- Convert mouse X to position
+        local function xToPos(mouseX)
+            local normalizedTime = (mouseX - x) / w
+            local t = startTime + normalizedTime * (endTime - startTime)
+            local pos = getValueAtTime(selectedLap, t, "pos")
+            return pos
+        end
+        
+        -- Start dragging on mouse down
+        if ui.mouseClicked(ui.MouseButton.Left) then
+            if hoveredHandle then
+                selectedCorner = hoveredCorner
+                draggingHandle = hoveredHandle
+            elseif hoveredCorner then
+                selectedCorner = hoveredCorner
+                draggingHandle = nil
+            elseif localMouseX >= x and localMouseX <= x + w and localMouseY >= y and localMouseY <= y + h then
+                -- Clicked in delta area but not on a corner - deselect
+                selectedCorner = nil
+                draggingHandle = nil
+            end
+        end
+        
+        -- Handle dragging
+        if draggingHandle and selectedCorner and ui.mouseDown(ui.MouseButton.Left) then
+            local newPos = xToPos(localMouseX)
+            if newPos then
+                if draggingHandle == "start" then
+                    state.updateCorner(selectedCorner, { startPos = newPos })
+                elseif draggingHandle == "end" then
+                    state.updateCorner(selectedCorner, { endPos = newPos })
+                end
+            end
+        end
+        
+        -- Stop dragging on mouse up
+        if not ui.mouseDown(ui.MouseButton.Left) then
+            draggingHandle = nil
+        end
+    end
     
-    -- Grid
+    -- Zero line (use inner dimensions)
+    ui.drawLine(vec2(x, innerY + innerH / 2), vec2(x + w, innerY + innerH / 2), colors.gridMajor, 2)
+    
+    -- Grid (use inner dimensions)
     for i = 0, 4 do
-        local py = y + (i / 4) * h
+        local py = innerY + (i / 4) * innerH
         ui.drawLine(vec2(x, py), vec2(x + w, py), colors.grid, 1)
     end
     
-    -- Delta trace
+    -- Delta trace (use inner dimensions)
     if #deltas >= 2 then
         ui.pathClear()
         for i = 1, #deltas do
             local px = x + (i - 1) / (#deltas - 1) * w
-            local py = y + h / 2 - (deltas[i] / maxDelta) * (h / 2)
+            local py = innerY + innerH / 2 - (deltas[i] / maxDelta) * (innerH / 2)
             ui.pathLineTo(vec2(px, py))
         end
         ui.pathStroke(colors.deltaTime, false, 2)
     end
     
-    -- Y-axis labels
-    ui.setCursor(vec2(x - 50, y + h / 2 - 7))
+    -- Y-axis labels (use inner dimensions)
+    ui.setCursor(vec2(x - 50, innerY + innerH / 2 - 7))
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
     ui.text("0.00s")
     ui.popStyleColor()
     ui.popFont()
     
-    ui.setCursor(vec2(x - 55, y + 2))
+    ui.setCursor(vec2(x - 55, innerY + 2))
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
     ui.text(string.format("-%.2fs", maxDelta))
     ui.popStyleColor()
     
-    ui.setCursor(vec2(x - 55, y + h - 16))
+    ui.setCursor(vec2(x - 55, innerY + innerH - 10))
     ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
     ui.text(string.format("+%.2fs", maxDelta))
     ui.popStyleColor()
@@ -489,6 +597,20 @@ end
 
 -- Main window
 function lap_telemetry.draw(dt)
+    -- Auto-hide when traveling at high speed (if enabled)
+    local car = ac.getCar(0)
+    if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
+        -- Draw minimal indicator that window is hidden
+        ui.drawRectFilled(vec2(0, 0), vec2(80, 20), rgbm(0.1, 0.1, 0.1, 0.7), 4)
+        ui.setCursor(vec2(5, 2))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.5, 0.5, 0.8))
+        ui.text("Telemetry")
+        ui.popStyleColor()
+        ui.popFont()
+        return
+    end
+    
     local windowSize = ui.availableSpace()
     if windowSize.x <= 0 or windowSize.y <= 0 then return end
     
@@ -508,13 +630,6 @@ function lap_telemetry.draw(dt)
     ui.text("Lap Telemetry")
     ui.popStyleColor()
     ui.popFont()
-    
-    -- Reference lap button
-    ui.sameLine(windowSize.x - 150)
-    if ui.button("Load Reference...", vec2(140, 0)) then
-        showRefPicker = not showRefPicker
-        if showRefPicker then ghostFiles = nil end
-    end
     
     -- Controls bar
     local controlsY = headerH + 5
@@ -598,10 +713,44 @@ function lap_telemetry.draw(dt)
             viewStartTime = 0
             viewDuration = 0
         end
+        
+        -- Edit Corners button
+        ui.sameLine()
+        if editMode then
+            ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.3, 0.6, 0.3, 1))
+            ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.4, 0.7, 0.4, 1))
+            if ui.button("Save Corners", vec2(100, 0)) then
+                state.saveCornersToFile()
+                editMode = false
+                selectedCorner = nil
+                draggingHandle = nil
+                editingName = false
+            end
+            ui.popStyleColor(2)
+        else
+            if ui.button("Edit Corners", vec2(100, 0)) then
+                editMode = true
+                selectedCorner = nil
+            end
+        end
+        
+        -- Load Lap button
+        ui.sameLine()
+        if ui.button("Load Lap...", vec2(90, 0)) then
+            showRefPicker = not showRefPicker
+            if showRefPicker then ghostFiles = nil end
+        end
     else
         ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
         ui.text("No laps recorded")
         ui.popStyleColor()
+        
+        -- Load Lap button (always available)
+        ui.sameLine(windowSize.x - 110)
+        if ui.button("Load Lap...", vec2(90, 0)) then
+            showRefPicker = not showRefPicker
+            if showRefPicker then ghostFiles = nil end
+        end
     end
     
     ui.popFont()
@@ -633,20 +782,26 @@ function lap_telemetry.draw(dt)
             cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
             cursorTime = math.clamp(cursorTime, startTime, endTime)
             
-            if ui.mouseClicked(ui.MouseButton.Right) and viewDuration > 0 then
+            if ui.mouseClicked(ui.MouseButton.Right) then
+                -- Enable panning - if not zoomed, start with a zoom first
+                if viewDuration == 0 then
+                    viewDuration = lapTime * 0.5
+                    viewStartTime = math.max(0, cursorTime - viewDuration / 2)
+                end
                 panningView = true
                 panStartMouseX = mousePos.x
                 panStartTime = viewStartTime
-            elseif ui.mouseClicked(ui.MouseButton.Left) then
+            elseif ui.mouseClicked(ui.MouseButton.Left) and not editMode then
                 draggingCursor = true
             end
         end
         
-        -- Panning
+        -- Panning (right-click drag to pan the view)
         if panningView then
-            if ui.mouseDown(ui.MouseButton.Right) and viewDuration > 0 then
+            if ui.mouseDown(ui.MouseButton.Right) then
                 local deltaX = mousePos.x - panStartMouseX
-                local timeDelta = (deltaX / graphW) * (endTime - startTime)
+                local currentDuration = viewDuration > 0 and viewDuration or lapTime
+                local timeDelta = (deltaX / graphW) * currentDuration
                 viewStartTime = math.max(0, math.min(panStartTime - timeDelta, lapTime - viewDuration))
             else
                 panningView = false
@@ -983,6 +1138,140 @@ function lap_telemetry.draw(dt)
                 ui.popFont()
             end
         end
+        
+        -- Corner editing panel (when in edit mode)
+        if editMode then
+            local editPanelH = 160
+            local editPanelY = contentY + contentH - editPanelH - 10
+            
+            ui.drawRectFilled(vec2(panelX, editPanelY), vec2(panelX + panelW, editPanelY + editPanelH), colors.valuePanelBg, 4)
+            ui.drawRect(vec2(panelX, editPanelY), vec2(panelX + panelW, editPanelY + editPanelH), colors.cornerHandleHover, 2)
+            
+            local epy = editPanelY + 10
+            local eLineH = 22
+            
+            if selectedCorner then
+                local corner = state.getCornerInfo(selectedCorner)
+                if corner then
+                -- Header
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Main)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.cornerHandleHover)
+                ui.text(string.format("Corner %d", selectedCorner))
+                ui.popStyleColor()
+                ui.popFont()
+                epy = epy + eLineH
+                
+                ui.drawLine(vec2(panelX + 5, epy), vec2(panelX + panelW - 5, epy), colors.grid, 1)
+                epy = epy + 8
+                
+                -- Corner name input
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Small)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                ui.text("Name:")
+                ui.popStyleColor()
+                ui.popFont()
+                
+                ui.setCursor(vec2(panelX + 50, epy - 2))
+                ui.pushStyleVar(ui.StyleVar.FramePadding, vec2(4, 2))
+                ui.pushStyleColor(ui.StyleColor.FrameBg, rgbm(0.15, 0.15, 0.15, 1))
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+                ui.setNextItemWidth(panelW - 60)
+                
+                -- Initialize name buffer when corner changes
+                if selectedCorner ~= lastEditedCorner then
+                    nameInputBuffer = corner.name or ""
+                    lastEditedCorner = selectedCorner
+                end
+                
+                -- ui.inputText returns the new string value directly
+                local newName = ui.inputText("##cornerName", nameInputBuffer, ui.InputTextFlags.None)
+                if newName ~= nameInputBuffer then
+                    nameInputBuffer = newName
+                    state.updateCorner(selectedCorner, { name = newName ~= "" and newName or nil })
+                end
+                
+                ui.popStyleColor(2)
+                ui.popStyleVar()
+                epy = epy + eLineH + 4
+                
+                -- Position info
+                local trackLength = ac.getSim().trackLengthM or 5000
+                
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Small)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                ui.text("Start:")
+                ui.popStyleColor()
+                ui.sameLine(panelX + 50)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+                ui.text(string.format("%.1f%% (%dm)", (corner.startPos or 0) * 100, math.floor((corner.startPos or 0) * trackLength)))
+                ui.popStyleColor()
+                ui.popFont()
+                epy = epy + eLineH - 4
+                
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Small)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                ui.text("End:")
+                ui.popStyleColor()
+                ui.sameLine(panelX + 50)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+                ui.text(string.format("%.1f%% (%dm)", (corner.endPos or 0) * 100, math.floor((corner.endPos or 0) * trackLength)))
+                ui.popStyleColor()
+                ui.popFont()
+                epy = epy + eLineH
+                
+                -- Delete corner button
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.5, 0.2, 0.2, 1))
+                ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.6, 0.3, 0.3, 1))
+                if ui.button("Delete Corner", vec2(panelW - 20, 0)) then
+                    state.deleteCorner(selectedCorner)
+                    selectedCorner = nil
+                end
+                ui.popStyleColor(2)
+                end
+            else
+                -- No corner selected - show insert option
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Main)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.cornerHandleHover)
+                ui.text("Edit Corners")
+                ui.popStyleColor()
+                ui.popFont()
+                epy = epy + eLineH
+                
+                ui.drawLine(vec2(panelX + 5, epy), vec2(panelX + panelW - 5, epy), colors.grid, 1)
+                epy = epy + 10
+                
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushFont(ui.Font.Small)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                ui.text("Click a corner to edit it")
+                ui.popStyleColor()
+                ui.popFont()
+                epy = epy + eLineH
+                
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                ui.text(string.format("Corners: %d", state.getCornerCount()))
+                ui.popStyleColor()
+                epy = epy + eLineH + 5
+                
+                -- Insert corner button
+                ui.setCursor(vec2(panelX + 10, epy))
+                ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.4, 0.2, 1))
+                ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
+                if ui.button("+ Insert Corner", vec2(panelW - 20, 0)) then
+                    -- Insert at cursor position
+                    local insertPos = cursorTime and getValueAtTime(getSelectedLap(), cursorTime, "pos") or 0.5
+                    state.insertCorner(insertPos - 0.02, insertPos + 0.02)
+                end
+                ui.popStyleColor(2)
+            end
+        end
     else
         ui.setCursor(vec2(windowSize.x / 2 - 100, contentY + contentH / 2))
         ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
@@ -990,10 +1279,10 @@ function lap_telemetry.draw(dt)
         ui.popStyleColor()
     end
     
-    -- Reference lap picker dialog (drawn last to be on top)
+    -- Lap picker dialog (drawn last to be on top)
     if showRefPicker then
-        local dialogW = 280
-        local dialogH = 300
+        local dialogW = 340
+        local dialogH = 420  -- Taller to fit more sections
         local dialogX = windowSize.x - dialogW - 10
         local dialogY = headerH + 5
         
@@ -1002,13 +1291,24 @@ function lap_telemetry.draw(dt)
         ui.drawRect(vec2(dialogX, dialogY), vec2(dialogX + dialogW, dialogY + dialogH), colors.gridMajor, 2)
         
         local py = dialogY + 10
-        local itemW = dialogW - 20
+        local labelW = dialogW - 110  -- Width for lap label
+        local btnW = 40  -- Width for each button
         
         -- Header
         ui.setCursor(vec2(dialogX + 10, py))
         ui.pushFont(ui.Font.Main)
         ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
-        ui.text("Select Reference Lap")
+        ui.text("Load Lap")
+        ui.popStyleColor()
+        ui.popFont()
+        
+        -- Column headers
+        ui.sameLine(dialogX + labelW + 15)
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+        ui.text("Cur")
+        ui.sameLine(dialogX + labelW + 55)
+        ui.text("Ref")
         ui.popStyleColor()
         ui.popFont()
         py = py + 25
@@ -1016,39 +1316,111 @@ function lap_telemetry.draw(dt)
         ui.drawLine(vec2(dialogX + 5, py), vec2(dialogX + dialogW - 5, py), colors.grid, 1)
         py = py + 10
         
-        -- Session Laps section
+        -- Helper to draw a lap entry with C/R buttons
+        local function drawLapEntry(lapData, idx, labelPrefix)
+            local lapTimeS = lapData.time / 1000
+            local mins = math.floor(lapTimeS / 60)
+            local secs = lapTimeS - mins * 60
+            local lapLabel = string.format("%s%d:%05.2f", labelPrefix, mins, secs)
+            local isBest = lapData == state.bestLap
+            local isCurrent = (selectedLapIndex == idx) or (autoSelectFastest and lapData == state.getFastestSessionLap())
+            
+            -- Lap label
+            ui.setCursor(vec2(dialogX + 10, py + 2))
+            ui.pushFont(ui.Font.Small)
+            if isBest then
+                ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.7, 1, 1))
+            elseif isCurrent then
+                ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 1, 0.5, 1))
+            else
+                ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+            end
+            ui.text(lapLabel)
+            if isBest then ui.sameLine() ui.text("(ref)") end
+            if isCurrent then ui.sameLine() ui.text("(cur)") end
+            ui.popStyleColor()
+            ui.popFont()
+            
+            -- "Cur" button
+            ui.setCursor(vec2(dialogX + labelW + 5, py))
+            ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.4, 0.2, 1))
+            ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
+            if ui.button("C##cur" .. idx, vec2(btnW, 0)) then
+                autoSelectFastest = false
+                selectedLapIndex = idx
+                viewStartTime = 0
+                viewDuration = 0
+                showRefPicker = false
+                ac.setMessage("Current Set", string.format("Viewing lap %d:%05.2f", mins, secs))
+            end
+            ui.popStyleColor(2)
+            
+            -- "Ref" button
+            ui.sameLine()
+            ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.2, 0.4, 1))
+            ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.3, 0.5, 1))
+            if ui.button("R##ref" .. idx, vec2(btnW, 0)) then
+                state.setBestLap(lapData)
+                showRefPicker = false
+                ac.setMessage("Reference Set", string.format("Reference: %d:%05.2f", mins, secs))
+            end
+            ui.popStyleColor(2)
+            
+            py = py + 22
+        end
+        
+        -- Current Session Laps
         ui.setCursor(vec2(dialogX + 10, py))
         ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-        ui.text("Session Laps:")
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 1, 0.5, 1))
+        ui.text("This Session:")
         ui.popStyleColor()
         ui.popFont()
         py = py + 18
         
-        if #state.history > 0 then
-            for i, histLap in ipairs(state.history) do
-                if i <= 8 then  -- Limit to 8 laps to fit
-                    local lapTimeS = histLap.time / 1000
-                    local mins = math.floor(lapTimeS / 60)
-                    local secs = lapTimeS - mins * 60
-                    local lapLabel = string.format("Lap %d: %d:%05.2f", i, mins, secs)
-                    if histLap == state.bestLap then
-                        lapLabel = lapLabel .. " (best)"
-                    end
-                    
-                    ui.setCursor(vec2(dialogX + 10, py))
-                    if ui.button(lapLabel .. "##hist" .. i, vec2(itemW, 0)) then
-                        state.setBestLap(histLap)
-                        showRefPicker = false
-                        ac.setMessage("Reference Set", string.format("Using lap %d:%05.2f", mins, secs))
-                    end
-                    py = py + 22
+        local currentSessionLaps = state.getCurrentSessionLaps()
+        if #currentSessionLaps > 0 then
+            local shown = 0
+            for _, entry in ipairs(currentSessionLaps) do
+                if shown < 5 then
+                    drawLapEntry(entry.lap, entry.index, "")
+                    shown = shown + 1
                 end
             end
         else
             ui.setCursor(vec2(dialogX + 15, py))
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
-            ui.text("No session laps yet")
+            ui.text("No laps yet")
+            ui.popStyleColor()
+            py = py + 20
+        end
+        
+        py = py + 5
+        ui.drawLine(vec2(dialogX + 5, py), vec2(dialogX + dialogW - 5, py), colors.grid, 1)
+        py = py + 10
+        
+        -- Previous Session Laps
+        ui.setCursor(vec2(dialogX + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.7, 0.7, 0.9, 1))
+        ui.text("Previous Sessions:")
+        ui.popStyleColor()
+        ui.popFont()
+        py = py + 18
+        
+        local prevSessionLaps = state.getPreviousSessionLaps()
+        if #prevSessionLaps > 0 then
+            local shown = 0
+            for _, entry in ipairs(prevSessionLaps) do
+                if shown < 4 then
+                    drawLapEntry(entry.lap, entry.index, "")
+                    shown = shown + 1
+                end
+            end
+        else
+            ui.setCursor(vec2(dialogX + 15, py))
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+            ui.text("No previous laps saved")
             ui.popStyleColor()
             py = py + 20
         end
@@ -1068,27 +1440,71 @@ function lap_telemetry.draw(dt)
         
         local files = scanGhostFiles()
         if #files > 0 then
-            for _, filename in ipairs(files) do
-                ui.setCursor(vec2(dialogX + 10, py))
-                if ui.button(filename .. "##csv", vec2(itemW, 0)) and not isLoadingRef then
-                    isLoadingRef = true
-                    showRefPicker = false
-                    
-                    local filePath = __dirname .. "/tracks/" .. filename
-                    local loaded = lap.fromCSV(filePath, state.track, state.car)
-                    
-                    if loaded then
-                        state.setBestLap(loaded)
-                        table.insert(state.historyReferences, loaded)
-                        ac.setMessage("Reference Loaded", string.format("Loaded %d:%05.2f from CSV", 
-                            math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
-                    else
-                        ac.setMessage("Load Error", "Failed to load " .. filename)
+            for j, filename in ipairs(files) do
+                if j <= 5 then  -- Limit CSV files shown
+                    -- Truncate long filenames
+                    local displayName = filename
+                    if #displayName > 20 then
+                        displayName = string.sub(displayName, 1, 17) .. "..."
                     end
                     
-                    isLoadingRef = false
+                    -- File label
+                    ui.setCursor(vec2(dialogX + 10, py + 2))
+                    ui.pushFont(ui.Font.Small)
+                    ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
+                    ui.text(displayName)
+                    ui.popStyleColor()
+                    ui.popFont()
+                    
+                    -- "Cur" button
+                    ui.setCursor(vec2(dialogX + labelW + 5, py))
+                    ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.4, 0.2, 1))
+                    ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
+                    if ui.button("C##csvcur" .. j, vec2(btnW, 0)) and not isLoadingRef then
+                        isLoadingRef = true
+                        local filePath = __dirname .. "/tracks/" .. filename
+                        local loaded = lap.fromCSV(filePath, state.track, state.car)
+                        if loaded then
+                            -- Add to history and select it
+                            table.insert(state.history, 1, loaded)
+                            table.insert(state.historyReferences, loaded)
+                            autoSelectFastest = false
+                            selectedLapIndex = 1
+                            viewStartTime = 0
+                            viewDuration = 0
+                            showRefPicker = false
+                            ac.setMessage("Loaded as Current", string.format("CSV: %d:%05.2f", 
+                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
+                        else
+                            ac.setMessage("Load Error", "Failed to load " .. filename)
+                        end
+                        isLoadingRef = false
+                    end
+                    ui.popStyleColor(2)
+                    
+                    -- "Ref" button
+                    ui.sameLine()
+                    ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.2, 0.4, 1))
+                    ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.3, 0.5, 1))
+                    if ui.button("R##csvref" .. j, vec2(btnW, 0)) and not isLoadingRef then
+                        isLoadingRef = true
+                        local filePath = __dirname .. "/tracks/" .. filename
+                        local loaded = lap.fromCSV(filePath, state.track, state.car)
+                        if loaded then
+                            state.setBestLap(loaded)
+                            table.insert(state.historyReferences, loaded)
+                            showRefPicker = false
+                            ac.setMessage("Reference Loaded", string.format("CSV: %d:%05.2f", 
+                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
+                        else
+                            ac.setMessage("Load Error", "Failed to load " .. filename)
+                        end
+                        isLoadingRef = false
+                    end
+                    ui.popStyleColor(2)
+                    
+                    py = py + 22
                 end
-                py = py + 22
             end
         else
             ui.setCursor(vec2(dialogX + 15, py))
@@ -1101,7 +1517,7 @@ function lap_telemetry.draw(dt)
         -- Cancel button at bottom
         py = dialogY + dialogH - 30
         ui.setCursor(vec2(dialogX + 10, py))
-        if ui.button("Cancel##refdlg", vec2(itemW, 0)) then
+        if ui.button("Close##refdlg", vec2(dialogW - 20, 0)) then
             showRefPicker = false
         end
     end
