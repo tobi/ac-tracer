@@ -152,8 +152,8 @@ local function drawGrid(origin, x, y, w, h, positions, trackLength)
 end
 
 local function drawBar(origin, x, y, w, h, val, color)
-    -- Dark outline for 100% state
-    ui.drawRect(origin + vec2(x, y), origin + vec2(x + w, y + h), rgbm(0.2, 0.2, 0.2, 0.8), 0, 1)
+    -- Black outline around full bar area
+    ui.drawRect(origin + vec2(x, y), origin + vec2(x + w, y + h), rgbm(0.05, 0.05, 0.05, 1.0), 0, 2)
     -- Filled bar
     local barH = h * val
     ui.drawRectFilled(origin + vec2(x, y + h - barH), origin + vec2(x + w, y + h), color)
@@ -235,26 +235,33 @@ local buttonSize = vec2(26, 26)
 local buttonColors = {
     bg = rgbm(0.2, 0.2, 0.25, 0.9),
     bgHover = rgbm(0.3, 0.35, 0.4, 0.95),
-    bgActive = rgbm(0.25, 0.35, 0.45, 0.95),
+    bgActive = rgbm(0.15, 0.15, 0.18, 0.95),
     icon = rgbm(0.6, 0.7, 0.8, 1),
     iconHover = rgbm(1, 1, 1, 1),
-    iconActive = rgbm(0.4, 0.8, 1, 1),
+    iconActive = rgbm(0.8, 0.8, 0.8, 1),
 }
 
+local function getWindowName(windowId)
+    -- CSP uses format: IMGUI_LUA_<AppName>_<windowId>
+    return "IMGUI_LUA_Traces_" .. windowId
+end
+
 local function isWindowVisible(windowId)
-    local acc = ac.accessAppWindow("traces/" .. windowId)
+    local acc = ac.accessAppWindow(getWindowName(windowId))
     return acc and acc:valid() and acc:visible()
 end
 
 local function toggleWindow(windowId)
-    local isVisible = isWindowVisible(windowId)
-    local newVisible = not isVisible
+    local windowName = getWindowName(windowId)
+    local acc = ac.accessAppWindow(windowName)
     
-    -- Visual feedback
-    ac.setMessage("Toggle " .. windowId, newVisible and "Opening..." or "Closing...")
-    
-    -- Try the API
-    ac.setAppWindowVisible("traces", windowId, newVisible)
+    if acc and acc:valid() then
+        local newVisible = not acc:visible()
+        acc:setVisible(newVisible)
+        ac.setMessage(windowId, newVisible and "Opened" or "Closed")
+    else
+        ac.setMessage("Error", "Window not found: " .. windowName)
+    end
 end
 
 local function drawToggleButton(localPos, icon, tooltip, windowId)

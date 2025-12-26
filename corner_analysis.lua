@@ -21,8 +21,8 @@ local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 --------------------------------------------------------------------------------
 
 local colors = {
-    background = rgbm(0.05, 0.05, 0.05, 0.98),
-    graphBg = rgbm(0.08, 0.08, 0.08, 1.0),
+    background = rgbm(0.12, 0.12, 0.12, 1.0),
+    graphBg = rgbm(0.05, 0.05, 0.05, 0.95),
     referenceLine = rgbm(1, 1, 1, 1.0),
     faster = rgbm(0.55, 0.20, 0.70, 0.85),
     onSpeed = rgbm(0.20, 0.70, 0.20, 0.85),
