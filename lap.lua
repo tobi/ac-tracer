@@ -26,6 +26,7 @@ function lap.new(track, car, sessionId)
         valid = true,
         time = 0,              -- milliseconds
         fuelLeftAtStart = 0,   -- liters
+        lapNumberInSession = 0, -- Which lap number in this session (1, 2, 3...)
         
         -- Telemetry arrays (all synchronized, sampled at 15 Hz)
         throttle = {},         -- 0.0 to 1.0
@@ -338,6 +339,7 @@ function lap:serialize()
         valid = self.valid,
         time = self.time,
         fuelLeftAtStart = self.fuelLeftAtStart,
+        lapNumberInSession = self.lapNumberInSession,
         throttle = self.throttle,
         brake = self.brake,
         clutch = self.clutch,

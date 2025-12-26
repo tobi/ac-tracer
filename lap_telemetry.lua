@@ -671,7 +671,7 @@ function lap_telemetry.draw(dt)
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
             
-            ui.text(string.format("lap %d", selectedLap or 1))
+            ui.text(string.format("lap %d", selectedLap.lapNumberInSession or selectedLapIndex or 1))
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) then

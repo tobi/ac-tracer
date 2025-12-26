@@ -11,7 +11,11 @@ This document describes the desired architecture, data structures, and data flow
 - [Corner Data Structures](#corner-data-structures)
 - [Data Flow](#data-flow)
 - [Window Functions](#window-functions)
-- [TODO](#todo)
+- [Implementation Status](#implementation-status)
+
+---
+
+YOU ALSO MUST USE THE [SKILL.md](./SKILL.md) file, and update it when it points you into the wrong place.  
 
 ---
 
@@ -34,7 +38,6 @@ This separation ensures:
 
 ## Lap Data Structure
 
-> **TODO**: Create `lap.lua` module to encapsulate this structure with helper methods.
 
 A lap is a complete recording of driver inputs and telemetry data over one circuit of the track. All laps share this structure, whether recorded in-game, loaded from CSV, or imported externally.
 
@@ -43,10 +46,12 @@ lap = {
     -- Metadata
     track = string,         -- Track ID (e.g., "ks_nordschleife")
     car = string,           -- Car ID (e.g., "ks_porsche_911_gt3_r")
+    sessionId = string,     -- Session identifier (e.g., "1735123456_1234")
     completed = boolean,    -- true if lap crossed start/finish with data from 0% to 99%
-    valid = boolean,        -- true if lap should be considered (false for cuts, resets, partial)
+    valid = boolean,        -- true if lap should be considered (false for, resets, partial)
     time = number,          -- Total lap time in milliseconds
     fuelLeftAtStart = number, -- Fuel at lap start in liters (for fuel strategy)
+    lapNumberInSession = number, -- Which lap number in this session (1, 2, 3...)
     
     -- Telemetry arrays (all synchronized, same length, sampled at 15 Hz)
     throttle = { number, ... },  -- Throttle input (0.0 to 1.0)
@@ -54,7 +59,9 @@ lap = {
     clutch = { number, ... },    -- Clutch input (0.0 to 1.0, inverted: 1.0 = pressed)
     steering = { number, ... },  -- Steering input (0.0 to 1.0, normalized, 0.5 = straight)
     speed = { number, ... },     -- Speed in km/h
-    pos = { number, ... }        -- Spline position (0.0 to 1.0)
+    pos = { number, ... },       -- Spline position (0.0 to 1.0)
+    times = { number, ... },     -- Elapsed lap time in seconds at each sample
+    tcActive = { boolean, ... }  -- Traction control active at each sample
 }
 ```
 
@@ -64,16 +71,20 @@ lap = {
 |-------|------|-------------|-------------|
 | `track` | string | - | Track ID from AC |
 | `car` | string | - | Car ID from AC |
+| `sessionId` | string | - | Session identifier for grouping laps |
 | `completed` | boolean | - | Has data spanning full lap (0% to 99% positions) |
 | `valid` | boolean | - | Should be used for comparisons (no cuts, resets) |
 | `time` | number | milliseconds | Total lap time (last sample time - first sample time) |
 | `fuelLeftAtStart` | number | liters | Fuel level when crossing start line |
+| `lapNumberInSession` | number | 1, 2, 3... | Which lap number in this session |
 | `throttle[i]` | number | 0.0-1.0 | Throttle position at sample i |
 | `brake[i]` | number | 0.0-1.0 | Brake pressure at sample i |
 | `clutch[i]` | number | 0.0-1.0 | Clutch position (inverted: 1.0 = foot on pedal) |
 | `steering[i]` | number | 0.0-1.0 | Steering angle normalized (0.5 = straight) |
 | `speed[i]` | number | km/h | Ground speed at sample i |
 | `pos[i]` | number | 0.0-1.0 | Track spline position at sample i |
+| `times[i]` | number | seconds | Elapsed lap time at sample i |
+| `tcActive[i]` | boolean | - | Traction control active at sample i |
 
 ### Sampling
 
@@ -118,11 +129,13 @@ state = {
     -- Session info
     track = string,              -- Current track ID
     car = string,                -- Current car ID
+    sessionId = string,          -- Unique session ID (e.g., "1735123456_1234")
     
     -- Track data
     trackCorners = {             -- Array of corner definitions
         {
             number = number,     -- Corner number (1, 2, 3, ...)
+            name = string,       -- Display name (e.g., "Bus Stop")
             startPos = number,   -- Spline position where corner starts
             endPos = number,     -- Spline position where corner ends
             apexPos = number     -- Spline position of apex
@@ -146,12 +159,18 @@ state = {
             entrySpeed = number,
             apexSpeed = number,
             exitSpeed = number,
-            brakePos = number,   -- or nil
-            liftOffPos = number, -- or nil
+            brakePos = number,   -- or nil where we START applying break
+            apexPos = number,
+            liftOffPos = number, -- or nil where we STOP being on full throttle
             maxSteeringDeg = number
         },
         ...
-    }
+    },
+    
+    -- Manual corner recording
+    cornerRecording = boolean,   -- Currently recording a corner?
+    cornerRecordStart = number,  -- Spline position where recording started
+    cornerRecordTime = number    -- Time when recording started
 }
 ```
 
@@ -208,7 +227,8 @@ A corner is defined by its track positions:
 
 ```lua
 corner = {
-    number = number,      -- Corner number (1, 2, 3, ...)
+    number = number,      -- Corner number for ordering (1, 2, 3, ...)
+    name = string,        -- Display name (e.g., "Bus Stop", defaults to "Corner N")
     startPos = number,    -- Spline position where corner starts (0.0 to 1.0)
     endPos = number,      -- Spline position where corner ends (0.0 to 1.0)
     apexPos = number      -- Spline position of the apex (0.0 to 1.0)
@@ -222,14 +242,16 @@ When a corner is exited, statistics are computed for display:
 ```lua
 completedCorner = {
     -- Identification
-    number = number,
+    number = number,              -- Corner number for ordering
+    name = string,                -- Display name (e.g., "Bus Stop")
     
     -- Reference (bestLap) data
     refEntrySpeed = number,       -- km/h
     refApexSpeed = number,        -- km/h
     refExitSpeed = number,        -- km/h
-    refBrakePos = number,         -- spline position (or nil)
-    refLiftOffPos = number,       -- spline position (or nil)
+    refBrakePos = number,         -- spline position (or nil) where braking starts
+    refApexPos = number,          -- spline position of apex
+    refLiftOffPos = number,       -- spline position (or nil) where throttle lift starts
     refMaxSteeringDeg = number,   -- degrees
     
     -- Current lap data
@@ -238,6 +260,7 @@ completedCorner = {
     currentExitSpeed = number,
     currentBrakePos = number,
     currentLiftOffPos = number,
+    currentApexPos = number, 
     currentMaxSteeringDeg = number,
     currentSpeeds = { { pos, speed }, ... },  -- For mini speed graph
     
@@ -425,7 +448,6 @@ This pattern:
 ### Future Improvements
 
 - Add lap comparison helpers: `lap.compare(lap1, lap2)`
-- Persist `state.history` to ac.storage for session resume
 - Add lap validation helpers
 
 ---
@@ -435,25 +457,23 @@ This pattern:
 ```
 traces/
 ├── tracks/
-│   ├── trackname_corners.lua   # Manual corner definitions
-│   └── trackname.csv           # Reference lap CSVs (MoTeC export)
+│   ├── corners.csv           # All corner definitions (all tracks in one file)
+│   └── trackname.csv         # Reference lap CSVs (MoTeC export)
 └── ...
 ```
 
-### Corner Files (`trackname_corners.lua`)
+### Corner Files (`corners.csv`)
 
-Manual corner definitions are saved as Lua files:
+Manual corner definitions are saved in a single CSV file with format:
 
-```lua
--- Corner data for track: ks_nordschleife
--- Generated by Traces app
-return {
-    {0.123456, 0.134567},  -- Corner 1 (startPos, endPos)
-    {0.234567, 0.256789},  -- Corner 2
-    {},                     -- Skip 3 (placeholder for numbering)
-    {0.345678, 0.367890},  -- Corner 4
-}
+```csv
+track,name,start,end
+ks_nordschleife,Corner 1,0.123456,0.134567
+ks_nordschleife,Karussell,0.234567,0.256789
+ks_monza,Corner 1,0.045678,0.067890
 ```
+
+When saving corners, any existing corners for the same track are removed before writing the new ones. This prevents duplicates and allows easy updates.
 
 ---
 
@@ -463,7 +483,7 @@ return {
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - all 0.0-1.0 for consistent display
 - **Time in milliseconds** - internal storage uses ms for precision
-- **Corner files** - saved as `tracks/trackname_corners.lua`
+- **Corner files** - saved as `tracks/corners.csv`
 
 ---
 
@@ -497,3 +517,50 @@ All modules use `state` and `lap` directly via `require()`. No init functions, n
 ```
 
 **Migration complete.** All state now lives in `state.lua` and `lap.lua`.
+
+---
+
+## Debugging & Logs
+
+### CSP Log Location
+
+CSP logs all Lua errors to:
+
+```
+C:\Users\<USERNAME>\Documents\Assetto Corsa\logs\custom_shaders_patch.log (Username is likely "ASR")
+```
+
+### Reading Errors
+
+**PowerShell - Last 1000 lines with ERROR filter:**
+```powershell
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR"
+```
+
+**Filter for traces.lua errors only:**
+```powershell
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR.*traces\.lua"
+```
+
+**Watch log in real-time:**
+```powershell
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Wait | Select-String "ERROR"
+```
+
+### Common Error Patterns
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `attempt to index global 'X' (a nil value)` | Undefined variable | Check spelling, add `local` or proper prefix |
+| `attempt to call field 'X' (a nil value)` | Missing function | Check module exports and requires |
+| `error loading module 'X'` | Syntax error in file | Check file for typos, missing `end` |
+
+### Log Format
+
+```
+TIMESTAMP [PID] | LEVEL | Message
+2025-12-26T12:57:52:597 [29592] | ERROR | Failed to call `windowMain`: ...traces.lua:273: ...
+```
+
+- **LEVEL**: DEBUG, PERF, WARN, ERROR
+- Errors include stack trace with file:line information

@@ -673,6 +673,7 @@ function state.update(dt, car)
             state.currentLap.completed = true
             state.currentLap.valid = car.isLastLapValid
             state.currentLap.time = car.previousLapTimeMs
+            state.currentLap.lapNumberInSession = state.lapNumber  -- Lap number in this session
             
             -- Add to history (most recent first)
             table.insert(state.history, 1, state.currentLap)
