@@ -102,18 +102,59 @@ local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed)
 end
 
 local function drawGrid(origin, x, y, w, h, positions, trackLength)
-    -- Border only (removed cluttered 50m vertical lines)
+    -- Border
     ui.drawLine(origin + vec2(x, y), origin + vec2(x + w, y), colors.grid, 1)
     ui.drawLine(origin + vec2(x + w, y), origin + vec2(x + w, y + h), colors.grid, 1)
     ui.drawLine(origin + vec2(x + w, y + h), origin + vec2(x, y + h), colors.grid, 1)
     ui.drawLine(origin + vec2(x, y + h), origin + vec2(x, y), colors.grid, 1)
 
-    -- Horizontal lines at 50% only (cleaner)
+    -- Horizontal line at 50%
     local ly = y + h / 2
     ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), colors.grid, 1)
+    
+    -- 50m vertical markers
+    if positions and #positions >= 2 and trackLength and trackLength > 0 then
+        local startPos = positions[1]
+        local endPos = positions[#positions]
+        local startM = startPos * trackLength
+        local endM = endPos * trackLength
+        
+        -- Handle wrap-around (crossing start/finish)
+        if endM < startM then endM = endM + trackLength end
+        
+        -- Find first 50m mark after start
+        local firstMark = math.ceil(startM / 50) * 50
+        local markerColor = rgbm(0.5, 0.5, 0.5, 0.7)
+        
+        for m = firstMark, endM, 50 do
+            local actualM = m % trackLength
+            local markerPos = actualM / trackLength
+            
+            -- Find X position for this marker
+            for i = 1, #positions - 1 do
+                local p1, p2 = positions[i], positions[i + 1]
+                local checkPos = markerPos
+                
+                -- Handle wrap-around
+                if p2 < p1 then p2 = p2 + 1 end
+                if checkPos < p1 and p1 > 0.5 then checkPos = checkPos + 1 end
+                
+                if checkPos >= p1 and checkPos <= p2 then
+                    local t = (checkPos - p1) / (p2 - p1)
+                    local step = w / (#positions - 1)
+                    local lx = x + (i - 1 + t) * step
+                    ui.drawLine(origin + vec2(lx, y), origin + vec2(lx, y + h), markerColor, 1)
+                    break
+                end
+            end
+        end
+    end
 end
 
 local function drawBar(origin, x, y, w, h, val, color)
+    -- Dark outline for 100% state
+    ui.drawRect(origin + vec2(x, y), origin + vec2(x + w, y + h), rgbm(0.2, 0.2, 0.2, 0.8), 0, 1)
+    -- Filled bar
     local barH = h * val
     ui.drawRectFilled(origin + vec2(x, y + h - barH), origin + vec2(x + w, y + h), color)
 end
@@ -173,7 +214,7 @@ local function drawGear(origin, cx, cy, r, gear)
     local innerR = r * 0.70
     local center = origin + vec2(cx, cy)
     -- Draw gear number larger, centered in wheel
-    ui.pushFont(ui.Font.Huge)
+    ui.pushFont(ui.Font.Title)
     local textSize = ui.measureText(text)
     ui.setCursor(center - textSize / 2)
     ui.text(text)
@@ -187,6 +228,62 @@ local function drawSpeed(origin, cx, y, w, car)
     ui.setCursor(origin + vec2(cx - w/2, y))
     ui.textAligned(string.format("%.0f%s", speed, unit), vec2(0.5, 0.5), vec2(w, 20))
     ui.popFont()
+end
+
+-- Window toggle buttons
+local buttonSize = vec2(26, 26)
+local buttonColors = {
+    bg = rgbm(0.2, 0.2, 0.25, 0.9),
+    bgHover = rgbm(0.3, 0.35, 0.4, 0.95),
+    bgActive = rgbm(0.25, 0.35, 0.45, 0.95),
+    icon = rgbm(0.6, 0.7, 0.8, 1),
+    iconHover = rgbm(1, 1, 1, 1),
+    iconActive = rgbm(0.4, 0.8, 1, 1),
+}
+
+local function isWindowVisible(windowId)
+    local acc = ac.accessAppWindow("traces/" .. windowId)
+    return acc and acc:valid() and acc:visible()
+end
+
+local function toggleWindow(windowId)
+    local isVisible = isWindowVisible(windowId)
+    local newVisible = not isVisible
+    
+    -- Visual feedback
+    ac.setMessage("Toggle " .. windowId, newVisible and "Opening..." or "Closing...")
+    
+    -- Try the API
+    ac.setAppWindowVisible("traces", windowId, newVisible)
+end
+
+local function drawToggleButton(localPos, icon, tooltip, windowId)
+    local isActive = isWindowVisible(windowId)
+    
+    -- Determine colors based on state
+    local bg = isActive and buttonColors.bgActive or buttonColors.bg
+    local bgHover = isActive and buttonColors.bgActive or buttonColors.bgHover
+    local fg = isActive and buttonColors.iconActive or buttonColors.icon
+    
+    -- Use styled button
+    ui.setCursor(localPos)
+    ui.pushStyleColor(ui.StyleColor.Button, bg)
+    ui.pushStyleColor(ui.StyleColor.ButtonHovered, bgHover)
+    ui.pushStyleColor(ui.StyleColor.ButtonActive, buttonColors.bgActive)
+    ui.pushStyleColor(ui.StyleColor.Text, fg)
+    ui.pushStyleVar(ui.StyleVar.FrameRounding, 4)
+    
+    if ui.button(icon .. "##" .. windowId, buttonSize) then
+        ac.log("Traces: Button clicked for " .. windowId)
+        toggleWindow(windowId)
+    end
+    
+    ui.popStyleVar()
+    ui.popStyleColor(4)
+    
+    if ui.itemHovered() then
+        ui.setTooltip(tooltip)
+    end
 end
 
 local function posToX(pos, positions, x, w)
@@ -219,8 +316,9 @@ function script.windowMain(dt)
     ui.drawRectFilled(windowOrigin, windowSize, colors.background, 16)
 
     local pad = 15
-    local origin = windowOrigin + vec2(pad, pad)
-    local w = windowSize.x - pad * 2
+    local btnAreaW = 32  -- Space for toggle buttons on left
+    local origin = windowOrigin + vec2(pad + btnAreaW, pad)
+    local w = windowSize.x - pad * 2 - btnAreaW
     local h = windowSize.y - pad * 2
 
     local wheelR = h * 0.48
@@ -244,12 +342,22 @@ function script.windowMain(dt)
     cursor = cursor - gap
 
     local traceW = math.max(0, cursor)
+    local tracePad = 3  -- Padding inside trace background
     
     local traceOrigin = origin
 
     local trackLength = ac.getSim().trackLengthM
     if traceW > 10 then
-        drawGrid(traceOrigin, 0, 0, traceW, h, history.pos, trackLength)
+        -- Dark background behind trace lines
+        ui.drawRectFilled(traceOrigin, traceOrigin + vec2(traceW, h), rgbm(0.05, 0.05, 0.05, 0.95), 4)
+        
+        -- Inner dimensions for traces (with padding)
+        local innerX = tracePad
+        local innerY = tracePad
+        local innerW = traceW - tracePad * 2
+        local innerH = h - tracePad * 2
+        
+        drawGrid(traceOrigin, innerX, innerY, innerW, innerH, history.pos, trackLength)
 
         -- Draw corner zones (very faint, with partial corner support)
         local corners = state.trackCorners
@@ -269,8 +377,8 @@ function script.windowMain(dt)
             for _, c in ipairs(corners) do
                 if c.startPos and c.endPos then
                     -- Try to get X positions (may be nil if outside visible range)
-                    local cStartX = posToX(c.startPos, history.pos, 0, traceW)
-                    local cEndX = posToX(c.endPos, history.pos, 0, traceW)
+                    local cStartX = posToX(c.startPos, history.pos, innerX, innerW)
+                    local cEndX = posToX(c.endPos, history.pos, innerX, innerW)
                     
                     -- Handle partial corners (clamp to visible area)
                     local drawStartX = cStartX
@@ -279,11 +387,11 @@ function script.windowMain(dt)
                     if minPos and maxPos then
                         -- If start is before visible range, clamp to left edge
                         if not cStartX and c.startPos < minPos then
-                            drawStartX = 0
+                            drawStartX = innerX
                         end
                         -- If end is after visible range, clamp to right edge
                         if not cEndX and c.endPos > maxPos then
-                            drawEndX = traceW
+                            drawEndX = innerX + innerW
                         end
                     end
                     
@@ -300,12 +408,12 @@ function script.windowMain(dt)
                         if inCorner then
                             -- Active corner: slightly brighter with border
                             ui.drawRectFilled(
-                                traceOrigin + vec2(drawStartX, 0), 
-                                traceOrigin + vec2(drawEndX, h), 
+                                traceOrigin + vec2(drawStartX, innerY), 
+                                traceOrigin + vec2(drawEndX, innerY + innerH), 
                                 rgbm(0.3, 0.3, 0.4, 0.06), 0)
                             ui.drawRect(
-                                traceOrigin + vec2(drawStartX, 0), 
-                                traceOrigin + vec2(drawEndX, h), 
+                                traceOrigin + vec2(drawStartX, innerY), 
+                                traceOrigin + vec2(drawEndX, innerY + innerH), 
                                 rgbm(1, 1, 1, 0.15), 1)
                             
                             currentCornerName = c.name
@@ -314,15 +422,15 @@ function script.windowMain(dt)
                         else
                             -- Inactive corner: very faint dark fill
                             ui.drawRectFilled(
-                                traceOrigin + vec2(drawStartX, 0), 
-                                traceOrigin + vec2(drawEndX, h), 
+                                traceOrigin + vec2(drawStartX, innerY), 
+                                traceOrigin + vec2(drawEndX, innerY + innerH), 
                                 rgbm(0.15, 0.15, 0.2, 0.01), 0)
                         end
                         
                         -- Corner name in top left (for all visible corners)
                         if c.name then
                             ui.pushFont(ui.Font.Small)
-                            ui.setCursor(traceOrigin + vec2(drawStartX + 3, 2))
+                            ui.setCursor(traceOrigin + vec2(drawStartX + 3, innerY + 2))
                             ui.pushStyleColor(ui.StyleColor.Text, inCorner and rgbm(1, 1, 1, 0.7) or rgbm(1, 1, 1, 0.25))
                             ui.text(c.name)
                             ui.popStyleColor()
@@ -347,19 +455,19 @@ function script.windowMain(dt)
         end
         
         if hasZeroCrossing then
-            local sfX = posToX(0, history.pos, 0, traceW)
+            local sfX = posToX(0, history.pos, innerX, innerW)
             if sfX then
                 local sfW = 5
                 local squareSize = 4
-                for row = 0, math.floor(h / squareSize) do
+                for row = 0, math.floor(innerH / squareSize) do
                     for col = 0, 1 do
                         local isWhite = (row + col) % 2 == 0
                         local color = isWhite and rgbm(1, 1, 1, 0.9) or rgbm(0.1, 0.1, 0.1, 0.9)
                         local px = sfX - sfW / 2 + col * (sfW / 2)
-                        local py = row * squareSize
+                        local py = innerY + row * squareSize
                         ui.drawRectFilled(
                             traceOrigin + vec2(px, py), 
-                            traceOrigin + vec2(px + sfW / 2, math.min(py + squareSize, h)), 
+                            traceOrigin + vec2(px + sfW / 2, math.min(py + squareSize, innerY + innerH)), 
                             color, 0)
                     end
                 end
@@ -369,21 +477,21 @@ function script.windowMain(dt)
         local ghostTraces = state.getGhostTraces(history.pos)
         local maxSpeed = getMaxSpeed(ghostTraces)
         
-        -- Ghost traces (reference)
+        -- Ghost traces (reference) - use inner dimensions with padding
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
-            if display.steering then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.steering, colors.ghostSteering) end
-            if display.clutch then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.clutch, colors.ghostClutch) end
-            if display.throttle then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.throttle, colors.ghostThrottle) end
-            if display.brake then drawTrace(traceOrigin, 0, 0, traceW, h, ghostTraces.brake, colors.ghostBrake) end
+            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
+            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, colors.ghostSteering) end
+            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, colors.ghostClutch) end
+            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, colors.ghostThrottle) end
+            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, colors.ghostBrake) end
         end
 
-        -- Current traces
-        if display.speed then drawSpeedTrace(traceOrigin, 0, 0, traceW, h, history.speed, colors.speed, maxSpeed) end
-        if display.steering then drawTrace(traceOrigin, 0, 0, traceW, h, history.steering, colors.steering) end
-        if display.clutch then drawTrace(traceOrigin, 0, 0, traceW, h, history.clutch, colors.clutch) end
-        if display.throttle then drawTrace(traceOrigin, 0, 0, traceW, h, history.throttle, colors.throttle) end
-        if display.brake then drawTrace(traceOrigin, 0, 0, traceW, h, history.brake, colors.brake) end
+        -- Current traces - use inner dimensions with padding
+        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, colors.speed, maxSpeed) end
+        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, colors.steering) end
+        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, colors.clutch) end
+        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, colors.throttle) end
+        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, colors.brake) end
         
         -- Corner name is now rendered in the corner zone loop above
     end
@@ -403,6 +511,13 @@ function script.windowMain(dt)
         ui.popStyleColor()
         ui.popFont()
     end
+    
+    -- Toggle window buttons (left side, vertically stacked)
+    -- Use window-local coordinates for ui.setCursor
+    local btnLocalX = pad
+    local btnLocalY = pad + h / 2 - buttonSize.y - 2
+    drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + 4), "📊", "Lap Telemetry", "telemetry")
 end
 
 function script.windowSettings(dt)

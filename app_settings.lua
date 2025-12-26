@@ -144,50 +144,6 @@ end
 function M.windowSettings(corner, resetButton, recordCornerButton)
     local state = require('state')
 
-    -- Window Toggles
-    ui.text("Windows")
-    ui.separator()
-    
-    local function isVisible(id)
-        local windows = ac.getAppWindows()
-        if not windows then return false end
-        local target = id:lower()
-        for _, w in ipairs(windows) do
-            -- Match either "traces/id" or just "id"
-            if w.name:lower() == "traces/" .. target or w.name:lower() == target then
-                return w.visible
-            end
-        end
-        return false
-    end
-
-    local function setVisible(id, visible)
-        -- Use accessAppWindow with name from getAppWindows for reliability
-        local windows = ac.getAppWindows()
-        if not windows then return end
-        local target = id:lower()
-        for _, w in ipairs(windows) do
-            if w.name:lower() == "traces/" .. target or w.name:lower() == target then
-                local acc = ac.accessAppWindow(w.name)
-                if acc then acc:setVisible(visible) end
-                return
-            end
-        end
-        -- Fallback: try directly if not found in list (might be hidden)
-        ac.setAppWindowVisible("traces", id, visible)
-    end
-
-    local showCorners = isVisible("corners")
-    if ui.checkbox("Corner Analysis", showCorners) then
-        setVisible("corners", not showCorners)
-    end
-    
-    local showTelemetry = isVisible("telemetry")
-    if ui.checkbox("Lap Telemetry", showTelemetry) then
-        setVisible("telemetry", not showTelemetry)
-    end
-
-    ui.offsetCursorY(10)
     ui.text("Ghost Lap")
     ui.separator()
 
@@ -213,34 +169,7 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     ui.sameLine(120)
     M.checkbox("Speed", "speed")
     ui.offsetCursorY(10)
-
-    ui.separator()
-    ui.offsetCursorY(5)
-    ui.text("Detection Thresholds")
-    ui.offsetCursorY(5)
-
-    local newBrake = ui.slider("Brake##det", M.brakeThreshold * 100, 1, 30, "%.0f%%")
-    if newBrake ~= M.brakeThreshold * 100 then
-        M.brakeThreshold = newBrake / 100
-        ini:set('DETECTION', 'brake_threshold', string.format("%.2f", M.brakeThreshold))
-        ini:save()
-    end
-
-    local newThrottle = ui.slider("Throttle##det", M.throttleThreshold * 100, 5, 95, "%.0f%%")
-    if newThrottle ~= M.throttleThreshold * 100 then
-        M.throttleThreshold = newThrottle / 100
-        ini:set('DETECTION', 'throttle_threshold', string.format("%.2f", M.throttleThreshold))
-        ini:save()
-    end
-
-    local newSpeedDrop = ui.slider("Speed Drop##det", M.speedDropThreshold * 100, 1, 50, "%.0f%%")
-    if newSpeedDrop ~= M.speedDropThreshold * 100 then
-        M.speedDropThreshold = newSpeedDrop / 100
-        ini:set('DETECTION', 'speed_drop_threshold', string.format("%.2f", M.speedDropThreshold))
-        ini:save()
-    end
-
-    ui.offsetCursorY(10)
+    
     ui.separator()
     ui.offsetCursorY(10)
 
