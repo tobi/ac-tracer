@@ -8,9 +8,30 @@ local corner = require('corner')
 local corner_analysis = require('corner_analysis')
 local lap_telemetry = require('lap_telemetry')
 
--- Local aliases
-local colors = settings.colors
-local display = settings.display
+-- Local aliases with fallbacks
+local colors = settings.colors or {
+    throttle = rgbm(0, 1, 0, 0.85),
+    brake = rgbm(1, 0, 0, 0.85),
+    clutch = rgbm(0, 0.4, 1, 0.85),
+    steering = rgbm(0.7, 0.7, 0.7, 0.85),
+    speed = rgbm(0.5, 0.5, 0.5, 0.5),
+    grid = rgbm(0.1, 0.1, 0.1, 0.9),
+    wheelBg = rgbm(0, 0, 0, 0.6),
+    wheelIndicator = rgbm(1, 1, 0, 1),
+    background = rgbm(0.12, 0.12, 0.12, 1.0),
+    ghostThrottle = rgbm(0, 1, 0, 0.25),
+    ghostBrake = rgbm(1, 0, 0, 0.25),
+    ghostClutch = rgbm(0, 0.4, 1, 0.25),
+    ghostSteering = rgbm(0.7, 0.7, 0.7, 0.25),
+    ghostSpeed = rgbm(0.5, 0.5, 0.5, 0.2),
+}
+local display = settings.display or {
+    throttle = true,
+    brake = true,
+    clutch = false,
+    steering = false,
+    speed = false,
+}
 
 -- Hotkeys
 local resetButton = ac.ControlButton('__APP_AC_TRACER_RESET_BEST')
@@ -243,7 +264,8 @@ local buttonColors = {
 
 local function getWindowName(windowId)
     -- CSP uses format: IMGUI_LUA_<AppName>_<windowId>
-    return "IMGUI_LUA_ac-tracer_" .. windowId
+    -- AppName is the NAME from manifest.ini (not folder name)
+    return "IMGUI_LUA_AC Tracer_" .. windowId
 end
 
 local function isWindowVisible(windowId)
@@ -311,22 +333,40 @@ end
 
 function script.windowMain(dt)
     local car = ac.getCar(0)
-    if not car then return end
+    if not car then 
+        ui.text("No car data")
+        return 
+    end
 
     if resetButton:pressed() then
         state.resetBestLap()
     end
 
-    local windowOrigin = ui.getCursor()
     local windowSize = ui.availableSpace()
+    
+    -- Use local coordinates (0,0 = top-left of window content)
+    local windowOrigin = vec2(0, 0)
+    
+    -- Debug: check if colors loaded
+    if not colors or not colors.background then
+        ui.text("Colors not loaded!")
+        return
+    end
 
-    ui.drawRectFilled(windowOrigin, windowSize, colors.background, 16)
+    ui.drawRectFilled(windowOrigin, windowOrigin + windowSize, colors.background, 16)
 
     local pad = 15
     local btnAreaW = 32  -- Space for toggle buttons on left
-    local origin = windowOrigin + vec2(pad + btnAreaW, pad)
+    local origin = vec2(pad + btnAreaW, pad)
     local w = windowSize.x - pad * 2 - btnAreaW
     local h = windowSize.y - pad * 2
+    
+    -- Debug: show dimensions if too small
+    if h < 20 or w < 100 then
+        ui.setCursor(vec2(5, 5))
+        ui.text(string.format("Window too small: %.0fx%.0f", windowSize.x, windowSize.y))
+        return
+    end
 
     local wheelR = h * 0.48
     local wheelW = wheelR * 2
@@ -513,7 +553,7 @@ function script.windowMain(dt)
     if corner.isRecording() then
         ui.pushFont(ui.Font.Title)
         ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 0.3, 0.3, 1))
-        ui.setCursor(windowOrigin + vec2(10, 5))
+        ui.setCursor(vec2(10, 5))
         ui.text("REC")
         ui.popStyleColor()
         ui.popFont()
@@ -522,9 +562,10 @@ function script.windowMain(dt)
     -- Toggle window buttons (left side, vertically stacked)
     -- Use window-local coordinates for ui.setCursor
     local btnLocalX = pad
-    local btnLocalY = pad + h / 2 - buttonSize.y - 2
+    local btnLocalY = pad + h / 2 - buttonSize.y * 1.5 - 4
     drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
     drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + 4), "📊", "Lap Telemetry", "telemetry")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + 4) * 2), "Δ", "Delta Bar", "delta")
 end
 
 function script.windowSettings(dt)
@@ -538,4 +579,173 @@ end
 
 function script.windowTelemetry(dt)
     lap_telemetry.draw(dt)
+end
+
+--------------------------------------------------------------------------------
+-- Delta Bar Window (iRacing-style)
+--------------------------------------------------------------------------------
+
+-- Delta bar configuration
+local deltaBar = {
+    maxDelta = 2.0,        -- Max delta shown (seconds) - bar is full at this value
+    barHeight = 20,        -- Height of the delta bar
+    textSize = 24,         -- Delta time text size
+    smoothing = 0.15,      -- Smoothing factor for color transitions (0-1)
+    lastSpeedDiff = 0,     -- For smoothing
+    lastDisplayDelta = 0,  -- Last displayed delta value
+    displayUpdateTimer = 0, -- Timer for throttling display updates
+    displayUpdateRate = 0.1, -- Update display every 100ms (10 Hz)
+}
+
+function script.windowDelta(dt)
+    local car = ac.getCar(0)
+    if not car then return end
+    
+    local windowSize = ui.availableSpace()
+    local centerX = windowSize.x / 2
+    local centerY = windowSize.y / 2
+    
+    -- Get delta vs best lap
+    local delta = state.getDelta()  -- positive = behind/slower
+    local currentPos = car.splinePosition
+    local currentSpeed = car.speedKmh
+    
+    -- Throttle display updates to reduce jitter (10 Hz)
+    deltaBar.displayUpdateTimer = deltaBar.displayUpdateTimer + dt
+    if deltaBar.displayUpdateTimer >= deltaBar.displayUpdateRate then
+        deltaBar.displayUpdateTimer = 0
+        deltaBar.lastDisplayDelta = delta
+    end
+    local displayDelta = deltaBar.lastDisplayDelta
+    
+    -- Get ghost speed at same position for relative speed comparison
+    local ghostSpeed = state.getGhostValueAt('speed', currentPos)
+    local speedDiff = 0
+    if ghostSpeed and ghostSpeed > 0 then
+        speedDiff = currentSpeed - ghostSpeed  -- positive = gaining, negative = losing
+    end
+    
+    -- Smooth the speed difference for less jittery colors
+    deltaBar.lastSpeedDiff = deltaBar.lastSpeedDiff + (speedDiff - deltaBar.lastSpeedDiff) * deltaBar.smoothing
+    local smoothedSpeedDiff = deltaBar.lastSpeedDiff
+    
+    -- Calculate bar width based on delta time
+    local maxBarWidth = (windowSize.x / 2) - 40  -- Leave room for text in center
+    local normalizedDelta = math.clamp(math.abs(delta) / deltaBar.maxDelta, 0, 1)
+    local barWidth = normalizedDelta * maxBarWidth
+    
+    -- Determine color based on relative speed (green = gaining, red = losing)
+    -- Intensity varies with how much faster/slower
+    local speedThreshold = 5  -- km/h difference for full color saturation
+    local colorIntensity = math.clamp(math.abs(smoothedSpeedDiff) / speedThreshold, 0.3, 1)
+    
+    local barColor
+    if smoothedSpeedDiff > 0.5 then
+        -- Gaining time (faster than ghost) - GREEN
+        barColor = rgbm(0.1, 0.9 * colorIntensity, 0.1, 0.9)
+    elseif smoothedSpeedDiff < -0.5 then
+        -- Losing time (slower than ghost) - RED
+        barColor = rgbm(0.9 * colorIntensity, 0.1, 0.1, 0.9)
+    else
+        -- Neutral (same speed) - use delta to determine base color
+        if delta < 0 then
+            barColor = rgbm(0.1, 0.6, 0.1, 0.7)  -- Slightly green when ahead
+        else
+            barColor = rgbm(0.6, 0.1, 0.1, 0.7)  -- Slightly red when behind
+        end
+    end
+    
+    -- Draw the delta bar
+    local barY = centerY - deltaBar.barHeight / 2
+    local barTop = barY
+    local barBottom = barY + deltaBar.barHeight
+    
+    -- Center line (subtle)
+    ui.drawLine(vec2(centerX, barTop - 5), vec2(centerX, barBottom + 5), rgbm(1, 1, 1, 0.4), 2)
+    
+    if state.hasBestLap() and math.abs(delta) > 0.001 then
+        if delta < 0 then
+            -- Ahead: bar goes LEFT from center
+            ui.drawRectFilled(
+                vec2(centerX - barWidth, barTop),
+                vec2(centerX, barBottom),
+                barColor, 2
+            )
+        else
+            -- Behind: bar goes RIGHT from center
+            ui.drawRectFilled(
+                vec2(centerX, barTop),
+                vec2(centerX + barWidth, barBottom),
+                barColor, 2
+            )
+        end
+        
+        -- Subtle outline
+        local outlineColor = rgbm(1, 1, 1, 0.3)
+        if delta < 0 then
+            ui.drawRect(vec2(centerX - barWidth, barTop), vec2(centerX, barBottom), outlineColor, 2, 1)
+        else
+            ui.drawRect(vec2(centerX, barTop), vec2(centerX + barWidth, barBottom), outlineColor, 2, 1)
+        end
+    end
+    
+    -- Delta time text (centered below bar) - use throttled value for stability
+    local textY = barBottom + 8
+    local sign = displayDelta >= 0 and "+" or ""
+    local deltaText = string.format("%s%.1f", sign, displayDelta)
+    
+    -- Text color matches bar color but brighter
+    local textColor
+    if not state.hasBestLap() then
+        textColor = rgbm(0.6, 0.6, 0.6, 1)
+        deltaText = "NO REF"
+    elseif displayDelta < -0.05 then
+        textColor = rgbm(0.3, 1, 0.3, 1)  -- Green when ahead
+    elseif displayDelta > 0.05 then
+        textColor = rgbm(1, 0.3, 0.3, 1)  -- Red when behind
+    else
+        textColor = rgbm(1, 1, 1, 1)  -- White when even
+    end
+    
+    -- Draw delta text with shadow for visibility
+    ui.pushFont(ui.Font.Title)
+    local textSize = ui.measureText(deltaText)
+    local textX = centerX - textSize.x / 2
+    
+    -- Shadow
+    ui.setCursor(vec2(textX + 1, textY + 1))
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0, 0, 0, 0.7))
+    ui.text(deltaText)
+    ui.popStyleColor()
+    
+    -- Main text
+    ui.setCursor(vec2(textX, textY))
+    ui.pushStyleColor(ui.StyleColor.Text, textColor)
+    ui.text(deltaText)
+    ui.popStyleColor()
+    ui.popFont()
+    
+    -- Small speed difference indicator (optional - shows if gaining/losing)
+    if state.hasBestLap() and ghostSpeed then
+        local speedText = string.format("%+.0f", smoothedSpeedDiff)
+        ui.pushFont(ui.Font.Small)
+        local speedTextSize = ui.measureText(speedText)
+        local speedTextX = centerX - speedTextSize.x / 2
+        local speedTextY = barTop - 15
+        
+        local speedTextColor
+        if smoothedSpeedDiff > 1 then
+            speedTextColor = rgbm(0.4, 1, 0.4, 0.8)
+        elseif smoothedSpeedDiff < -1 then
+            speedTextColor = rgbm(1, 0.4, 0.4, 0.8)
+        else
+            speedTextColor = rgbm(0.8, 0.8, 0.8, 0.5)
+        end
+        
+        ui.setCursor(vec2(speedTextX, speedTextY))
+        ui.pushStyleColor(ui.StyleColor.Text, speedTextColor)
+        ui.text(speedText)
+        ui.popStyleColor()
+        ui.popFont()
+    end
 end

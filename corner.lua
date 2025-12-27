@@ -158,7 +158,11 @@ function corner.settingsUI(recordButton)
     ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.35, 0.5, 1))
     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.45, 0.6, 1))
     if ui.button("Open Lap Telemetry", vec2(140, 22)) then
-        settings.showWindow("telemetry")
+        -- Toggle the telemetry window via CSP API
+        local acc = ac.accessAppWindow("IMGUI_LUA_AC Tracer_telemetry")
+        if acc and acc:valid() then
+            acc:setVisible(true)
+        end
     end
     ui.popStyleColor(2)
     
