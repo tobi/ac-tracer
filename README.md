@@ -2,7 +2,7 @@
 
 A high-performance driver input telemetry and analysis app for Assetto Corsa, built with CSP Lua.
 
-![AC Tracer Screenshot](assets/telemetry.png)
+![AC Tracer Screenshot](./assets/screenshot.png)
 
 ## Installation
 
