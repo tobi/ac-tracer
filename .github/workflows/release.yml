@@ -20,19 +20,19 @@ jobs:
         run: |
           # Create the folder structure for Content Manager drag & drop
           # CSP Lua apps go in: assettocorsa/apps/lua/<AppName>/
-          mkdir -p package/apps/lua/traces
+          mkdir -p package/apps/lua/ac-tracer
 
           # Copy all Lua files from root (excludes reference/ folder)
-          cp *.lua package/apps/lua/traces/
+          cp *.lua package/apps/lua/ac-tracer/
 
           # Copy all configuration files
-          cp *.ini package/apps/lua/traces/
+          cp *.ini package/apps/lua/ac-tracer/
 
           # Copy all icons
-          cp *.png package/apps/lua/traces/
+          cp *.png package/apps/lua/ac-tracer/
 
           # Copy entire tracks directory
-          cp -r tracks package/apps/lua/traces/
+          cp -r tracks package/apps/lua/ac-tracer/
 
           # Create the zip file from within the package directory
           cd package
