@@ -1,12 +1,12 @@
-# Traces
+# AC Tracer
 
 A high-performance driver input telemetry and analysis app for Assetto Corsa, built with CSP Lua.
 
-![Traces Screenshot](assets/telemetry.png)
+![AC Tracer Screenshot](assets/telemetry.png)
 
 ## Installation
 
-All you need to do is [download the zip file](https://github.com/tobi/ac-tracer/archive/refs/heads/master.zip) from github.com/tobi/ac-tracer/ and drag & drop it onto Content Manager.
+[**Download ac-tracer.zip**](https://github.com/tobi/ac-tracer/releases/latest/download/ac-tracer.zip) and drag & drop it onto Content Manager.
 
 ## Features
 
