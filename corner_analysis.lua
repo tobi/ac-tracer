@@ -242,7 +242,7 @@ function corner_analysis.setViewedCorner(cornerNum, currentLap, referenceLap)
         frozenCorner.cornerNum = cornerNum
         frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
         
-        ac.log(string.format("Traces: Viewing corner %d analysis from telemetry (lap %d)", 
+        ac.log(string.format("AC Tracer: Viewing corner %d analysis from telemetry (lap %d)",
             cornerNum, frozenCorner.lapNumber))
     end
 end

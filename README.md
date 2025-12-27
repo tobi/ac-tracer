@@ -49,4 +49,4 @@ The app is highly configurable via `settings.ini` or the in-game settings window
 ## Hotkeys
 
 Bind a key to **Reset Best Lap** in Content Manager:
-- Settings → Assetto Corsa → Controls → Patch → find `APP_TRACES_RESET_BEST`
+- Settings → Assetto Corsa → Controls → Patch → find `APP_AC_TRACER_RESET_BEST`
