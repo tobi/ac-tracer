@@ -1,0 +1,59 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create Content Manager compatible package
+        run: |
+          # Create the folder structure for Content Manager drag & drop
+          # CSP Lua apps go in: assettocorsa/apps/lua/<AppName>/
+          mkdir -p package/apps/lua/ac-tracer
+
+          # Copy all Lua files from root (excludes reference/ folder)
+          cp *.lua package/apps/lua/ac-tracer/
+
+          # Copy all configuration files
+          cp *.ini package/apps/lua/ac-tracer/
+
+          # Copy all icons
+          cp *.png package/apps/lua/ac-tracer/
+
+          # Copy entire tracks directory
+          cp -r tracks package/apps/lua/ac-tracer/
+
+          # Create the zip file from within the package directory
+          cd package
+          zip -r ../ac-tracer.zip apps
+
+      - name: Delete existing release
+        run: |
+          gh release delete latest --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Release
+          body: |
+            ## AC Tracer - Content Manager Compatible Package
+
+            **Installation:** Drag and drop `ac-tracer.zip` into Content Manager to install.
+
+            This release is automatically updated on every push to master.
+          files: ac-tracer.zip
+          make_latest: true
