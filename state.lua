@@ -54,7 +54,7 @@ local initialized = false
 
 local function getStorageKey(suffix)
     local trackId = state.track or 'unknown'
-    return 'traces_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
+    return 'ac_tracer_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
 end
 
 local CORNERS_CSV_PATH = __dirname .. "/tracks/corners.csv"
@@ -183,7 +183,7 @@ local function saveCornersToFile()
     -- Write new CSV with header
     f = io.open(CORNERS_CSV_PATH, "w")
     if not f then
-        ac.log("Traces: Failed to open corners.csv for writing")
+        ac.log("AC Tracer: Failed to open corners.csv for writing")
         return false
     end
     
@@ -213,7 +213,7 @@ local function saveCornersToFile()
     end
     
     f:close()
-    ac.log("Traces: Saved " .. #state.trackCorners .. " corners to corners.csv")
+    ac.log("AC Tracer: Saved " .. #state.trackCorners .. " corners to corners.csv")
     return true
 end
 
@@ -260,7 +260,7 @@ local function loadCornersFromFile()
     f:close()
     
     if #state.trackCorners > 0 then
-        ac.log("Traces: Loaded " .. #state.trackCorners .. " corners from corners.csv for " .. state.track)
+        ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from corners.csv for " .. state.track)
         return true
     end
     return false
@@ -312,7 +312,7 @@ local function loadCornersFromStorage()
         end
     end
     
-    ac.log("Traces: Loaded " .. #state.trackCorners .. " corners from storage")
+    ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from storage")
     return true
 end
 
@@ -327,7 +327,7 @@ local function saveBestLap()
     local key = getStorageKey('bestlap')
     ac.storage[key] = state.bestLap:serialize()
     ac.storage[getStorageKey('bestlap_time')] = tostring(state.bestLap.time)
-    ac.log("Traces: Saved best lap to storage")
+    ac.log("AC Tracer: Saved best lap to storage")
 end
 
 --- Load best lap from ac.storage
@@ -339,7 +339,7 @@ local function loadBestLap()
     local loaded = lap.deserialize(data)
     if loaded and loaded:length() > 10 then
         state.bestLap = loaded
-        ac.log("Traces: Loaded best lap from storage")
+        ac.log("AC Tracer: Loaded best lap from storage")
         return true
     end
     return false
@@ -352,7 +352,7 @@ end
 --- Save history to ac.storage
 local function saveHistory()
     if not state.history or #state.history == 0 then 
-        ac.log("Traces: No history to save")
+        ac.log("AC Tracer: No history to save")
         return 
     end
     
@@ -363,7 +363,7 @@ local function saveHistory()
             if ser then
                 table.insert(serialized, ser)
             else
-                ac.log("Traces: Failed to serialize lap " .. i)
+                ac.log("AC Tracer: Failed to serialize lap " .. i)
             end
         end
     end
@@ -371,38 +371,38 @@ local function saveHistory()
     local key = getStorageKey('history')
     local dataToSave = stringify(serialized)
     ac.storage[key] = dataToSave
-    ac.log("Traces: Saved " .. #serialized .. " laps to history (key: " .. key .. ", size: " .. #dataToSave .. " bytes)")
+    ac.log("AC Tracer: Saved " .. #serialized .. " laps to history (key: " .. key .. ", size: " .. #dataToSave .. " bytes)")
 end
 
 --- Load history from ac.storage
 local function loadHistory()
     local key = getStorageKey('history')
-    ac.log("Traces: Loading history with key: " .. key)
+    ac.log("AC Tracer: Loading history with key: " .. key)
     local data = ac.storage[key]
     if not data then 
-        ac.log("Traces: No history data found in storage")
+        ac.log("AC Tracer: No history data found in storage")
         return false 
     end
     
-    ac.log("Traces: Found history data, parsing...")
+    ac.log("AC Tracer: Found history data, parsing...")
     local ok, serialized = pcall(function() return stringify.parse(data) end)
     if not ok or not serialized then 
-        ac.log("Traces: Failed to parse history data")
+        ac.log("AC Tracer: Failed to parse history data")
         return false 
     end
     
-    ac.log("Traces: Parsed " .. #serialized .. " entries, deserializing...")
+    ac.log("AC Tracer: Parsed " .. #serialized .. " entries, deserializing...")
     state.history = {}
     for i, lapStr in ipairs(serialized) do
         local loaded = lap.deserialize(lapStr)
         if loaded and loaded:length() > 10 then
             table.insert(state.history, loaded)
         else
-            ac.log("Traces: Failed to load lap " .. i)
+            ac.log("AC Tracer: Failed to load lap " .. i)
         end
     end
     
-    ac.log("Traces: Loaded " .. #state.history .. " laps from history")
+    ac.log("AC Tracer: Loaded " .. #state.history .. " laps from history")
     return #state.history > 0
 end
 
@@ -575,7 +575,7 @@ local function autoDetectCorners(lapData)
         c.apexSpeed = nil
     end
 
-    ac.log("Traces: Auto-detected " .. #corners .. " corners from lap")
+    ac.log("AC Tracer: Auto-detected " .. #corners .. " corners from lap")
     return corners
 end
 
@@ -633,22 +633,22 @@ function state.init(car)
         -- parts[1] = sessionId, parts[2] = track_car_index
         if parts[2] == currentTrackCar then
             state.sessionId = parts[1]
-            ac.log("Traces: Resumed session ID " .. state.sessionId .. " for " .. currentTrackCar)
+            ac.log("AC Tracer: Resumed session ID " .. state.sessionId .. " for " .. currentTrackCar)
         else
-            ac.log("Traces: Stored session ID was for " .. tostring(parts[2]) .. ", but we are now in " .. currentTrackCar)
+            ac.log("AC Tracer: Stored session ID was for " .. tostring(parts[2]) .. ", but we are now in " .. currentTrackCar)
         end
     end
     
     if not state.sessionId then
         state.sessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999))
         ac.storage[sessionKey] = state.sessionId .. "|" .. currentTrackCar
-        ac.log("Traces: Generated new session ID " .. state.sessionId .. " for " .. currentTrackCar)
+        ac.log("AC Tracer: Generated new session ID " .. state.sessionId .. " for " .. currentTrackCar)
     end
     
     state.lapNumber = car.lapCount
     state.trackPosition = car.splinePosition
     
-    ac.log("Traces: Session ID: " .. state.sessionId)
+    ac.log("AC Tracer: Session ID: " .. state.sessionId)
     
     -- Load corners (file first, then storage)
     if not loadCornersFromFile() then
@@ -684,7 +684,7 @@ local prevResetCounter = 0
 local function discardCurrentLap()
     state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
-    ac.log("Traces: Discarded current lap (teleport/pit/reset)")
+    ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
 end
 
 --- Update state (call from script.update)
@@ -864,7 +864,7 @@ function state.getCurrentSessionLaps()
     local laps = {}
     if not state.history or #state.history == 0 then return laps end
     if not state.sessionId then 
-        ac.log("Traces: getCurrentSessionLaps - no sessionId set")
+        ac.log("AC Tracer: getCurrentSessionLaps - no sessionId set")
         return laps 
     end
     
@@ -912,7 +912,7 @@ function state.resetBestLap()
     state.bestLapCorners = {}
     ac.storage[getStorageKey('bestlap')] = nil
     ac.storage[getStorageKey('bestlap_time')] = nil
-    ac.log("Traces: Reset best lap")
+    ac.log("AC Tracer: Reset best lap")
 end
 
 --- Get ghost value at position (for corner analysis)
@@ -1062,7 +1062,7 @@ end
 function state.clearCorners()
     state.trackCorners = {}
     saveCornersToStorage()
-    ac.log("Traces: Cleared corners")
+    ac.log("AC Tracer: Cleared corners")
 end
 
 --- Save corners to file
@@ -1187,7 +1187,7 @@ function state.stopCornerRecording(pos)
             endPos = nil,
             apexPos = nil
         })
-        ac.log("Traces: Skipped corner #" .. #state.trackCorners)
+        ac.log("AC Tracer: Skipped corner #" .. #state.trackCorners)
     else
         -- Hold = record corner
         local startPos = state.cornerRecordStart
@@ -1204,7 +1204,7 @@ function state.stopCornerRecording(pos)
             endPos = endPos,
             apexPos = apexPos
         })
-        ac.log("Traces: Recorded corner #" .. #state.trackCorners)
+        ac.log("AC Tracer: Recorded corner #" .. #state.trackCorners)
     end
     
     saveCornersToStorage()

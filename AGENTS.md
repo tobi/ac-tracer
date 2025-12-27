@@ -1,6 +1,6 @@
-# Traces App - Architecture & Data Structures
+# AC Tracer - Architecture & Data Structures
 
-This document describes the desired architecture, data structures, and data flow for the Traces app.
+This document describes the desired architecture, data structures, and data flow for AC Tracer.
 
 ---
 
@@ -455,7 +455,7 @@ This pattern:
 ## File Structure
 
 ```
-traces/
+ac-tracer/
 ├── tracks/
 │   ├── corners.csv           # All corner definitions (all tracks in one file)
 │   └── trackname.csv         # Reference lap CSVs (MoTeC export)
@@ -493,7 +493,7 @@ All modules use `state` and `lap` directly via `require()`. No init functions, n
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      traces.lua (main)                       │
+│                     traces.lua (main)                        │
 │  - Calls state.update(dt, car) each frame                   │
 │  - Orchestrates window rendering                            │
 └─────────────────────────────────────────────────────────────┘
@@ -532,21 +532,21 @@ C:\Users\<USERNAME>\Documents\Assetto Corsa\logs\custom_shaders_patch.log (Usern
 
 ### Reading Errors
 
-**MANDATORY**: When debugging, ALWAYS filter logs for the `traces/` folder to ignore noise from other CSP apps.
+**MANDATORY**: When debugging, ALWAYS filter logs for the `ac-tracer/` folder to ignore noise from other CSP apps.
 
 **PowerShell - Last 1000 lines with ERROR filter:**
 ```powershell
 Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR"
 ```
 
-**Filter for all errors in the traces app folder:**
+**Filter for all errors in the ac-tracer app folder:**
 ```powershell
-Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR.*traces/"
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Tail 1000 | Select-String "ERROR.*ac-tracer/"
 ```
 
 **Watch log in real-time:**
 ```powershell
-Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Wait | Select-String "ERROR.*traces/"
+Get-Content "C:\Users\ASR\Documents\Assetto Corsa\logs\custom_shaders_patch.log" -Wait | Select-String "ERROR.*ac-tracer/"
 ```
 
 ### Common Error Patterns

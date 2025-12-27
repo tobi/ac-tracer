@@ -1,4 +1,4 @@
--- Traces (Lua) - CSP high-performance port
+-- AC Tracer - CSP high-performance telemetry app
 -- Main script using centralized state architecture
 
 local state = require('state')
@@ -13,8 +13,8 @@ local colors = settings.colors
 local display = settings.display
 
 -- Hotkeys
-local resetButton = ac.ControlButton('__APP_TRACES_RESET_BEST')
-local recordCornerButton = ac.ControlButton('__APP_TRACES_RECORD_CORNER')
+local resetButton = ac.ControlButton('__APP_AC_TRACER_RESET_BEST')
+local recordCornerButton = ac.ControlButton('__APP_AC_TRACER_RECORD_CORNER')
 
 -- History for trace display (rolling window)
 local maxPoints = math.ceil(settings.timeWindow * settings.sampleRate)
@@ -243,7 +243,7 @@ local buttonColors = {
 
 local function getWindowName(windowId)
     -- CSP uses format: IMGUI_LUA_<AppName>_<windowId>
-    return "IMGUI_LUA_Traces_" .. windowId
+    return "IMGUI_LUA_ac-tracer_" .. windowId
 end
 
 local function isWindowVisible(windowId)
@@ -281,7 +281,7 @@ local function drawToggleButton(localPos, icon, tooltip, windowId)
     ui.pushStyleVar(ui.StyleVar.FrameRounding, 4)
     
     if ui.button(icon .. "##" .. windowId, buttonSize) then
-        ac.log("Traces: Button clicked for " .. windowId)
+        ac.log("AC Tracer: Button clicked for " .. windowId)
         toggleWindow(windowId)
     end
     

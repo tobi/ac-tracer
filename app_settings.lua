@@ -1,4 +1,4 @@
--- Settings module for Traces app
+-- Settings module for AC Tracer
 
 local lap = require('lap')
 
