@@ -96,7 +96,7 @@ Key fields:
 Creates a bindable hotkey control.
 
 ```lua
-local myButton = ac.ControlButton('traces/MyHotkey', {
+local myButton = ac.ControlButton('ac-tracer/MyHotkey', {
     keyboard = { key = ui.KeyIndex.T, ctrl = true },
     gamepad = ac.GamepadButton.Y
 })
@@ -270,10 +270,10 @@ end
 ```
 
 #### `ac.accessAppWindow(windowName)`
-Returns an `ac.AppWindowAccessor` for the specified window name. Window names for Lua apps are typically `appID/windowID` (e.g., `traces/corners`).
+Returns an `ac.AppWindowAccessor` for the specified window name. Window names for Lua apps are typically `appID/windowID` (e.g., `ac-tracer/corners`).
 
 ```lua
-local window = ac.accessAppWindow("traces/corners")
+local window = ac.accessAppWindow("ac-tracer/corners")
 if window and window:valid() then
     window:setVisible(true)
     ac.log("Corner window is now " .. (window:visible() and "visible" or "hidden"))
@@ -285,7 +285,7 @@ Specifically useful for toggling windows that might be hidden or not yet initial
 
 ```lua
 -- appID is the folder name, windowFilter is the window ID from manifest.ini
-ac.setAppWindowVisible("traces", "telemetry", true)
+ac.setAppWindowVisible("ac-tracer", "telemetry", true)
 ```
 
 ## Sources
