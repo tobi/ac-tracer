@@ -3,6 +3,7 @@
 
 local lap = require('lap')
 local settings = require('app_settings')
+local extendedBrake = require('extended-brake')
 
 local state = {}
 
@@ -773,16 +774,24 @@ function state.update(dt, car)
     sampleTimer = sampleTimer + dt
     if sampleTimer >= 1 / SAMPLE_RATE then
         sampleTimer = sampleTimer - 1 / SAMPLE_RATE
-        
+
         -- Ensure current lap exists
         if not state.currentLap then
             state.currentLap = lap.new(state.track, state.car, state.sessionId)
             state.currentLap.fuelLeftAtStart = car.fuel
         end
-        
+
         -- Add sample if valid (and not in pits)
         if car.lapTimeMs > 0 and car.splinePosition >= 0 and not inPit then
-            state.currentLap:addSample(car)
+            -- Try to get brake pressure from extended brake module (DLL)
+            -- Falls back to car.brake if DLL not available
+            local brakeValue, fromPressure = extendedBrake.getBrake(car)
+            local brakePressurePSI = nil
+            if fromPressure then
+                brakePressurePSI = extendedBrake.getDisplayPressure()
+            end
+
+            state.currentLap:addSample(car, brakeValue, brakePressurePSI)
         end
     end
     
@@ -1249,6 +1258,28 @@ function state.loadCSVAsBest(filePath)
         return true
     end
     return false
+end
+
+--------------------------------------------------------------------------------
+-- Extended Brake API
+--------------------------------------------------------------------------------
+
+--- Check if extended brake pressure data is available (from DLL)
+---@return boolean available True if brake pressure DLL is connected
+function state.hasBrakePressure()
+    return extendedBrake.isAvailable()
+end
+
+--- Get current brake pressure in PSI (live value)
+---@return number|nil pressure Brake pressure in PSI, nil if not available
+function state.getBrakePressure()
+    return extendedBrake.getDisplayPressure()
+end
+
+--- Get the extended brake module for direct access
+---@return table extendedBrake The extended brake module
+function state.getExtendedBrake()
+    return extendedBrake
 end
 
 return state

@@ -27,10 +27,12 @@ function lap.new(track, car, sessionId)
         time = 0,              -- milliseconds
         fuelLeftAtStart = 0,   -- liters
         lapNumberInSession = 0, -- Which lap number in this session (1, 2, 3...)
-        
+        hasBrakePressure = false, -- True if brake data is from pressure sensor
+
         -- Telemetry arrays (all synchronized, sampled at 15 Hz)
         throttle = {},         -- 0.0 to 1.0
-        brake = {},            -- 0.0 to 1.0
+        brake = {},            -- 0.0 to 1.0 (normalized from pressure or pedal input)
+        brakePressure = {},    -- PSI (raw brake pressure when available, nil otherwise)
         clutch = {},           -- 0.0 to 1.0 (inverted: 1.0 = pressed)
         steering = {},         -- 0.0 to 1.0 (normalized, 0.5 = straight)
         speed = {},            -- km/h
@@ -65,15 +67,26 @@ end
 --- Add a sample from current car state
 ---@param self table Lap instance
 ---@param car table Car state from ac.getCar()
-function lap:addSample(car)
+---@param brakeValue number|nil Brake value (0.0-1.0) - uses car.brake if nil
+---@param brakePressurePSI number|nil Raw brake pressure in PSI (optional)
+function lap:addSample(car, brakeValue, brakePressurePSI)
     table.insert(self.throttle, car.gas)
-    table.insert(self.brake, car.brake)
+    table.insert(self.brake, brakeValue or car.brake)
     table.insert(self.clutch, 1 - car.clutch)  -- Invert: 1.0 = foot on pedal
     table.insert(self.steering, lap.normalizeSteer(car.steer))
     table.insert(self.speed, car.speedKmh)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
     table.insert(self.tcActive, car.tractionControlInAction or false)
+
+    -- Store raw brake pressure if provided
+    if brakePressurePSI then
+        table.insert(self.brakePressure, brakePressurePSI)
+        self.hasBrakePressure = true
+    elseif self.brakePressure and #self.brakePressure > 0 then
+        -- Keep array in sync even if pressure becomes unavailable mid-lap
+        table.insert(self.brakePressure, 0)
+    end
 end
 
 --- Get number of samples in this lap
@@ -340,8 +353,10 @@ function lap:serialize()
         time = self.time,
         fuelLeftAtStart = self.fuelLeftAtStart,
         lapNumberInSession = self.lapNumberInSession,
+        hasBrakePressure = self.hasBrakePressure,
         throttle = self.throttle,
         brake = self.brake,
+        brakePressure = self.brakePressure,  -- Raw PSI values (may be empty)
         clutch = self.clutch,
         steering = self.steering,
         speed = self.speed,

@@ -34,9 +34,18 @@ jobs:
           # Copy entire tracks directory
           cp -r tracks package/apps/lua/ac-tracer/
 
+          # Copy dwrite.dll to AC root if it exists
+          # This DLL provides extended brake pressure telemetry via cphys_data
+          if [ -f "dll/dwrite.dll" ]; then
+            cp dll/dwrite.dll package/
+            echo "Included dwrite.dll for extended brake pressure support"
+          else
+            echo "Note: dwrite.dll not found in dll/ folder - extended brake pressure will not be available"
+          fi
+
           # Create the zip file from within the package directory
           cd package
-          zip -r ../ac-tracer.zip apps
+          zip -r ../ac-tracer.zip .
 
       - name: Delete existing release
         run: |
@@ -53,6 +62,9 @@ jobs:
             ## AC Tracer - Content Manager Compatible Package
 
             **Installation:** Drag and drop `ac-tracer.zip` into Content Manager to install.
+
+            ### Extended Brake Pressure Support
+            If `dwrite.dll` is included in this release, it will be installed to your Assetto Corsa root folder to enable real brake pressure telemetry from the cphys data provider.
 
             This release is automatically updated on every push to master.
           files: ac-tracer.zip
