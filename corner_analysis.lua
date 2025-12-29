@@ -577,39 +577,55 @@ end
 
 --- Draw direction indicator between solid (current) and dashed (ref) marker lines
 --- Shows which way the marker should move to match reference
---- Draws a connecting line with a single arrow in the middle if there's room
+--- Draws a line with arrow head: ---|>--- pointing toward reference
 ---@param x1 number X position of current (solid) line
 ---@param x2 number X position of reference (dashed) line
----@param y number Y position (top of bars)
+---@param y number Y position (top of graph area)
 ---@param color rgbm Arrow color
 local function drawDirectionArrows(x1, x2, y, color)
     if not x1 or not x2 then return end
 
-    local gap = x2 - x1  -- Positive = ref is to the right (we're early)
+    local gap = x2 - x1  -- Positive = ref is to the right
     local dist = math.abs(gap)
-    if dist < 12 then return end  -- Too close to show indicator
+    if dist < 16 then return end  -- Too close to show indicator
 
     local direction = gap > 0 and 1 or -1  -- 1 = right, -1 = left
 
-    -- Calculate the midpoint and boundaries (leave margin from both lines)
-    local margin = 4
+    -- Position at very top of the bars
+    local lineY = y + 4
+    local margin = 3
     local leftX = math.min(x1, x2) + margin
     local rightX = math.max(x1, x2) - margin
     local midX = (x1 + x2) / 2
 
-    -- Draw a faint connecting line between the two markers
-    local lineY = y + 5
-    ui.drawLine(vec2(leftX, lineY), vec2(rightX, lineY), theme.withAlpha(color, 0.4), 1)
+    -- Arrow head size
+    local arrowLen = math.min(5, dist / 4)
+    local arrowHalfH = 3
 
-    -- Draw a single arrow in the middle pointing toward reference
-    ui.pushFont(ui.Font.Small)
-    local arrowChar = direction > 0 and ">" or "<"
-    local textSize = ui.measureText(arrowChar)
-    ui.setCursor(vec2(midX - textSize.x / 2, y))
-    ui.pushStyleColor(ui.StyleColor.Text, color)
-    ui.text(arrowChar)
-    ui.popStyleColor()
-    ui.popFont()
+    -- Draw line from left to arrow base
+    local arrowBaseX = midX - direction * arrowLen
+    local arrowTipX = midX + direction * arrowLen
+
+    -- Left segment (from left edge to arrow base)
+    ui.drawLine(vec2(leftX, lineY), vec2(arrowBaseX, lineY), theme.withAlpha(color, 0.6), 1)
+
+    -- Right segment (from arrow tip to right edge)
+    ui.drawLine(vec2(arrowTipX, lineY), vec2(rightX, lineY), theme.withAlpha(color, 0.6), 1)
+
+    -- Arrow head pointing in direction (filled triangle)
+    ui.pathClear()
+    if direction > 0 then
+        -- Pointing right: >
+        ui.pathLineTo(vec2(arrowBaseX, lineY - arrowHalfH))
+        ui.pathLineTo(vec2(arrowTipX, lineY))
+        ui.pathLineTo(vec2(arrowBaseX, lineY + arrowHalfH))
+    else
+        -- Pointing left: <
+        ui.pathLineTo(vec2(arrowBaseX, lineY - arrowHalfH))
+        ui.pathLineTo(vec2(arrowTipX, lineY))
+        ui.pathLineTo(vec2(arrowBaseX, lineY + arrowHalfH))
+    end
+    ui.pathFillConvex(color)
 end
 
 local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
@@ -881,19 +897,17 @@ function corner_analysis.draw(dt, useKmh)
 
         -- Coast distance (lift to brake) - only show if > 10m
         local currentCoast, refCoast, coastDelta = scoring.getCoastDistances(displayData)
-        if currentCoast and currentCoast > 10 then
-            statsY = statsY + 4
-            statsY = statsY + ui_utils.sectionLabel("COAST", panelX)
-            if coastDelta then
-                local sign = coastDelta >= 0 and "+" or ""
-                local rounded = math.floor(math.abs(coastDelta) + 0.5)
+        if currentCoast and currentCoast > 10 and coastDelta then
+            local rounded = math.floor(math.abs(coastDelta) + 0.5)
+            if rounded > 5 then
+                statsY = statsY + 4
                 local direction = coastDelta >= 0 and "more" or "less"
-                local valueColor = theme.text.primary
-                if rounded > 5 then
-                    -- Notable coast difference
-                    valueColor = coastDelta > 0 and theme.delta.negativeFaint or theme.delta.positive
-                end
+                local valueColor = coastDelta > 0 and theme.delta.negativeFaint or theme.delta.positive
                 ui.setCursor(vec2(panelX, statsY))
+                ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+                ui.text("Coast:")
+                ui.popStyleColor()
+                ui.sameLine(panelX + labelW)
                 ui.pushStyleColor(ui.StyleColor.Text, valueColor)
                 ui.text(string.format("%dm %s", rounded, direction))
                 ui.popStyleColor()
