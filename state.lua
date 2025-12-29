@@ -57,7 +57,7 @@ local function getStorageKey(suffix)
     return 'ac_tracer_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
 end
 
-local CORNERS_CSV_PATH = __dirname .. "/tracks/corners.csv"
+local CORNERS_CSV_PATH = __dirname .. "/corners.csv"
 
 --------------------------------------------------------------------------------
 -- Persistence: Corners (CSV format)
@@ -239,17 +239,10 @@ local function loadCornersFromFile()
                 
                 if startPos and endPos then
                     cornerNum = cornerNum + 1
-                    local apexPos = (startPos + endPos) / 2
-                    if endPos < startPos then
-                        apexPos = (startPos + endPos + 1) / 2
-                        if apexPos >= 1 then apexPos = apexPos - 1 end
-                    end
-                    
                     table.insert(state.trackCorners, {
                         number = cornerNum,
                         startPos = startPos,
                         endPos = endPos,
-                        apexPos = apexPos,
                         name = fields[2] ~= "" and fields[2] or ("Corner " .. cornerNum)
                     })
                 end
@@ -297,16 +290,10 @@ local function loadCornersFromStorage()
     for i, pair in ipairs(pairs) do
         if pair and #pair == 2 then
             local startPos, endPos = pair[1], pair[2]
-            local apexPos = (startPos + endPos) / 2
-            if endPos < startPos then
-                apexPos = (startPos + endPos + 1) / 2
-                if apexPos >= 1 then apexPos = apexPos - 1 end
-            end
             table.insert(state.trackCorners, {
                 number = i,
                 startPos = startPos,
                 endPos = endPos,
-                apexPos = apexPos,
                 name = "Corner " .. i
             })
         end
@@ -532,8 +519,8 @@ local function autoDetectCorners(lapData)
                         shouldMerge = true
                         prevCorner.endIdx = exitIdx
                         prevCorner.endPos = lapData.pos[exitIdx]
+                        -- Track apex speed for corner detection quality (not stored in final corner)
                         if apexSpeed < (prevCorner.apexSpeed or 999) then
-                            prevCorner.apexPos = lapData.pos[apexIdx]
                             prevCorner.apexSpeed = apexSpeed
                         end
                     end
@@ -548,12 +535,11 @@ local function autoDetectCorners(lapData)
                             name = sectorName
                         end
                     end
-                    
+
                     table.insert(corners, {
                         number = cornerNum,
                         startPos = lapData.pos[entryIdx],
                         endPos = lapData.pos[exitIdx],
-                        apexPos = lapData.pos[apexIdx],
                         name = name,
                         endIdx = exitIdx,
                         apexSpeed = apexSpeed
@@ -873,13 +859,7 @@ function state.getCurrentSessionLaps()
             table.insert(laps, {lap = lapData, index = i})
         end
     end
-    
-    -- Debug: log session matching results
-    if #state.history > 0 and #laps == 0 then
-        ac.log(string.format("Traces: No current session laps found. SessionId: %s, First lap sessionId: %s", 
-            tostring(state.sessionId), tostring(state.history[1] and state.history[1].sessionId or "nil")))
-    end
-    
+
     return laps
 end
 
@@ -978,17 +958,22 @@ end
 ---@return table Corner analysis data
 function state.analyzeCorners(lapData)
     if not lapData or not state.trackCorners then return {} end
-    
+
     local analysis = {}
     for _, corner in ipairs(state.trackCorners) do
-        analysis[corner.number] = {
-            entrySpeed = lapData:getValueAtPos('speed', corner.startPos),
-            apexSpeed = lapData:getValueAtPos('speed', corner.apexPos),
-            exitSpeed = lapData:getValueAtPos('speed', corner.endPos),
-            brakePos = lapData:findBrakePoint(corner.startPos, corner.apexPos, settings.brakeThreshold),
-            liftOffPos = lapData:findLiftPoint(corner.startPos, corner.apexPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
-            maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)
-        }
+        if corner.startPos and corner.endPos then
+            -- Find apex dynamically for this lap
+            local apexPos, apexSpeed = lapData:findApex(corner.startPos, corner.endPos)
+            analysis[corner.number] = {
+                entrySpeed = lapData:getValueAtPos('speed', corner.startPos),
+                apexPos = apexPos,
+                apexSpeed = apexSpeed,
+                exitSpeed = lapData:getValueAtPos('speed', corner.endPos),
+                brakePos = lapData:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold),
+                liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
+                maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)
+            }
+        end
     end
     return analysis
 end
@@ -1094,17 +1079,6 @@ function state.updateCorner(cornerNum, updates)
             if updates.name ~= nil then
                 corner.name = (updates.name ~= "") and updates.name or nil
             end
-            -- Recalculate apex (only if both positions exist)
-            if corner.startPos and corner.endPos then
-                local apexPos = (corner.startPos + corner.endPos) / 2
-                if corner.endPos < corner.startPos then
-                    apexPos = (corner.startPos + corner.endPos + 1) / 2
-                    if apexPos >= 1 then apexPos = apexPos - 1 end
-                end
-                corner.apexPos = apexPos
-            else
-                corner.apexPos = nil
-            end
             ac.log(string.format("Traces: Updated corner %d", cornerNum))
             return true
         end
@@ -1139,20 +1113,13 @@ end
 ---@param endPos number End position (0.0-1.0)
 ---@return number Corner number of the new corner
 function state.insertCorner(startPos, endPos)
-    local apexPos = (startPos + endPos) / 2
-    if endPos < startPos then
-        apexPos = (startPos + endPos + 1) / 2
-        if apexPos >= 1 then apexPos = apexPos - 1 end
-    end
-    
     local newCorner = {
         number = #state.trackCorners + 1,
         startPos = startPos,
         endPos = endPos,
-        apexPos = apexPos,
         name = "Corner " .. (#state.trackCorners + 1)
     }
-    
+
     table.insert(state.trackCorners, newCorner)
     saveCornersToStorage()
     ac.log(string.format("Traces: Inserted corner %d at %.2f-%.2f", newCorner.number, startPos, endPos))
@@ -1184,25 +1151,18 @@ function state.stopCornerRecording(pos)
         table.insert(state.trackCorners, {
             number = #state.trackCorners + 1,
             startPos = nil,
-            endPos = nil,
-            apexPos = nil
+            endPos = nil
         })
         ac.log("AC Tracer: Skipped corner #" .. #state.trackCorners)
     else
         -- Hold = record corner
         local startPos = state.cornerRecordStart
         local endPos = pos
-        local apexPos = (startPos + endPos) / 2
-        if endPos < startPos then
-            apexPos = (startPos + endPos + 1) / 2
-            if apexPos >= 1 then apexPos = apexPos - 1 end
-        end
-        
+
         table.insert(state.trackCorners, {
             number = #state.trackCorners + 1,
             startPos = startPos,
-            endPos = endPos,
-            apexPos = apexPos
+            endPos = endPos
         })
         ac.log("AC Tracer: Recorded corner #" .. #state.trackCorners)
     end

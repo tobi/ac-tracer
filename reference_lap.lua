@@ -1,9 +1,9 @@
 -- Reference Lap module for AC Tracer
--- Handles CSV/ghost file loading with standalone or embedded rendering
+-- Provides a clean lap picker window (replaces popup)
 
 local lap = require('lap')
 
--- Deferred require to avoid circular dependency (state -> app_settings -> reference_lap -> state)
+-- Deferred require to avoid circular dependency
 local state = nil
 local function getState()
     if not state then
@@ -20,38 +20,25 @@ local M = {}
 
 local ghostFiles = nil
 local ghostFilesLastScan = 0
-local ghostCache = {}  -- Cache: filename -> lap
-local isLoadingGhost = false
-local selectedFile = nil  -- Currently selected file for preview
-local scrollY = 0
-
--- File info cache for preview
-local fileInfo = {}  -- filename -> { lapTime, samples, track, car }
+local isLoadingRef = false
+local scrollOffset = 0
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
-
-local function fileExists(path)
-    local f = io.open(path, "r")
-    if f then
-        f:close()
-        return true
-    end
-    return false
-end
-
-local function getTrackGhostName()
-    local trackId = ac.getTrackID()
-    if not trackId then return nil end
-    return trackId:gsub("[/\\:]", "_") .. ".csv"
-end
 
 local function formatLapTime(ms)
     if not ms or ms <= 0 then return "--:--.---" end
     local mins = math.floor(ms / 60000)
     local secs = (ms % 60000) / 1000
     return string.format("%d:%06.3f", mins, secs)
+end
+
+local function formatFileSize(bytes)
+    if not bytes then return "" end
+    if bytes < 1024 then return bytes .. "B" end
+    if bytes < 1024 * 1024 then return string.format("%.1fKB", bytes / 1024) end
+    return string.format("%.1fMB", bytes / (1024 * 1024))
 end
 
 --------------------------------------------------------------------------------
@@ -65,118 +52,63 @@ local function scanGhostFiles()
     end
 
     ghostFiles = {}
-    local tracksPath = __dirname .. "/tracks/"
+    local seenFiles = {}  -- Track by lowercase filename to avoid duplicates
 
-    -- Priority: track-specific file first
-    local trackGhost = getTrackGhostName()
-    if trackGhost and fileExists(tracksPath .. trackGhost) then
-        table.insert(ghostFiles, trackGhost)
-    end
+    -- Scan directories for CSV files
+    local searchPaths = {
+        { path = __dirname .. "/tracks/", source = "tracks" },
+        { path = "C:\\MoTeC\\Logged Data\\", source = "motec" },
+    }
 
-    -- Scan for all CSV files in tracks folder
-    local knownFiles = {"ier_daytona.csv"}
-    for _, filename in ipairs(knownFiles) do
-        if fileExists(tracksPath .. filename) then
-            local found = false
-            for _, existing in ipairs(ghostFiles) do
-                if existing == filename then
-                    found = true
-                    break
+    for _, dir in ipairs(searchPaths) do
+        if io.dirExists(dir.path) then
+            local csvFiles = io.scanDir(dir.path, "*.csv")
+            if csvFiles then
+                for _, filename in ipairs(csvFiles) do
+                    local lowerName = filename:lower()
+                    if not seenFiles[lowerName] then
+                        seenFiles[lowerName] = true
+                        local fullPath = dir.path .. filename
+                        table.insert(ghostFiles, {
+                            filename = filename,
+                            path = fullPath,
+                            source = dir.source,
+                            size = io.fileSize(fullPath)
+                        })
+                    end
                 end
-            end
-            if not found then
-                table.insert(ghostFiles, filename)
             end
         end
     end
+
+    -- Sort by filename
+    table.sort(ghostFiles, function(a, b) return a.filename < b.filename end)
 
     ghostFilesLastScan = now
     return ghostFiles
 end
 
-local function getFileInfo(filename)
-    if fileInfo[filename] then
-        return fileInfo[filename]
-    end
-
-    -- Quick scan of first few lines to get metadata
-    local tracksPath = __dirname .. "/tracks/"
-    local f = io.open(tracksPath .. filename, "r")
-    if not f then return nil end
-
-    local info = {
-        lapTime = nil,
-        samples = 0,
-        track = nil,
-        car = nil
-    }
-
-    -- Count lines (rough sample count)
-    local lineCount = 0
-    for _ in f:lines() do
-        lineCount = lineCount + 1
-    end
-    info.samples = math.max(0, lineCount - 1)  -- Subtract header
-
-    f:close()
-    fileInfo[filename] = info
-    return info
-end
-
 --------------------------------------------------------------------------------
--- Loading
---------------------------------------------------------------------------------
-
-local function loadGhostFile(filename)
-    if isLoadingGhost then return false end
-    isLoadingGhost = true
-
-    local st = getState()
-
-    -- Check cache first
-    local lapData = ghostCache[filename]
-
-    if lapData then
-        -- Cache hit
-        st.setBestLap(lapData)
-        ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples (cached)")
-    else
-        -- Cache miss - parse CSV using lap module
-        local filePath = __dirname .. "/tracks/" .. filename
-        lapData = lap.fromCSV(filePath, st.track, st.car)
-
-        if lapData then
-            ghostCache[filename] = lapData
-            st.setBestLap(lapData)
-            ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples from " .. filename)
-        else
-            ac.setMessage("Load Error", "Failed to load " .. filename)
-            isLoadingGhost = false
-            return false
-        end
-    end
-
-    isLoadingGhost = false
-    return true
-end
-
---------------------------------------------------------------------------------
--- UI Colors
+-- Colors
 --------------------------------------------------------------------------------
 
 local colors = {
-    bg = rgbm(0.12, 0.12, 0.14, 1),
-    cardBg = rgbm(0.16, 0.16, 0.18, 1),
-    cardBgHover = rgbm(0.20, 0.20, 0.22, 1),
-    cardBgSelected = rgbm(0.18, 0.22, 0.28, 1),
-    accent = rgbm(0.3, 0.6, 1.0, 1),
-    accentDim = rgbm(0.2, 0.4, 0.7, 0.8),
+    bg = rgbm(0.08, 0.08, 0.10, 0.98),
+    sectionBg = rgbm(0.12, 0.12, 0.14, 1),
     text = rgbm(0.9, 0.9, 0.9, 1),
-    textDim = rgbm(0.6, 0.6, 0.6, 1),
-    textMuted = rgbm(0.4, 0.4, 0.4, 1),
-    success = rgbm(0.3, 0.8, 0.3, 1),
-    warning = rgbm(1.0, 0.7, 0.2, 1),
-    separator = rgbm(0.25, 0.25, 0.28, 1),
+    textDim = rgbm(0.5, 0.5, 0.5, 1),
+    textBright = rgbm(1, 1, 1, 1),
+    accent = rgbm(0.3, 0.6, 1, 1),
+    success = rgbm(0.4, 0.9, 0.4, 1),
+    warning = rgbm(1, 0.7, 0.3, 1),
+    refColor = rgbm(0.5, 0.7, 1, 1),
+    curColor = rgbm(0.5, 1, 0.5, 1),
+    csvColor = rgbm(0.8, 0.6, 0.4, 1),
+    separator = rgbm(0.2, 0.2, 0.25, 1),
+    btnCur = rgbm(0.2, 0.4, 0.2, 1),
+    btnCurHover = rgbm(0.3, 0.5, 0.3, 1),
+    btnRef = rgbm(0.2, 0.2, 0.4, 1),
+    btnRefHover = rgbm(0.3, 0.3, 0.5, 1),
 }
 
 --------------------------------------------------------------------------------
@@ -199,30 +131,6 @@ function M.drawCompact()
     else
         ui.textColored("No reference lap", colors.textDim)
     end
-
-    ui.offsetCursorY(5)
-
-    -- Quick load buttons
-    local files = scanGhostFiles()
-    if #files == 0 then
-        ui.textColored("No CSV files in tracks/", colors.textMuted)
-    else
-        for i, filename in ipairs(files) do
-            if i > 3 then
-                ui.textColored("+" .. (#files - 3) .. " more...", colors.textMuted)
-                break
-            end
-
-            local displayName = filename:gsub("%.csv$", "")
-            if #displayName > 25 then
-                displayName = displayName:sub(1, 22) .. "..."
-            end
-
-            if ui.button(displayName, vec2(180, 0)) then
-                loadGhostFile(filename)
-            end
-        end
-    end
 end
 
 --------------------------------------------------------------------------------
@@ -232,183 +140,239 @@ end
 function M.draw(dt)
     local st = getState()
     local windowSize = ui.availableSpace()
-    local padding = 12
-    local cardHeight = 60
-    local cardGap = 6
+    local padding = 10
+    local rowHeight = 22
+    local btnW = 35
+    local labelW = windowSize.x - btnW * 2 - padding * 3 - 20
 
     -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, colors.bg, 0)
 
-    -- Header
-    ui.pushFont(ui.Font.Title)
-    ui.setCursor(vec2(padding, padding))
-    ui.text("Reference Lap")
+    local py = padding
+
+    -- Header with current reference
+    ui.pushFont(ui.Font.Main)
+    ui.setCursor(vec2(padding, py))
+    ui.textColored("Reference Lap", colors.textBright)
     ui.popFont()
+    py = py + 22
 
     -- Current reference status
-    local headerY = padding + 30
-    ui.setCursor(vec2(padding, headerY))
-
     if st.hasBestLap() then
         local bestTime = st.getBestLapTime()
         local bestLap = st.getBestLap()
-
-        -- Status card
-        local statusHeight = 50
-        ui.drawRectFilled(
-            vec2(padding, headerY),
-            vec2(windowSize.x - padding, headerY + statusHeight),
-            colors.cardBg, 4
-        )
-
-        -- Left side: lap time
-        ui.pushFont(ui.Font.Title)
-        ui.setCursor(vec2(padding + 12, headerY + 10))
+        ui.setCursor(vec2(padding, py))
+        ui.pushFont(ui.Font.Small)
         ui.textColored(formatLapTime(bestTime * 1000), colors.success)
+        ui.sameLine()
+        ui.textColored(" (" .. bestLap:length() .. " pts)", colors.textDim)
         ui.popFont()
 
-        -- Right side: clear button
-        local btnWidth = 60
-        ui.setCursor(vec2(windowSize.x - padding - btnWidth - 12, headerY + 12))
-        if ui.button("Clear", vec2(btnWidth, 26)) then
+        -- Clear button
+        ui.sameLine(windowSize.x - padding - 45)
+        if ui.button("Clear", vec2(40, 18)) then
             st.resetBestLap()
         end
-
-        -- Samples info
-        ui.pushFont(ui.Font.Small)
-        ui.setCursor(vec2(padding + 100, headerY + 16))
-        ui.textColored(bestLap:length() .. " samples", colors.textDim)
-        ui.popFont()
-
-        headerY = headerY + statusHeight + 10
     else
-        -- No reference card
-        local statusHeight = 40
-        ui.drawRectFilled(
-            vec2(padding, headerY),
-            vec2(windowSize.x - padding, headerY + statusHeight),
-            rgbm(0.18, 0.15, 0.12, 1), 4
-        )
-        ui.setCursor(vec2(padding + 12, headerY + 11))
-        ui.textColored("No reference lap loaded", colors.warning)
-
-        headerY = headerY + statusHeight + 10
+        ui.setCursor(vec2(padding, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("No reference loaded", colors.warning)
+        ui.popFont()
     end
+    py = py + 24
 
     -- Separator
-    ui.drawLine(
-        vec2(padding, headerY),
-        vec2(windowSize.x - padding, headerY),
-        colors.separator, 1
-    )
-    headerY = headerY + 10
+    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), colors.separator, 1)
+    py = py + 8
 
-    -- Section title
-    ui.pushFont(ui.Font.Main)
-    ui.setCursor(vec2(padding, headerY))
-    ui.textColored("Available Files", colors.textDim)
+    -- Column headers
+    ui.setCursor(vec2(padding, py))
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("Lap", colors.textDim)
+    ui.sameLine(windowSize.x - btnW * 2 - padding - 15)
+    ui.textColored("C", colors.textDim)
+    ui.sameLine(windowSize.x - btnW - padding - 5)
+    ui.textColored("R", colors.textDim)
     ui.popFont()
-    headerY = headerY + 22
+    py = py + 16
 
-    -- File list
-    local files = scanGhostFiles()
-    local listTop = headerY
-    local listHeight = windowSize.y - headerY - padding
+    -- Helper to draw a lap entry
+    local function drawLapEntry(lapData, idx, prefix, labelColor)
+        local lapTimeS = lapData.time / 1000
+        local mins = math.floor(lapTimeS / 60)
+        local secs = lapTimeS - mins * 60
+        local lapNum = (lapData.lapNumberInSession and lapData.lapNumberInSession > 0)
+            and string.format("L%d ", lapData.lapNumberInSession) or ""
+        local lapLabel = string.format("%s%s%d:%05.2f", lapNum, prefix, mins, secs)
+        local isBest = lapData == st.bestLap
 
-    if #files == 0 then
-        ui.setCursor(vec2(padding, listTop + 20))
-        ui.textColored("No CSV files found in tracks/ folder", colors.textMuted)
-
+        ui.setCursor(vec2(padding, py + 2))
         ui.pushFont(ui.Font.Small)
-        ui.setCursor(vec2(padding, listTop + 40))
-        ui.textColored("Place .csv files exported from MoTeC or similar", colors.textMuted)
-        ui.setCursor(vec2(padding, listTop + 54))
-        ui.textColored("in the app's tracks/ folder", colors.textMuted)
-        ui.popFont()
-    else
-        local y = listTop
-        for _, filename in ipairs(files) do
-            if y + cardHeight > windowSize.y - padding then
-                break  -- Stop if we'd overflow
-            end
-
-            local isSelected = selectedFile == filename
-            local isHovered = ui.rectHovered(vec2(padding, y), vec2(windowSize.x - padding, y + cardHeight))
-
-            -- Card background
-            local cardColor = isSelected and colors.cardBgSelected or (isHovered and colors.cardBgHover or colors.cardBg)
-            ui.drawRectFilled(
-                vec2(padding, y),
-                vec2(windowSize.x - padding, y + cardHeight),
-                cardColor, 4
-            )
-
-            -- Selection indicator
-            if isSelected then
-                ui.drawRectFilled(
-                    vec2(padding, y),
-                    vec2(padding + 3, y + cardHeight),
-                    colors.accent, 4
-                )
-            end
-
-            -- Filename
-            local displayName = filename:gsub("%.csv$", "")
-            ui.setCursor(vec2(padding + 12, y + 8))
-            ui.textColored(displayName, colors.text)
-
-            -- File info
-            local info = getFileInfo(filename)
-            if info then
-                ui.pushFont(ui.Font.Small)
-                ui.setCursor(vec2(padding + 12, y + 28))
-                local infoText = info.samples .. " samples"
-                if info.lapTime then
-                    infoText = formatLapTime(info.lapTime) .. " · " .. infoText
-                end
-                ui.textColored(infoText, colors.textDim)
-                ui.popFont()
-            end
-
-            -- Track-specific indicator
-            local trackGhost = getTrackGhostName()
-            if filename == trackGhost then
-                ui.pushFont(ui.Font.Small)
-                local tag = "CURRENT TRACK"
-                local tagSize = ui.measureText(tag)
-                ui.setCursor(vec2(windowSize.x - padding - tagSize.x - 50, y + 10))
-                ui.textColored(tag, colors.accent)
-                ui.popFont()
-            end
-
-            -- Load button
-            local btnWidth = 50
-            ui.setCursor(vec2(windowSize.x - padding - btnWidth - 12, y + 18))
-            if ui.button("Load##" .. filename, vec2(btnWidth, 24)) then
-                loadGhostFile(filename)
-            end
-
-            -- Click to select
-            if isHovered and ui.mouseClicked(0) then
-                selectedFile = filename
-            end
-
-            -- Double-click to load
-            if isHovered and ui.mouseDoubleClicked(0) then
-                loadGhostFile(filename)
-            end
-
-            y = y + cardHeight + cardGap
+        ui.pushStyleColor(ui.StyleColor.Text, isBest and colors.refColor or labelColor)
+        ui.text(lapLabel)
+        if isBest then
+            ui.sameLine()
+            ui.textColored("(ref)", colors.textDim)
         end
+        ui.popStyleColor()
+        ui.popFont()
+
+        -- "C" button (set as current to view)
+        ui.setCursor(vec2(windowSize.x - btnW * 2 - padding - 10, py))
+        ui.pushStyleColor(ui.StyleColor.Button, colors.btnCur)
+        ui.pushStyleColor(ui.StyleColor.ButtonHovered, colors.btnCurHover)
+        if ui.button("C##c" .. idx, vec2(btnW, 18)) then
+            -- This would need integration with lap_telemetry's selectedLapIndex
+            -- For now, just add to history at front
+            table.insert(st.history, 1, lapData)
+            ac.setMessage("Viewing", string.format("%d:%05.2f", mins, secs))
+        end
+        ui.popStyleColor(2)
+
+        -- "R" button (set as reference)
+        ui.sameLine()
+        ui.pushStyleColor(ui.StyleColor.Button, colors.btnRef)
+        ui.pushStyleColor(ui.StyleColor.ButtonHovered, colors.btnRefHover)
+        if ui.button("R##r" .. idx, vec2(btnW, 18)) then
+            st.setBestLap(lapData)
+            ac.setMessage("Reference Set", string.format("%d:%05.2f", mins, secs))
+        end
+        ui.popStyleColor(2)
+
+        py = py + rowHeight
     end
-end
 
---------------------------------------------------------------------------------
--- Window function for standalone rendering
---------------------------------------------------------------------------------
+    -- Current Session Laps
+    ui.setCursor(vec2(padding, py))
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("This Session", colors.curColor)
+    ui.popFont()
+    py = py + 16
 
-function M.windowReferenceLap(dt)
-    M.draw(dt)
+    local currentSessionLaps = st.getCurrentSessionLaps()
+    if #currentSessionLaps > 0 then
+        local shown = 0
+        for _, entry in ipairs(currentSessionLaps) do
+            if shown < 6 and py < windowSize.y - 150 then
+                drawLapEntry(entry.lap, entry.index, "", colors.text)
+                shown = shown + 1
+            end
+        end
+    else
+        ui.setCursor(vec2(padding + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("No laps yet", colors.textDim)
+        ui.popFont()
+        py = py + 18
+    end
+
+    py = py + 6
+    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), colors.separator, 1)
+    py = py + 8
+
+    -- Previous Session Laps
+    ui.setCursor(vec2(padding, py))
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("Previous Sessions", colors.refColor)
+    ui.popFont()
+    py = py + 16
+
+    local prevSessionLaps = st.getPreviousSessionLaps()
+    if #prevSessionLaps > 0 then
+        local shown = 0
+        for _, entry in ipairs(prevSessionLaps) do
+            if shown < 4 and py < windowSize.y - 100 then
+                drawLapEntry(entry.lap, entry.index + 1000, "", colors.text)
+                shown = shown + 1
+            end
+        end
+    else
+        ui.setCursor(vec2(padding + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("No saved laps", colors.textDim)
+        ui.popFont()
+        py = py + 18
+    end
+
+    py = py + 6
+    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), colors.separator, 1)
+    py = py + 8
+
+    -- CSV Files
+    ui.setCursor(vec2(padding, py))
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("CSV Files (tracks/)", colors.csvColor)
+    ui.popFont()
+    py = py + 16
+
+    local files = scanGhostFiles()
+    if #files > 0 then
+        for j, fileInfo in ipairs(files) do
+            if py < windowSize.y - 30 then
+                local displayName = fileInfo.filename:gsub("%.csv$", "")
+
+                ui.setCursor(vec2(padding, py + 2))
+                ui.pushFont(ui.Font.Small)
+                ui.pushStyleColor(ui.StyleColor.Text, colors.text)
+                ui.text(displayName)
+                ui.popStyleColor()
+
+                -- Size hint
+                ui.sameLine()
+                ui.textColored(" " .. formatFileSize(fileInfo.size), colors.textDim)
+                ui.popFont()
+
+                -- "C" button
+                ui.setCursor(vec2(windowSize.x - btnW * 2 - padding - 10, py))
+                ui.pushStyleColor(ui.StyleColor.Button, colors.btnCur)
+                ui.pushStyleColor(ui.StyleColor.ButtonHovered, colors.btnCurHover)
+                if ui.button("C##csvc" .. j, vec2(btnW, 18)) and not isLoadingRef then
+                    isLoadingRef = true
+                    local trackLength = ac.getSim().trackLengthM
+                    local loaded, warnings = lap.fromCSV(fileInfo.path, st.track, st.car, trackLength)
+                    if loaded then
+                        table.insert(st.history, 1, loaded)
+                        table.insert(st.historyReferences, loaded)
+                        local msg = string.format("%d:%05.2f",
+                            math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
+                        ac.setMessage("CSV Loaded", msg)
+                    else
+                        ac.setMessage("Error", warnings and warnings[1] or "Failed")
+                    end
+                    isLoadingRef = false
+                end
+                ui.popStyleColor(2)
+
+                -- "R" button
+                ui.sameLine()
+                ui.pushStyleColor(ui.StyleColor.Button, colors.btnRef)
+                ui.pushStyleColor(ui.StyleColor.ButtonHovered, colors.btnRefHover)
+                if ui.button("R##csvr" .. j, vec2(btnW, 18)) and not isLoadingRef then
+                    isLoadingRef = true
+                    local trackLength = ac.getSim().trackLengthM
+                    local loaded, warnings = lap.fromCSV(fileInfo.path, st.track, st.car, trackLength)
+                    if loaded then
+                        st.setBestLap(loaded)
+                        table.insert(st.historyReferences, loaded)
+                        local msg = string.format("%d:%05.2f",
+                            math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
+                        ac.setMessage("Reference Set", msg)
+                    else
+                        ac.setMessage("Error", warnings and warnings[1] or "Failed")
+                    end
+                    isLoadingRef = false
+                end
+                ui.popStyleColor(2)
+
+                py = py + rowHeight
+            end
+        end
+    else
+        ui.setCursor(vec2(padding + 10, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("No CSV files in tracks/", colors.textDim)
+        ui.popFont()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -417,7 +381,6 @@ end
 
 function M.refresh()
     ghostFiles = nil
-    fileInfo = {}
 end
 
 return M

@@ -30,7 +30,7 @@ function lap.new(track, car, sessionId)
         time = 0,              -- milliseconds
         fuelLeftAtStart = 0,   -- liters
         lapNumberInSession = 0, -- Which lap number in this session (1, 2, 3...)
-        
+
         -- Telemetry arrays (all synchronized, sampled at 15 Hz)
         throttle = {},         -- 0.0 to 1.0
         brake = {},            -- 0.0 to 1.0
@@ -40,6 +40,10 @@ function lap.new(track, car, sessionId)
         pos = {},              -- spline position 0.0 to 1.0
         times = {},            -- seconds (elapsed lap time at each sample)
         tcActive = {},         -- boolean: traction control active
+        fuel = {},             -- liters remaining
+
+        -- CSV import metadata (nil for in-game recorded laps)
+        csvSource = nil,       -- { throttle, brake, speed, steering, clutch, position, fuel }
     }, lap)
 end
 
@@ -78,6 +82,7 @@ function lap:addSample(car)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
     table.insert(self.tcActive, car.tractionControlInAction or false)
+    table.insert(self.fuel, car.fuel or 0)  -- Fuel remaining in liters
 end
 
 --- Get number of samples in this lap
@@ -351,6 +356,8 @@ function lap:serialize()
         speed = self.speed,
         pos = self.pos,
         times = self.times,  -- Actual elapsed time at each sample
+        fuel = self.fuel,    -- Fuel remaining in liters
+        csvSource = self.csvSource,  -- CSV column mappings
     }
     return stringify(data)
 end
@@ -413,6 +420,9 @@ local CSV_COLUMN_MAPPINGS = {
     -- Brake: prefer pressure over pedal position for accuracy
     brakePressure = { "brake pressure f", "brake pressure fr", "p_f_brake" },
     brakePos = { "brake pos" },  -- fallback only
+
+    -- Fuel
+    fuel = { "fuel remaining", "fuel level", "fuel" },
 }
 
 -- Unit conversions based on CSV unit row
@@ -431,6 +441,12 @@ local UNIT_CONVERSIONS = {
         ["s"] = 1.0,
         ["ms"] = 0.001,
         ["min"] = 60.0,
+    },
+    fuel = {
+        ["l"] = 1.0,        -- liters (standard)
+        ["kg"] = 1.0,       -- kg (approximate, depends on fuel density)
+        ["gal"] = 3.78541,  -- US gallons to liters
+        ["%"] = 1.0,        -- percentage (kept as-is)
     },
 }
 
@@ -556,7 +572,7 @@ end
 --- Returns the lap data, ending position, and whether it completed
 local function parseSingleLap(lines, startIdx, indices, useDistance, trackLength,
                               timeFactor, distanceFactor, speedFactor,
-                              useBrakePressure, brakePressureMax, track, car)
+                              useBrakePressure, brakePressureMax, track, car, fuelFactor)
     local SAMPLE_INTERVAL = 1 / lap.SAMPLE_RATE
     local steeringCap = math.pi
 
@@ -634,6 +650,19 @@ local function parseSingleLap(lines, startIdx, indices, useDistance, trackLength
 
                         local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
 
+                        -- Fuel (if available)
+                        local fuel = nil
+                        if indices.fuel then
+                            fuel = tonumber(fields.fuel)
+                            if fuel then
+                                fuel = fuel * (fuelFactor or 1.0)
+                                -- Store first fuel reading as fuelLeftAtStart
+                                if #l.fuel == 0 then
+                                    l.fuelLeftAtStart = fuel
+                                end
+                            end
+                        end
+
                         local sampleTime = time - firstTime
                         table.insert(l.times, sampleTime)
                         table.insert(l.pos, pos)
@@ -642,6 +671,7 @@ local function parseSingleLap(lines, startIdx, indices, useDistance, trackLength
                         table.insert(l.clutch, 1 - clutch)
                         table.insert(l.steering, steerNorm)
                         table.insert(l.speed, speed)
+                        table.insert(l.fuel, fuel or 0)
                     end
                 end
             end
@@ -711,8 +741,15 @@ function lap.fromCSV(filePath, track, car, trackLength)
 
     -- Log which columns were selected
     if indices.throttle then
-        local throttleCol = headers[indices.throttle]
-        ac.log("lap.fromCSV: Using throttle column: " .. throttleCol)
+        ac.log("lap.fromCSV: Using throttle column: " .. headers[indices.throttle])
+    end
+    if indices.speed then
+        ac.log("lap.fromCSV: Using speed column: " .. headers[indices.speed])
+    end
+    if indices.fuel then
+        ac.log("lap.fromCSV: Using fuel column index: " .. indices.fuel .. " = " .. headers[indices.fuel])
+    else
+        ac.log("lap.fromCSV: No fuel column found in CSV")
     end
 
     -- Check for position/distance data
@@ -758,11 +795,23 @@ function lap.fromCSV(filePath, track, car, trackLength)
 
     -- Determine brake source (prefer pressure over position)
     local useBrakePressure = indices.brakePressure ~= nil
-    -- Fixed max brake pressure for normalization (100 bar = typical max for real car brake systems)
-    local brakePressureMax = 100
+    -- Max brake pressure for normalization depends on unit
+    -- Typical max: 100 bar, 1450 psi, 10000 kPa
+    local brakePressureMax = 100  -- default bar
+    local brakePressureUnit = nil
+
+    if useBrakePressure and units then
+        local brakeHeader = headers[indices.brakePressure]
+        brakePressureUnit = units[brakeHeader]
+        if brakePressureUnit == "psi" then
+            brakePressureMax = 1450  -- ~100 bar in psi
+        elseif brakePressureUnit == "kpa" then
+            brakePressureMax = 10000  -- ~100 bar in kPa
+        end
+    end
 
     if useBrakePressure then
-        ac.log("lap.fromCSV: Using brake pressure data (normalizing to 100 bar max)")
+        ac.log("lap.fromCSV: Using brake pressure data (unit: " .. (brakePressureUnit or "bar") .. ", max: " .. brakePressureMax .. ")")
     elseif indices.brakePos then
         ac.log("lap.fromCSV: Using brake pedal position (pressure not available)")
     else
@@ -771,15 +820,26 @@ function lap.fromCSV(filePath, track, car, trackLength)
 
     -- Get unit conversion factors
     local speedUnit = nil
-    for _, colName in ipairs(CSV_COLUMN_MAPPINGS.speed) do
-        if units and units[colName] then
-            speedUnit = units[colName]
-            break
-        end
+    if indices.speed and units then
+        local speedHeader = headers[indices.speed]
+        speedUnit = units[speedHeader]
     end
     local speedFactor = speedUnit and UNIT_CONVERSIONS.speed[speedUnit] or 3.6
     local timeFactor = UNIT_CONVERSIONS.time[timeUnit] or 1.0
     local distanceFactor = UNIT_CONVERSIONS.distance[distanceUnit] or 1.0
+
+    -- Get fuel unit conversion
+    local hasFuel = indices.fuel ~= nil
+    local fuelUnit = nil
+    if hasFuel and units then
+        local fuelHeader = headers[indices.fuel]
+        fuelUnit = units[fuelHeader]
+    end
+    local fuelFactor = fuelUnit and UNIT_CONVERSIONS.fuel[fuelUnit] or 1.0
+
+    if hasFuel then
+        ac.log("lap.fromCSV: Using fuel column: " .. headers[indices.fuel] .. " (unit: " .. (fuelUnit or "unknown") .. ", factor: " .. fuelFactor .. ")")
+    end
 
     -- Parse all laps in the file
     local allLaps = {}
@@ -789,7 +849,7 @@ function lap.fromCSV(filePath, track, car, trackLength)
         local lapData, endIdx, completed = parseSingleLap(
             allLines, currentIdx, indices, useDistance, trackLength,
             timeFactor, distanceFactor, speedFactor,
-            useBrakePressure, brakePressureMax, track, car)
+            useBrakePressure, brakePressureMax, track, car, fuelFactor)
 
         if #lapData.pos >= 10 then
             table.insert(allLaps, {
@@ -836,6 +896,18 @@ function lap.fromCSV(filePath, track, car, trackLength)
         table.insert(warnings, string.format("INFO: Found %d laps - selected fastest (%.3fs)",
             #allLaps, bestLap.time / 1000))
     end
+
+    -- Store CSV column source metadata for UI display
+    bestLap.csvSource = {
+        throttle = indices.throttle and headers[indices.throttle] or nil,
+        brake = useBrakePressure and headers[indices.brakePressure] or (indices.brakePos and headers[indices.brakePos] or nil),
+        speed = indices.speed and headers[indices.speed] or nil,
+        steering = indices.steering and headers[indices.steering] or nil,
+        clutch = indices.clutch and headers[indices.clutch] or nil,
+        position = useDistance and (indices.distance and headers[indices.distance] or nil) or (indices.pos and headers[indices.pos] or nil),
+        time = indices.time and headers[indices.time] or nil,
+        fuel = indices.fuel and headers[indices.fuel] or nil,
+    }
 
     -- Log warnings
     for _, warn in ipairs(warnings) do

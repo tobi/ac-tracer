@@ -140,8 +140,8 @@ state = {
             number = number,     -- Corner number (1, 2, 3, ...)
             name = string,       -- Display name (e.g., "Bus Stop")
             startPos = number,   -- Spline position where corner starts
-            endPos = number,     -- Spline position where corner ends
-            apexPos = number     -- Spline position of apex
+            endPos = number      -- Spline position where corner ends
+            -- Note: apexPos is calculated dynamically per-lap using lap:findApex()
         },
         ...
     },
@@ -233,8 +233,8 @@ corner = {
     number = number,      -- Corner number for ordering (1, 2, 3, ...)
     name = string,        -- Display name (e.g., "Bus Stop", defaults to "Corner N")
     startPos = number,    -- Spline position where corner starts (0.0 to 1.0)
-    endPos = number,      -- Spline position where corner ends (0.0 to 1.0)
-    apexPos = number      -- Spline position of the apex (0.0 to 1.0)
+    endPos = number       -- Spline position where corner ends (0.0 to 1.0)
+    -- Note: apex is calculated dynamically per-lap using lap:findApex(startPos, endPos)
 }
 ```
 
@@ -459,15 +459,21 @@ This pattern:
 
 ```
 ac-tracer/
+├── corners.csv               # All corner definitions (all tracks in one file)
 ├── tracks/
-│   ├── corners.csv           # All corner definitions (all tracks in one file)
-│   └── trackname.csv         # Reference lap CSVs (MoTeC export)
+│   └── trackname.csv         # Reference lap CSVs (MoTeC export or local)
 └── ...
 ```
 
+### CSV Search Paths
+
+Reference lap CSVs are searched in these directories:
+1. `./tracks/` - Local to the plugin
+2. `C:\MoTeC\Logged Data\` - Standard MoTeC export location
+
 ### Corner Files (`corners.csv`)
 
-Manual corner definitions are saved in a single CSV file with format:
+Manual corner definitions are saved in a single CSV file in the plugin root:
 
 ```csv
 track,name,start,end
@@ -486,7 +492,7 @@ When saving corners, any existing corners for the same track are removed before 
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - all 0.0-1.0 for consistent display
 - **Time in milliseconds** - internal storage uses ms for precision
-- **Corner files** - saved as `tracks/corners.csv`
+- **Corner files** - saved as `./corners.csv` (plugin root)
 
 ---
 

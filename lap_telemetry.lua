@@ -89,50 +89,37 @@ local function scanGhostFiles()
     if ghostFiles and (now - ghostFilesLastScan) < 5 then
         return ghostFiles
     end
-    
+
     ghostFiles = {}
     local seenFiles = {}
-    
-    -- 1. Scan tracks/ folder (exclude corners.csv)
-    local tracksPath = __dirname .. "/tracks/"
-    if io.dirExists(tracksPath) then
-        local trackFiles = io.scanDir(tracksPath, "*.csv")
-        if trackFiles then
-            for _, filename in ipairs(trackFiles) do
-                if filename:lower() ~= "corners.csv" and not seenFiles[filename:lower()] then
-                    seenFiles[filename:lower()] = true
-                    local fullPath = tracksPath .. filename
-                    table.insert(ghostFiles, {
-                        path = fullPath,
-                        filename = filename,
-                        source = "tracks",
-                        size = io.fileSize(fullPath)
-                    })
+
+    -- Scan directories for CSV files
+    local searchPaths = {
+        { path = __dirname .. "/tracks/", source = "tracks" },
+        { path = "C:\\MoTeC\\Logged Data\\", source = "motec" },
+    }
+
+    for _, dir in ipairs(searchPaths) do
+        if io.dirExists(dir.path) then
+            local csvFiles = io.scanDir(dir.path, "*.csv")
+            if csvFiles then
+                for _, filename in ipairs(csvFiles) do
+                    local lowerName = filename:lower()
+                    if not seenFiles[lowerName] then
+                        seenFiles[lowerName] = true
+                        local fullPath = dir.path .. filename
+                        table.insert(ghostFiles, {
+                            path = fullPath,
+                            filename = filename,
+                            source = dir.source,
+                            size = io.fileSize(fullPath)
+                        })
+                    end
                 end
             end
         end
     end
-    
-    -- 2. Scan MoTeC folder
-    local motecPath = "C:\\MoTeC\\Logged Data\\"
-    if io.dirExists(motecPath) then
-        local motecFiles = io.scanDir(motecPath, "*.csv")
-        if motecFiles then
-            for _, filename in ipairs(motecFiles) do
-                if not seenFiles[filename:lower()] then
-                    seenFiles[filename:lower()] = true
-                    local fullPath = motecPath .. filename
-                    table.insert(ghostFiles, {
-                        path = fullPath,
-                        filename = filename,
-                        source = "motec",
-                        size = io.fileSize(fullPath)
-                    })
-                end
-            end
-        end
-    end
-    
+
     ghostFilesLastScan = now
     return ghostFiles
 end
@@ -196,12 +183,16 @@ local function getValueAtTime(lapObj, time, field)
     
     lo = math.clamp(lo, 1, lapObj:length())
     hi = math.clamp(hi, 1, lapObj:length())
-    
-    if lo == hi then return lapObj[field][lo] end
-    
-    local v1 = lapObj[field][lo]
-    local v2 = lapObj[field][hi]
-    
+
+    -- Check if field exists on this lap
+    local fieldData = lapObj[field]
+    if not fieldData or #fieldData == 0 then return nil end
+
+    if lo == hi then return fieldData[lo] end
+
+    local v1 = fieldData[lo]
+    local v2 = fieldData[hi]
+
     if not v1 or not v2 then return v1 or v2 end
     return v1 + (v2 - v1) * t
 end
@@ -1035,12 +1026,14 @@ function lap_telemetry.draw(dt)
             cursorValues.brake = getValueAtTime(selectedLap, cursorTime, "brake")
             cursorValues.speed = getValueAtTime(selectedLap, cursorTime, "speed")
             cursorValues.steering = getValueAtTime(selectedLap, cursorTime, "steering")
-            
+            cursorValues.fuel = getValueAtTime(selectedLap, cursorTime, "fuel")
+
             if referenceLap and cursorValues.pos then
                 cursorValues.refThrottle = referenceLap:getValueAtPos("throttle", cursorValues.pos)
                 cursorValues.refBrake = referenceLap:getValueAtPos("brake", cursorValues.pos)
                 cursorValues.refSpeed = referenceLap:getValueAtPos("speed", cursorValues.pos)
                 cursorValues.refSteering = referenceLap:getValueAtPos("steering", cursorValues.pos)
+                cursorValues.refFuel = referenceLap:getValueAtPos("fuel", cursorValues.pos)
             end
             
             if cursorValues.throttle then
@@ -1174,7 +1167,29 @@ function lap_telemetry.draw(dt)
                 end
                 ui.popFont()
                 py = py + lineH
-                
+
+                -- Fuel (show if lap has any fuel data)
+                local hasFuelData = selectedLap.fuel and #selectedLap.fuel > 0
+                if hasFuelData then
+                    ui.setCursor(vec2(panelX + 10, py))
+                    ui.pushFont(ui.Font.Small)
+                    ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                    ui.text("Fuel")
+                    ui.popStyleColor()
+                    ui.sameLine(panelX + 70)
+                    ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 0.8, 0.3, 1))  -- Orange for fuel
+                    ui.text(string.format("%.1fL", cursorValues.fuel or 0))
+                    ui.popStyleColor()
+                    if cursorValues.refFuel then
+                        ui.sameLine(panelX + 110)
+                        ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                        ui.text(string.format("(%.1fL)", cursorValues.refFuel))
+                        ui.popStyleColor()
+                    end
+                    ui.popFont()
+                    py = py + lineH
+                end
+
                 -- Position
                 if cursorValues.pos then
                     py = py + 5
@@ -1200,8 +1215,51 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.Text, colors.textBright)
                     ui.text(string.format("%d m", math.floor(cursorValues.pos * trackLength)))
                     ui.popStyleColor()
+                    ui.popFont()
+                    py = py + lineH
                 end
-                
+
+                -- CSV Source columns (for imported laps)
+                if selectedLap and selectedLap.csvSource then
+                    py = py + 5
+                    ui.drawLine(vec2(panelX + 5, py), vec2(panelX + panelW - 5, py), colors.grid, 1)
+                    py = py + 8
+
+                    ui.setCursor(vec2(panelX + 10, py))
+                    ui.pushFont(ui.Font.Small)
+                    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.8, 0.7, 0.5, 1))
+                    ui.text("CSV Columns")
+                    ui.popStyleColor()
+                    ui.popFont()
+                    py = py + lineH - 4
+
+                    local csvLineH = 14
+                    local src = selectedLap.csvSource
+
+                    local function drawCsvRow(label, value)
+                        if value then
+                            ui.setCursor(vec2(panelX + 10, py))
+                            ui.pushFont(ui.Font.Small)
+                            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+                            ui.text(label .. ":")
+                            ui.popStyleColor()
+                            ui.sameLine(panelX + 60)
+                            ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.7, 0.7, 0.6, 1))
+                            ui.text(value)
+                            ui.popStyleColor()
+                            ui.popFont()
+                            py = py + csvLineH
+                        end
+                    end
+
+                    drawCsvRow("Throt", src.throttle)
+                    drawCsvRow("Brake", src.brake)
+                    drawCsvRow("Speed", src.speed)
+                    drawCsvRow("Steer", src.steering)
+                    drawCsvRow("Fuel", src.fuel)
+                    drawCsvRow("Pos", src.position)
+                end
+
                 -- Help text
                 py = panelY + panelH - 40
                 ui.setCursor(vec2(panelX + 10, py))
@@ -1526,11 +1584,7 @@ function lap_telemetry.draw(dt)
         if #files > 0 then
             for j, fileInfo in ipairs(files) do
                 if j <= 8 then  -- Limit CSV files shown
-                    -- Truncate long filenames
                     local displayName = fileInfo.filename
-                    if #displayName > 18 then
-                        displayName = string.sub(displayName, 1, 15) .. "..."
-                    end
                     
                     -- File label with size
                     local sizeStr = formatFileSize(fileInfo.size)
