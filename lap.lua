@@ -388,160 +388,375 @@ end
 -- CSV Import
 --------------------------------------------------------------------------------
 
+-- Column mapping configurations for different CSV sources
+-- Each source can have multiple alternative column names (first match wins)
+local CSV_COLUMN_MAPPINGS = {
+    -- Time column (required)
+    time = { "time" },
+
+    -- Position/distance columns (at least one required)
+    pos = { "lap progression" },           -- 0-1 spline position (AC exports)
+    distance = { "distance" },             -- meters from lap start (real car exports)
+
+    -- Speed columns (in order of preference)
+    speed = { "ground speed", "corr speed", "wheel speed avg" },
+
+    -- Input columns
+    throttle = { "driver throttle pos", "throttle pos" },
+    clutch = { "clutch pos" },
+    steering = { "steering angle" },
+
+    -- Brake: prefer pressure over pedal position for accuracy
+    brakePressure = { "brake pressure f", "brake pressure fr", "p_f_brake" },
+    brakePos = { "brake pos" },  -- fallback only
+}
+
+-- Unit conversions based on CSV unit row
+local UNIT_CONVERSIONS = {
+    speed = {
+        ["m/s"] = 3.6,      -- to km/h
+        ["km/h"] = 1.0,
+        ["mph"] = 1.60934,  -- to km/h
+    },
+    distance = {
+        ["m"] = 1.0,
+        ["km"] = 1000.0,
+        ["ft"] = 0.3048,
+    },
+    time = {
+        ["s"] = 1.0,
+        ["ms"] = 0.001,
+        ["min"] = 60.0,
+    },
+}
+
+--- Parse CSV header row and find column indices
+---@param line string Header row
+---@return table indices Column indices by key
+---@return table headers Raw header names by index
+local function parseHeader(line)
+    local indices = {}
+    local headers = {}
+    local fieldIdx = 1
+    local fieldStart = 1
+    local inQuotes = false
+    local len = #line
+
+    for i = 1, len + 1 do
+        local c = i <= len and line:sub(i, i) or ","
+        if c == '"' then
+            inQuotes = not inQuotes
+        elseif c == ',' and not inQuotes then
+            local field = line:sub(fieldStart, i - 1):gsub('^"', ''):gsub('"$', ''):lower()
+            headers[fieldIdx] = field
+
+            -- Match against all mapping targets
+            for key, targets in pairs(CSV_COLUMN_MAPPINGS) do
+                if not indices[key] then
+                    for _, target in ipairs(targets) do
+                        if field == target then
+                            indices[key] = fieldIdx
+                            break
+                        end
+                    end
+                end
+            end
+
+            fieldIdx = fieldIdx + 1
+            fieldStart = i + 1
+        end
+    end
+
+    return indices, headers
+end
+
+--- Parse CSV unit row and extract units for each column
+---@param line string Unit row
+---@param headers table Header names by index
+---@return table units Unit string by header name
+local function parseUnits(line, headers)
+    local units = {}
+    local fieldIdx = 1
+    local fieldStart = 1
+    local inQuotes = false
+    local len = #line
+
+    for i = 1, len + 1 do
+        local c = i <= len and line:sub(i, i) or ","
+        if c == '"' then
+            inQuotes = not inQuotes
+        elseif c == ',' and not inQuotes then
+            local unit = line:sub(fieldStart, i - 1):gsub('^"', ''):gsub('"$', ''):lower()
+            if headers[fieldIdx] then
+                units[headers[fieldIdx]] = unit
+            end
+            fieldIdx = fieldIdx + 1
+            fieldStart = i + 1
+        end
+    end
+
+    return units
+end
+
+--- Extract fields from a data row
+---@param line string Data row
+---@param indices table Column indices to extract
+---@return table fields Field values by key
+local function extractFields(line, indices)
+    local maxIdx = 0
+    for _, idx in pairs(indices) do
+        if idx and idx > maxIdx then maxIdx = idx end
+    end
+
+    local results = {}
+    local fieldIdx = 1
+    local fieldStart = 1
+    local inQuotes = false
+    local len = #line
+
+    for i = 1, len + 1 do
+        local c = i <= len and line:sub(i, i) or ","
+        if c == '"' then
+            inQuotes = not inQuotes
+        elseif c == ',' and not inQuotes then
+            for key, idx in pairs(indices) do
+                if idx == fieldIdx then
+                    local field = line:sub(fieldStart, i - 1):gsub('^"', ''):gsub('"$', '')
+                    results[key] = field
+                end
+            end
+            fieldIdx = fieldIdx + 1
+            fieldStart = i + 1
+            if fieldIdx > maxIdx then break end
+        end
+    end
+    return results
+end
+
 --- Load lap from MoTeC CSV file
+--- Supports both AC sim exports (with Lap Progression) and real car exports (with Distance)
 ---@param filePath string Path to CSV file
 ---@param track string Track ID
 ---@param car string Car ID
+---@param trackLength number|nil Track length in meters (required for distance-based CSVs)
 ---@return table|nil Lap instance
-function lap.fromCSV(filePath, track, car)
+---@return table|nil warnings Array of warning messages
+function lap.fromCSV(filePath, track, car, trackLength)
     local SAMPLE_INTERVAL = 1 / lap.SAMPLE_RATE
-    
+    local warnings = {}
+
     local f = io.open(filePath, "r")
     if not f then
         ac.log("lap.fromCSV: Failed to open " .. filePath)
-        return nil
+        return nil, {"Failed to open file: " .. filePath}
     end
-    
-    -- Find header row
+
+    -- Parse metadata and find header row
     local indices = nil
+    local headers = nil
+    local units = nil
+    local sampleRate = nil
     local skipUntil = 0
     local lineNum = 0
-    
+    local headerLineNum = 0
+
     for line in f:lines() do
         lineNum = lineNum + 1
-        
-        if line:find('"Time"') and line:find('"Lap Progression"') then
-            -- Parse header
-            local exactTargets = {
-                time = "time",
-                pos = "lap progression", 
-                speed = "ground speed",
-                throttle = "driver throttle pos",
-                brake = "brake pos",
-                clutch = "clutch pos",
-                steering = "steering angle"
-            }
-            
-            indices = {}
-            local fieldIdx = 1
-            local fieldStart = 1
-            local inQuotes = false
-            local len = #line
-            
-            for i = 1, len + 1 do
-                local c = i <= len and line:sub(i, i) or ","
-                if c == '"' then
-                    inQuotes = not inQuotes
-                elseif c == ',' and not inQuotes then
-                    local field = line:sub(fieldStart, i - 1):gsub('^"', ''):gsub('"$', ''):lower()
-                    for key, target in pairs(exactTargets) do
-                        if not indices[key] and field == target then
-                            indices[key] = fieldIdx
-                        end
-                    end
-                    fieldIdx = fieldIdx + 1
-                    fieldStart = i + 1
-                end
+
+        -- Extract sample rate from metadata
+        if line:find('"Sample Rate"') then
+            local rate = line:match('"Sample Rate","([%d%.]+)"')
+            if rate then
+                sampleRate = tonumber(rate)
             end
-            
-            skipUntil = lineNum + 2
+        end
+
+        -- Find header row (contains Time column)
+        if line:find('"Time"') and (line:find('"Lap Progression"') or line:find('"Distance"')) then
+            indices, headers = parseHeader(line)
+            headerLineNum = lineNum
             break
         end
     end
-    
-    if not indices or not indices.time or not indices.pos then
+
+    if not indices or not indices.time then
         f:close()
-        ac.log("lap.fromCSV: Could not find required columns")
-        return nil
+        ac.log("lap.fromCSV: Could not find required Time column")
+        return nil, {"Could not find required Time column"}
     end
-    
+
+    -- Check for position/distance data
+    local useDistance = false
+    if not indices.pos then
+        if indices.distance then
+            useDistance = true
+            if not trackLength then
+                f:close()
+                ac.log("lap.fromCSV: CSV uses Distance but no track length provided")
+                return nil, {"CSV uses Distance instead of Lap Progression - track length required"}
+            end
+        else
+            f:close()
+            ac.log("lap.fromCSV: Could not find position or distance column")
+            return nil, {"Could not find Lap Progression or Distance column"}
+        end
+    end
+
+    -- Parse unit row (immediately after header)
+    f:seek("set", 0)
+    lineNum = 0
+    for line in f:lines() do
+        lineNum = lineNum + 1
+        if lineNum == headerLineNum + 1 then
+            units = parseUnits(line, headers)
+            skipUntil = lineNum + 1  -- Skip blank line after units
+            break
+        end
+    end
+
+    -- Validate required units
+    local timeUnit = units and units["time"]
+    local distanceUnit = units and (units["distance"] or units["lap progression"])
+
+    if not timeUnit then
+        table.insert(warnings, "WARNING: CSV missing time units - assuming seconds")
+        timeUnit = "s"
+    end
+    if useDistance and not distanceUnit then
+        table.insert(warnings, "WARNING: CSV missing distance units - assuming meters")
+        distanceUnit = "m"
+    end
+
+    -- Warn about high sample rate
+    if sampleRate and sampleRate > 15 then
+        table.insert(warnings, string.format(
+            "WARNING: CSV sample rate (%.1f Hz) exceeds 15 Hz - data will be downsampled",
+            sampleRate))
+    end
+
+    -- Determine brake source (prefer pressure over position)
+    local useBrakePressure = indices.brakePressure ~= nil
+    local brakeKey = useBrakePressure and "brakePressure" or "brakePos"
+    local brakePressureMax = 0  -- Track max for normalization
+
+    if useBrakePressure then
+        ac.log("lap.fromCSV: Using brake pressure data")
+    elseif indices.brakePos then
+        ac.log("lap.fromCSV: Using brake pedal position (pressure not available)")
+    else
+        table.insert(warnings, "WARNING: No brake data column found")
+    end
+
+    -- Get unit conversion factors
+    local speedUnit = nil
+    for _, colName in ipairs(CSV_COLUMN_MAPPINGS.speed) do
+        if units and units[colName] then
+            speedUnit = units[colName]
+            break
+        end
+    end
+    local speedFactor = speedUnit and UNIT_CONVERSIONS.speed[speedUnit] or 3.6  -- default m/s to km/h
+    local timeFactor = UNIT_CONVERSIONS.time[timeUnit] or 1.0
+    local distanceFactor = UNIT_CONVERSIONS.distance[distanceUnit] or 1.0
+
     -- Parse data
     f:seek("set", 0)
     lineNum = 0
-    
+
     local l = lap.new(track or '', car or '')
     local lastSampleTime = -SAMPLE_INTERVAL
     local steeringCap = math.pi
-    
-    -- Helper to extract fields
-    local function extractFields(line, idxs)
-        local maxIdx = 0
-        for _, idx in pairs(idxs) do
-            if idx and idx > maxIdx then maxIdx = idx end
-        end
-        
-        local results = {}
-        local fieldIdx = 1
-        local fieldStart = 1
-        local inQuotes = false
-        local len = #line
-        
-        for i = 1, len + 1 do
-            local c = i <= len and line:sub(i, i) or ","
-            if c == '"' then
-                inQuotes = not inQuotes
-            elseif c == ',' and not inQuotes then
-                for key, idx in pairs(idxs) do
-                    if idx == fieldIdx then
-                        local field = line:sub(fieldStart, i - 1):gsub('^"', ''):gsub('"$', '')
-                        results[key] = field
-                    end
-                end
-                fieldIdx = fieldIdx + 1
-                fieldStart = i + 1
-                if fieldIdx > maxIdx then break end
-            end
-        end
-        return results
-    end
-    
+
     local firstTime = nil
+    local firstDistance = nil
     local finishTime = nil
     local lastPos = nil
     local crossedFinish = false
-    
+
+    -- First pass: find max brake pressure for normalization (if using pressure)
+    if useBrakePressure then
+        for line in f:lines() do
+            lineNum = lineNum + 1
+            if lineNum > skipUntil and line ~= "" and not line:match("^%s*$") then
+                local fields = extractFields(line, indices)
+                local pressure = tonumber(fields.brakePressure) or 0
+                if pressure > brakePressureMax then
+                    brakePressureMax = pressure
+                end
+            end
+        end
+        if brakePressureMax == 0 then brakePressureMax = 1 end  -- Prevent div by zero
+        ac.log(string.format("lap.fromCSV: Max brake pressure: %.2f bar", brakePressureMax))
+
+        -- Reset for second pass
+        f:seek("set", 0)
+        lineNum = 0
+    end
+
     for line in f:lines() do
         lineNum = lineNum + 1
-        
+
         if lineNum > skipUntil and line ~= "" and not line:match("^%s*$") then
             local fields = extractFields(line, indices)
             local time = tonumber(fields.time)
-            
+
             if time then
+                time = time * timeFactor  -- Convert to seconds
                 if not firstTime then firstTime = time end
-                
+
                 if time >= lastSampleTime + SAMPLE_INTERVAL then
-                    local pos = tonumber(fields.pos)
+                    local pos
+
+                    if useDistance then
+                        -- Convert distance to lap progression (0-1)
+                        local distance = tonumber(fields.distance) or 0
+                        distance = distance * distanceFactor  -- Convert to meters
+                        if not firstDistance then firstDistance = distance end
+                        local lapDistance = distance - firstDistance
+                        pos = lapDistance / trackLength
+                        -- Handle wrap-around for distance
+                        if pos > 1 then pos = pos - math.floor(pos) end
+                    else
+                        pos = tonumber(fields.pos)
+                        if pos and pos > 1 then pos = pos / 100 end
+                    end
+
                     if pos then
-                        if pos > 1 then pos = pos / 100 end
-                        
                         -- Detect finish line crossing (position wraps from high to low)
                         if lastPos and lastPos > 0.9 and pos < 0.1 then
                             finishTime = time
                             crossedFinish = true
                             break  -- Stop at finish line
                         end
-                        
+
                         lastSampleTime = time
                         lastPos = pos
-                        
+
                         local speed = tonumber(fields.speed) or 0
                         local throttle = tonumber(fields.throttle) or 0
-                        local brake = tonumber(fields.brake) or 0
                         local clutch = tonumber(fields.clutch) or 0
                         local steering = tonumber(fields.steering) or 0
-                        
+
+                        -- Get brake value (pressure normalized or position)
+                        local brake = 0
+                        if useBrakePressure then
+                            local pressure = tonumber(fields.brakePressure) or 0
+                            brake = pressure / brakePressureMax  -- Normalize to 0-1
+                        elseif indices.brakePos then
+                            brake = tonumber(fields.brakePos) or 0
+                            if brake > 1 then brake = brake / 100 end
+                        end
+
                         -- Normalize 0-100 to 0-1
                         if throttle > 1 then throttle = throttle / 100 end
-                        if brake > 1 then brake = brake / 100 end
                         if clutch > 1 then clutch = clutch / 100 end
-                        
-                        -- Convert m/s to km/h
-                        speed = speed * 3.6
-                        
+
+                        -- Convert speed to km/h
+                        speed = speed * speedFactor
+
                         -- Normalize steering
                         local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
-                        
+
                         local sampleTime = time - firstTime  -- Time since lap start
                         table.insert(l.times, sampleTime)
                         table.insert(l.pos, pos)
@@ -555,30 +770,29 @@ function lap.fromCSV(filePath, track, car)
             end
         end
     end
-    
+
     f:close()
-    
+
     if #l.pos < 10 then
         ac.log("lap.fromCSV: Not enough data points (" .. #l.pos .. ")")
-        return nil
+        return nil, {"Not enough data points: " .. #l.pos}
     end
-    
-    -- Note: We keep data in time order, not sorted by position.
-    -- For a normal lap, positions naturally increase from 0 to ~1.
-    -- The times array preserves actual elapsed time at each sample.
-    -- Times start at 0 for the first sample - no normalization needed.
-    -- Delta calculations will be correct as long as both laps have consistent time=0 at similar positions.
-    
+
     l.completed = crossedFinish
-    -- Use finish time if detected, otherwise last sample time
     local endTime = finishTime or lastSampleTime
     l.time = (endTime - (firstTime or 0)) * 1000  -- ms
-    
-    ac.log(string.format("lap.fromCSV: Loaded %d samples (%.3fs, finish detected: %s)", 
+
+    -- Log warnings
+    for _, warn in ipairs(warnings) do
+        ac.log("lap.fromCSV: " .. warn)
+    end
+
+    ac.log(string.format("lap.fromCSV: Loaded %d samples (%.3fs, finish detected: %s)",
         #l.pos, l.time / 1000, crossedFinish and "yes" or "no"))
     ac.log(string.format("lap.fromCSV: pos range [%.4f - %.4f], times range [%.3f - %.3f]s",
         l.pos[1], l.pos[#l.pos], l.times[1], l.times[#l.times]))
-    return l
+
+    return l, #warnings > 0 and warnings or nil
 end
 
 return lap
