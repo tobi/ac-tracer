@@ -1,19 +1,19 @@
-# CSP Lua API Reference
+# CSP Lua API Reference Skill
 
-This file documents CSP (Custom Shaders Patch) Lua API discoveries for Assetto Corsa.
+Use this skill when working with CSP (Custom Shaders Patch) Lua code for Assetto Corsa.
 
-**Important:** Update this file when new APIs are discovered.
-
-## ⚠️ Development Rules
+## Development Rules
 
 **NEVER use shell commands or external tools** (`io.popen`, `os.execute`, etc.) to solve problems. CSP provides comprehensive APIs for most tasks.
 
 Before implementing any functionality:
-1. **Check `reference/lib.lua`** for existing CSP APIs
+1. **Check `reference/lib.lua`** in this skill folder for existing CSP APIs
 2. Use CSP's built-in functions (e.g., `io.scanDir` instead of `dir` command)
 3. Only fall back to shell if absolutely no CSP API exists
 
-Example discoveries from lib.lua:
+## Key File System APIs
+
+From `reference/lib.lua`:
 - `io.scanDir(directory, "*.csv")` - List files matching a pattern
 - `io.dirExists(path)` - Check if directory exists
 - `io.fileExists(path)` - Check if file exists
@@ -211,44 +211,36 @@ ui.popStyleVar()
 ## Settings Integration
 
 ### `ui.addSettings(params, callback)`
-Registers a settings window accessible via the taskbar context menu or settings apps. This is the ideal way to render configuration UI.
+Registers a settings window accessible via the taskbar context menu or settings apps.
 
 ```lua
--- Call this once at script level (not inside update or window functions)
 ui.addSettings({
     name = "My App Settings",
-    id = "MyAppSettings", -- Persists window state/position
-    icon = ui.Icons.Settings, -- Use standard icons
-    size = { 
-        default = vec2(400, 300), 
-        min = vec2(300, 200) 
+    id = "MyAppSettings",
+    icon = ui.Icons.Settings,
+    size = {
+        default = vec2(400, 300),
+        min = vec2(300, 200)
     }
 }, function()
-    -- Settings Content
-    
-    ui.header("General Options") -- Standard styled header
-    
-    -- Checkbox directly modifying storage
+    ui.header("General Options")
+
     if ui.checkbox("Enable Feature", state.enabled) then
         state.enabled = not state.enabled
     end
-    
+
     ui.separator()
-    
+
     ui.header("Visuals")
-    
-    -- Slider with refnumber or return value
-    -- (Using return value pattern)
+
     local newVal, changed = ui.slider("Opacity", state.opacity, 0, 1, "%.2f")
     if changed then state.opacity = newVal end
-    
-    -- Combo box
+
     ui.combo("Mode", state.mode, ui.ComboFlags.None, function()
         if ui.selectable("Mode A", state.mode == "A") then state.mode = "A" end
         if ui.selectable("Mode B", state.mode == "B") then state.mode = "B" end
     end)
-    
-    -- Hotkey binding control
+
     ui.text("Toggle Key:")
     ui.sameLine()
     myBindableHotkey:control(vec2(-1, 0))
@@ -260,7 +252,7 @@ end)
 Use `ac.getAppWindows()` to list all windows and check their status, and `ac.accessAppWindow()` to modify them.
 
 #### `ac.getAppWindows()`
-Returns an array of descriptors for all available windows (Python, Lua, or original AC apps).
+Returns an array of descriptors for all available windows.
 
 ```lua
 local windows = ac.getAppWindows()
@@ -270,27 +262,22 @@ end
 ```
 
 #### `ac.accessAppWindow(windowName)`
-Returns an `ac.AppWindowAccessor` for the specified window name. Window names for Lua apps are typically `appID/windowID` (e.g., `ac-tracer/corners`).
+Returns an `ac.AppWindowAccessor` for the specified window name.
 
 ```lua
 local window = ac.accessAppWindow("ac-tracer/corners")
 if window and window:valid() then
     window:setVisible(true)
-    ac.log("Corner window is now " .. (window:visible() and "visible" or "hidden"))
 end
 ```
 
 #### `ac.setAppWindowVisible(appID, windowFilter, visible)`
-Specifically useful for toggling windows that might be hidden or not yet initialized in the system list.
+Toggle windows that might be hidden or not yet initialized.
 
 ```lua
--- appID is the folder name, windowFilter is the window ID from manifest.ini
 ac.setAppWindowVisible("ac-tracer", "telemetry", true)
 ```
 
-## Sources
+## Full API Reference
 
-- [Full API Reference (lib.lua)](./reference/lib.lua)
-- `extension/internal/lua-sdk/ac_apps/lib.lua` (Original SDK path)
-- [CSP Lua SDK](https://github.com/ac-custom-shaders-patch/acc-lua-sdk)
-- [CSP Default Apps](https://github.com/ac-custom-shaders-patch/app-csp-defaults)
+For the complete API reference with all types, enums, and functions, read the file `reference/lib.lua` in this skill folder (17,000+ lines of type definitions and documentation).
