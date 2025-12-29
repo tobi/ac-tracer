@@ -188,11 +188,10 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         if ui.button("C##csvc" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
-                -- loadCSVLap already adds to history
                 if lap_picker.onSelectCurrent then
-                    lap_picker.onSelectCurrent(loaded, 1)  -- Added at front
+                    lap_picker.onSelectCurrent(loaded)
                 end
-                ac.setMessage("CSV Loaded", msg)
+                ac.setMessage("Lap loaded from CSV", msg)
             else
                 ac.setMessage("Error", msg)
             end
@@ -213,7 +212,7 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
                 if lap_picker.onSelectReference then
                     lap_picker.onSelectReference(loaded)
                 end
-                ac.setMessage("Reference Set", msg)
+                ac.setMessage("Reference loaded from CSV", msg)
             else
                 ac.setMessage("Error", msg)
             end

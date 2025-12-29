@@ -42,8 +42,12 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Get selected lap (direct reference, or auto-select fastest from session)
 local function getSelectedLap()
     -- If we have a direct lap reference, use it
-    if selectedLap and selectedLap:length() > 0 then
-        return selectedLap
+    if selectedLap then
+        local len = selectedLap:length()
+        if len > 0 then
+            return selectedLap
+        end
+        ac.log("AC Tracer: selectedLap exists but has 0 samples")
     end
 
     -- Auto-select fastest from current session
@@ -1283,6 +1287,8 @@ function lap_telemetry.draw(dt)
 
         -- Callbacks for lap picker
         local function onSelectCurrent(lapData, idx)
+            ac.log(string.format("AC Tracer: onSelectCurrent called, lap has %d samples",
+                lapData and lapData:length() or 0))
             selectedLap = lapData  -- Store lap directly (works for CSV and session laps)
             viewStartTime = 0
             viewDuration = 0
