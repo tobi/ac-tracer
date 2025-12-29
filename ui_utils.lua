@@ -176,7 +176,59 @@ end
 -- Simple Widgets
 --------------------------------------------------------------------------------
 
---- Draw a labeled value (label on left, value on right)
+--- Draw colored text at current cursor position
+---@param str string Text to draw
+---@param color rgbm|nil Color (default primary)
+function ui_utils.text(str, color)
+    if color then
+        ui.pushStyleColor(ui.StyleColor.Text, color)
+    end
+    ui.text(str)
+    if color then
+        ui.popStyleColor()
+    end
+end
+
+--- Draw text with specific font and color
+---@param str string Text to draw
+---@param font any Font (e.g., ui.Font.Main, ui.Font.Small, ui.Font.Title)
+---@param color rgbm|nil Color (default nil = inherit)
+function ui_utils.textFont(str, font, color)
+    ui.pushFont(font)
+    if color then
+        ui.pushStyleColor(ui.StyleColor.Text, color)
+    end
+    ui.text(str)
+    if color then
+        ui.popStyleColor()
+    end
+    ui.popFont()
+end
+
+--- Draw label: value pair inline (same line)
+---@param label string Label text
+---@param value string Value text
+---@param valueX number|nil X position for value (absolute, default sameLine +5)
+---@param labelColor rgbm|nil Label color (default muted)
+---@param valueColor rgbm|nil Value color (default primary)
+function ui_utils.labelValue(label, value, valueX, labelColor, valueColor)
+    labelColor = labelColor or theme.text.muted
+    valueColor = valueColor or theme.text.primary
+
+    ui.pushStyleColor(ui.StyleColor.Text, labelColor)
+    ui.text(label)
+    ui.popStyleColor()
+    if valueX then
+        ui.sameLine(valueX)
+    else
+        ui.sameLine()
+    end
+    ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+    ui.text(value)
+    ui.popStyleColor()
+end
+
+--- Draw a labeled value row at specific position
 ---@param x number X position
 ---@param y number Y position
 ---@param label string Label text
@@ -201,6 +253,106 @@ function ui_utils.drawLabeledValue(x, y, label, value, labelColor, valueColor, l
     ui.popFont()
 end
 
+--- Draw a delta stat row (label + delta value with color coding)
+--- Returns the Y position for next row
+---@param x number X position
+---@param y number Y position
+---@param label string Label text
+---@param delta number|nil Delta value
+---@param unit string Unit suffix (e.g., "km/h", "m")
+---@param labelWidth number|nil Width for label column (default 45)
+---@param lineHeight number|nil Line height (default 18)
+---@return number nextY Y position for next row
+function ui_utils.deltaRow(x, y, label, delta, unit, labelWidth, lineHeight)
+    if delta == nil then return y end
+
+    labelWidth = labelWidth or 45
+    lineHeight = lineHeight or 18
+
+    local sign = delta >= 0 and "+" or ""
+    local rounded = math.floor(math.abs(delta) + 0.5)
+    local valueColor = theme.text.primary
+    if rounded ~= 0 then
+        valueColor = delta > 0 and theme.delta.positive or theme.delta.negativeFaint
+    end
+
+    ui.setCursor(vec2(x, y))
+    ui.pushFont(ui.Font.Main)
+    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+    ui.text(label)
+    ui.popStyleColor()
+    ui.sameLine(x + labelWidth)
+    ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+    ui.text(string.format("%s%d %s", sign, rounded, unit))
+    ui.popStyleColor()
+    ui.popFont()
+
+    return y + lineHeight
+end
+
+--- Draw a position delta row (label + meters earlier/later)
+--- Returns the Y position for next row
+---@param x number X position
+---@param y number Y position
+---@param label string Label text
+---@param meters number|nil Delta in meters
+---@param labelWidth number|nil Width for label column (default 45)
+---@param lineHeight number|nil Line height (default 18)
+---@return number nextY Y position for next row
+function ui_utils.positionRow(x, y, label, meters, labelWidth, lineHeight)
+    if meters == nil then return y end
+
+    labelWidth = labelWidth or 45
+    lineHeight = lineHeight or 18
+
+    local rounded = math.abs(math.floor(meters + 0.5))
+    local direction = meters >= 0 and "later" or "earlier"
+    local valueColor = theme.text.primary
+    if rounded ~= 0 then
+        valueColor = meters > 0 and theme.delta.positive or theme.delta.negativeFaint
+    end
+
+    ui.setCursor(vec2(x, y))
+    ui.pushFont(ui.Font.Main)
+    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+    ui.text(label)
+    ui.popStyleColor()
+    ui.sameLine(x + labelWidth)
+    ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+    ui.text(string.format("%dm %s", rounded, direction))
+    ui.popStyleColor()
+    ui.popFont()
+
+    return y + lineHeight
+end
+
+--- Draw a separator line at current cursor Y
+---@param width number Line width
+---@param spacing number|nil Vertical spacing before and after (default 8)
+function ui_utils.separator(width, spacing)
+    spacing = spacing or 8
+    ui.offsetCursorY(spacing)
+    local cursor = ui.getCursor()
+    ui.drawLine(cursor, cursor + vec2(width, 0), theme.grid.separator, 1)
+    ui.offsetCursorY(spacing)
+end
+
+--- Draw section header with small caps style
+---@param text string Header text
+---@param x number|nil X position (default current cursor)
+---@param color rgbm|nil Text color (default muted)
+---@return number lineHeight Height used
+function ui_utils.sectionLabel(text, x, color)
+    color = color or theme.text.muted
+    if x then ui.setCursor(vec2(x, ui.getCursor().y)) end
+    ui.pushFont(ui.Font.Small)
+    ui.pushStyleColor(ui.StyleColor.Text, color)
+    ui.text(text)
+    ui.popStyleColor()
+    ui.popFont()
+    return 14  -- Typical small font height
+end
+
 --- Draw a simple section header with separator line
 ---@param x number X position
 ---@param y number Y position
@@ -221,6 +373,35 @@ function ui_utils.drawSectionHeader(x, y, width, text, color)
     y = y + 20
     ui.drawLine(vec2(x, y), vec2(x + width, y), theme.grid.separator, 1)
     return y + 8
+end
+
+--- Format and draw a time value (m:ss.sss or ss.sss)
+---@param timeS number Time in seconds
+---@param color rgbm|nil Text color
+function ui_utils.drawTime(timeS, color)
+    local mins = math.floor(timeS / 60)
+    local secs = timeS - mins * 60
+    local text
+    if mins > 0 then
+        text = string.format("%d:%06.3f", mins, secs)
+    else
+        text = string.format("%.3fs", secs)
+    end
+    ui_utils.text(text, color or theme.text.primary)
+end
+
+--- Format lap time in milliseconds to m:ss.sss string
+---@param timeMs number Time in milliseconds
+---@return string Formatted time
+function ui_utils.formatLapTime(timeMs)
+    local timeS = timeMs / 1000
+    local mins = math.floor(timeS / 60)
+    local secs = timeS - mins * 60
+    if mins > 0 then
+        return string.format("%d:%05.2f", mins, secs)
+    else
+        return string.format("%.2fs", secs)
+    end
 end
 
 --------------------------------------------------------------------------------

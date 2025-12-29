@@ -574,27 +574,6 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refStartPos, refE
     ui.pathStroke(theme.text.primary, false, 2)
 end
 
-local function drawDashedLine(x1, y1, x2, y2, color, dashLen, gapLen, thickness)
-    dashLen = dashLen or 4
-    gapLen = gapLen or 4
-    thickness = thickness or 2
-    local dx = x2 - x1
-    local dy = y2 - y1
-    local length = math.sqrt(dx * dx + dy * dy)
-    if length == 0 then return end
-    local unitX = dx / length
-    local unitY = dy / length
-    local pos = 0
-    while pos < length do
-        local endPos = math.min(pos + dashLen, length)
-        ui.drawLine(
-            vec2(x1 + unitX * pos, y1 + unitY * pos),
-            vec2(x1 + unitX * endPos, y1 + unitY * endPos),
-            color, thickness
-        )
-        pos = endPos + gapLen
-    end
-end
 
 local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     if not currentSpeeds or #currentSpeeds < 2 then return end
@@ -615,12 +594,12 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     -- Reference lines (dashed, thicker for visibility)
     local refBrakeX = posToX(data.refBrakePos)
     if refBrakeX then
-        drawDashedLine(refBrakeX, y, refBrakeX, y + h, theme.marker.brakeRef, 4, 3, 2)
+        ui_utils.drawDashedLine(vec2(refBrakeX, y), vec2(refBrakeX, y + h), theme.marker.brakeRef, 2, 4, 3)
     end
 
     local refApexX = posToX(data.refApexPos)
     if refApexX then
-        drawDashedLine(refApexX, y, refApexX, y + h, theme.marker.apexRef, 5, 3, 2)
+        ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, y + h), theme.marker.apexRef, 2, 5, 3)
     end
 
     -- Reference lift line (dashed green) - only show if > 10m earlier than ref brake
@@ -633,7 +612,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         if refLiftToBrakeDist > 10 then
             local refLiftX = posToX(data.refLiftOffPos)
             if refLiftX then
-                drawDashedLine(refLiftX, y, refLiftX, y + h, theme.marker.liftRef, 4, 3, 2)
+                ui_utils.drawDashedLine(vec2(refLiftX, y), vec2(refLiftX, y + h), theme.marker.liftRef, 2, 4, 3)
             end
         end
     end
@@ -748,46 +727,7 @@ function corner_analysis.draw(dt, useKmh)
     ui.popStyleColor()
     ui.popFont()
     
-    -- Helper functions for stats (defined once, used below)
     local statsY = statsStartY
-    
-    local function drawStatRow(label, delta, unit)
-        if delta == nil then return end
-        local sign = delta >= 0 and "+" or ""
-        local rounded = math.floor(math.abs(delta) + 0.5)
-        local valueColor = theme.text.primary
-        if rounded ~= 0 then
-            valueColor = delta > 0 and theme.delta.positive or theme.delta.negativeFaint
-        end
-        ui.setCursor(vec2(panelX, statsY))
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text(label)
-        ui.popStyleColor()
-        ui.sameLine(panelX + labelW)
-        ui.pushStyleColor(ui.StyleColor.Text, valueColor)
-        ui.text(string.format("%s%d %s", sign, rounded, unit))
-        ui.popStyleColor()
-        statsY = statsY + lineH
-    end
-
-    local function drawPosRow(label, meters)
-        if meters == nil then return end
-        local rounded = math.abs(math.floor(meters + 0.5))
-        local direction = meters >= 0 and "later" or "earlier"
-        local valueColor = theme.text.primary
-        if rounded ~= 0 then
-            valueColor = meters > 0 and theme.delta.positive or theme.delta.negativeFaint
-        end
-        ui.setCursor(vec2(panelX, statsY))
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text(label)
-        ui.popStyleColor()
-        ui.sameLine(panelX + labelW)
-        ui.pushStyleColor(ui.StyleColor.Text, valueColor)
-        ui.text(string.format("%dm %s", rounded, direction))
-        ui.popStyleColor()
-        statsY = statsY + lineH
-    end
     
     if displayData then
         -- Graph outline (blue for frozen, green for live)
@@ -884,62 +824,34 @@ function corner_analysis.draw(dt, useKmh)
         
         -- Stats panel
         ui.pushFont(ui.Font.Main)
-        
-        -- SPEED section
-        ui.setCursor(vec2(panelX, statsY))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text("SPEED")
-        ui.popStyleColor()
-        ui.popFont()
-        statsY = statsY + 14
 
-        drawStatRow("Entry", displayData.entrySpeedDelta, speedUnit)
-        drawStatRow("Apex", displayData.apexSpeedDelta, speedUnit)
-        drawStatRow("Exit", displayData.exitSpeedDelta, speedUnit)
+        -- SPEED section
+        statsY = statsY + ui_utils.sectionLabel("SPEED", panelX)
+        statsY = ui_utils.deltaRow(panelX, statsY, "Entry", displayData.entrySpeedDelta, speedUnit, labelW, lineH)
+        statsY = ui_utils.deltaRow(panelX, statsY, "Apex", displayData.apexSpeedDelta, speedUnit, labelW, lineH)
+        statsY = ui_utils.deltaRow(panelX, statsY, "Exit", displayData.exitSpeedDelta, speedUnit, labelW, lineH)
         statsY = statsY + 4
 
         -- POSITION section
-        ui.setCursor(vec2(panelX, statsY))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text("POSITION")
-        ui.popStyleColor()
-        ui.popFont()
-        statsY = statsY + 14
-
+        statsY = statsY + ui_utils.sectionLabel("POSITION", panelX)
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        drawPosRow("Brake", brakeMeters)
-        drawPosRow("Lift", liftOffMeters)
+        statsY = ui_utils.positionRow(panelX, statsY, "Brake", brakeMeters, labelW, lineH)
+        statsY = ui_utils.positionRow(panelX, statsY, "Lift", liftOffMeters, labelW, lineH)
         if displayData.currentApexPos and displayData.refApexPos then
-            drawPosRow("Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000)
+            statsY = ui_utils.positionRow(panelX, statsY, "Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000, labelW, lineH)
         end
 
         -- Steering delta (only show if > 10 degrees difference)
         if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 10 then
             statsY = statsY + 4
-            local steerSign = displayData.steeringDelta >= 0 and "+" or ""
-            local steerColor = theme.text.primary
-            if math.abs(displayData.steeringDelta) > 10 then
-                steerColor = displayData.steeringDelta > 0 and theme.delta.negativeFaint or theme.delta.positive
-            end
-            ui.setCursor(vec2(panelX, statsY))
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-            ui.text("Steer")
-            ui.popStyleColor()
-            ui.sameLine(panelX + labelW)
-            ui.pushStyleColor(ui.StyleColor.Text, steerColor)
-            ui.text(string.format("%s%.0f°", steerSign, displayData.steeringDelta))
-            ui.popStyleColor()
+            statsY = ui_utils.deltaRow(panelX, statsY, "Steer", displayData.steeringDelta, "°", labelW, lineH)
         end
 
         ui.popFont()
     else
         -- Empty state: message in graph area
         ui.setCursor(vec2(padding + graphWidth / 2 - 60, graphY + graphHeight / 2 - 10))
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text(state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first")
-        ui.popStyleColor()
+        ui_utils.text(state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first", theme.text.muted)
     end
 end
 

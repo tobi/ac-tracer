@@ -57,7 +57,13 @@ local function getStorageKey(suffix)
     return 'ac_tracer_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
 end
 
-local CORNERS_CSV_PATH = __dirname .. "/corners.csv"
+local CORNERS_DIR = __dirname .. "/corners"
+
+--- Get corner CSV path for current track
+local function getCornersPath()
+    if not state.track then return nil end
+    return CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
+end
 
 --------------------------------------------------------------------------------
 -- Persistence: Corners (CSV format)
@@ -148,112 +154,83 @@ local function parseCSVLine(line)
     return fields
 end
 
---- Save corners to CSV file (all tracks in one file)
+--- Save corners to per-track CSV file (corners/<track>.csv)
 local function saveCornersToFile()
-    if not state.track then return false end
+    local path = getCornersPath()
+    if not path then return false end
     if not state.trackCorners or #state.trackCorners == 0 then return false end
-    
+
     -- Remove overlapping corners before saving
     state.trackCorners = removeOverlappingCorners(state.trackCorners)
-    
-    -- Read existing CSV (for other tracks)
-    local otherTrackCorners = {}
-    local f = io.open(CORNERS_CSV_PATH, "r")
-    if f then
-        local firstLine = true
-        for line in f:lines() do
-            if firstLine then
-                firstLine = false  -- Skip header
-            elseif line ~= "" then
-                local fields = parseCSVLine(line)
-                if #fields >= 4 and fields[1] ~= state.track then
-                    -- Keep corners from other tracks
-                    table.insert(otherTrackCorners, {
-                        track = fields[1],
-                        name = fields[2],
-                        startPos = fields[3],
-                        endPos = fields[4]
-                    })
-                end
-            end
-        end
-        f:close()
-    end
-    
-    -- Write new CSV with header
-    f = io.open(CORNERS_CSV_PATH, "w")
+
+    -- Ensure corners directory exists
+    io.popen('mkdir -p "' .. CORNERS_DIR .. '"'):close()
+
+    -- Write CSV for this track only
+    local f = io.open(path, "w")
     if not f then
-        ac.log("AC Tracer: Failed to open corners.csv for writing")
+        ac.log("AC Tracer: Failed to open " .. path .. " for writing")
         return false
     end
-    
-    -- Header
-    f:write("track,name,start,end\n")
-    
-    -- Write corners for current track
+
+    -- Header (no track column since each file is per-track)
+    f:write("name,start,end\n")
+
+    -- Write corners
     for _, corner in ipairs(state.trackCorners) do
         if corner.startPos and corner.endPos then
-            f:write(string.format("%s,%s,%.6f,%.6f\n",
-                escapeCSV(state.track),
+            f:write(string.format("%s,%.6f,%.6f\n",
                 escapeCSV(corner.name or ("Corner " .. corner.number)),
                 corner.startPos,
                 corner.endPos
             ))
         end
     end
-    
-    -- Write corners from other tracks
-    for _, c in ipairs(otherTrackCorners) do
-        f:write(string.format("%s,%s,%s,%s\n", 
-            escapeCSV(c.track), 
-            escapeCSV(c.name), 
-            c.startPos, 
-            c.endPos
-        ))
-    end
-    
+
     f:close()
-    ac.log("AC Tracer: Saved " .. #state.trackCorners .. " corners to corners.csv")
+    ac.log("AC Tracer: Saved " .. #state.trackCorners .. " corners to " .. path)
     return true
 end
 
---- Load corners from CSV file
+--- Load corners from per-track CSV file (corners/<track>.csv)
 local function loadCornersFromFile()
-    if not state.track then return false end
-    
-    local f = io.open(CORNERS_CSV_PATH, "r")
+    local path = getCornersPath()
+    if not path then return false end
+
+    local f = io.open(path, "r")
     if not f then return false end
-    
+
     state.trackCorners = {}
     local cornerNum = 0
     local firstLine = true
-    
+
     for line in f:lines() do
         if firstLine then
             firstLine = false  -- Skip header
         elseif line ~= "" then
             local fields = parseCSVLine(line)
-            if #fields >= 4 and fields[1] == state.track then
-                local startPos = tonumber(fields[3])
-                local endPos = tonumber(fields[4])
-                
+            -- New format: name,start,end (no track column)
+            if #fields >= 3 then
+                local startPos = tonumber(fields[2])
+                local endPos = tonumber(fields[3])
+
                 if startPos and endPos then
                     cornerNum = cornerNum + 1
                     table.insert(state.trackCorners, {
                         number = cornerNum,
                         startPos = startPos,
                         endPos = endPos,
-                        name = fields[2] ~= "" and fields[2] or ("Corner " .. cornerNum)
+                        name = fields[1] ~= "" and fields[1] or ("Corner " .. cornerNum)
                     })
                 end
             end
         end
     end
-    
+
     f:close()
-    
+
     if #state.trackCorners > 0 then
-        ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from corners.csv for " .. state.track)
+        ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from " .. path)
         return true
     end
     return false

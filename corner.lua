@@ -3,6 +3,7 @@
 
 local state = require('state')
 local theme = require('theme')
+local ui_utils = require('ui_utils')
 
 local corner = {}
 
@@ -55,12 +56,7 @@ function corner.settingsUI(recordButton)
     local contentWidth = ui.availableSpaceX()
 
     -- Section header
-    ui.pushFont(ui.Font.Main)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-    ui.text("Corner Detection")
-    ui.popStyleColor()
-    ui.popFont()
-
+    ui_utils.textFont("Corner Detection", ui.Font.Main, theme.text.primary)
     ui.offsetCursorY(3)
     ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), theme.grid.separator, 1)
     ui.offsetCursorY(8)
@@ -68,15 +64,8 @@ function corner.settingsUI(recordButton)
     -- Current track info
     local trackId = state.track or ac.getTrackID() or "Unknown"
     local trackName = trackId:gsub("_", " "):gsub("^%l", string.upper)
-
     ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text("Track:")
-    ui.popStyleColor()
-    ui.sameLine(50)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.highlight)
-    ui.text(trackName)
-    ui.popStyleColor()
+    ui_utils.labelValue("Track:", trackName, 50, theme.text.muted, theme.text.highlight)
     ui.popFont()
 
     ui.offsetCursorY(4)
@@ -87,28 +76,15 @@ function corner.settingsUI(recordButton)
 
     ui.pushFont(ui.Font.Small)
     if hasManual then
-        -- Has custom corners
-        ui.pushStyleColor(ui.StyleColor.Text, theme.status.success)
-        ui.text(string.format("✓ %d custom corners defined", cornerCount))
-        ui.popStyleColor()
+        ui_utils.text(string.format("✓ %d custom corners defined", cornerCount), theme.status.success)
     elseif cornerCount > 0 then
-        -- Using auto-detected corners
-        ui.pushStyleColor(ui.StyleColor.Text, theme.status.warning)
-        ui.text(string.format("⚡ %d auto-detected corners", cornerCount))
-        ui.popStyleColor()
+        ui_utils.text(string.format("⚡ %d auto-detected corners", cornerCount), theme.status.warning)
         ui.offsetCursorY(2)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text("(from best lap - may be inaccurate)")
-        ui.popStyleColor()
+        ui_utils.text("(from best lap - may be inaccurate)", theme.text.muted)
     else
-        -- No corners yet
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text("No corners defined yet")
-        ui.popStyleColor()
+        ui_utils.text("No corners defined yet", theme.text.muted)
         ui.offsetCursorY(2)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.status.warning)
-        ui.text("Complete a lap to auto-detect corners")
-        ui.popStyleColor()
+        ui_utils.text("Complete a lap to auto-detect corners", theme.status.warning)
     end
     ui.popFont()
 
@@ -117,31 +93,19 @@ function corner.settingsUI(recordButton)
     ui.offsetCursorY(8)
 
     -- Manual recording hotkey
-    ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text("Record Hotkey:")
-    ui.popStyleColor()
-    ui.popFont()
+    ui_utils.textFont("Record Hotkey:", ui.Font.Small, theme.text.muted)
     ui.sameLine(95)
     recordButton:control(vec2(110, 0))
 
     ui.offsetCursorY(4)
-    ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text("Hold while driving through corner")
-    ui.popStyleColor()
-    ui.popFont()
+    ui_utils.textFont("Hold while driving through corner", ui.Font.Small, theme.text.muted)
 
     ui.offsetCursorY(10)
     ui.drawLine(ui.getCursor(), ui.getCursor() + vec2(contentWidth, 0), theme.grid.separator, 1)
     ui.offsetCursorY(8)
 
     -- Edit corners info and button
-    ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text("Edit corners in Lap Telemetry view")
-    ui.popStyleColor()
-    ui.popFont()
+    ui_utils.textFont("Edit corners in Lap Telemetry view", ui.Font.Small, theme.text.muted)
 
     ui.offsetCursorY(5)
     ui.pushStyleColor(ui.StyleColor.Button, theme.button.primary)
@@ -173,12 +137,7 @@ function corner.settingsUI(recordButton)
 
         local alpha = 0.6 + 0.4 * math.sin(os.clock() * 6)
         local recColor = theme.withAlpha(theme.status.recording, alpha)
-
-        ui.pushFont(ui.Font.Main)
-        ui.pushStyleColor(ui.StyleColor.Text, recColor)
-        ui.text("● RECORDING CORNER")
-        ui.popStyleColor()
-        ui.popFont()
+        ui_utils.textFont("● RECORDING CORNER", ui.Font.Main, recColor)
     end
 end
 

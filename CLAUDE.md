@@ -459,7 +459,8 @@ This pattern:
 
 ```
 ac-tracer/
-├── corners.csv               # All corner definitions (all tracks in one file)
+├── corners/
+│   └── <track_id>.csv        # Corner definitions (one file per track)
 ├── tracks/
 │   └── trackname.csv         # Reference lap CSVs (MoTeC export or local)
 └── ...
@@ -471,18 +472,18 @@ Reference lap CSVs are searched in these directories:
 1. `./tracks/` - Local to the plugin
 2. `C:\MoTeC\Logged Data\` - Standard MoTeC export location
 
-### Corner Files (`corners.csv`)
+### Corner Files (`corners/<track_id>.csv`)
 
-Manual corner definitions are saved in a single CSV file in the plugin root:
+Corner definitions are saved per-track in the `corners/` directory. Each track has its own CSV file named after the track ID:
 
 ```csv
-track,name,start,end
-ks_nordschleife,Corner 1,0.123456,0.134567
-ks_nordschleife,Karussell,0.234567,0.256789
-ks_monza,Corner 1,0.045678,0.067890
+name,start,end
+Corner 1,0.123456,0.134567
+Karussell,0.234567,0.256789
+Bus Stop,0.567890,0.612345
 ```
 
-When saving corners, any existing corners for the same track are removed before writing the new ones. This prevents duplicates and allows easy updates.
+Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 
 ---
 
@@ -492,7 +493,7 @@ When saving corners, any existing corners for the same track are removed before 
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - all 0.0-1.0 for consistent display
 - **Time in milliseconds** - internal storage uses ms for precision
-- **Corner files** - saved as `./corners.csv` (plugin root)
+- **Corner files** - saved as `./corners/<track_id>.csv` (per-track)
 
 ---
 

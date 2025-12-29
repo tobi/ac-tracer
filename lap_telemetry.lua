@@ -255,11 +255,7 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
 
     -- Trace label
     ui.setCursor(vec2(x + 5, y + 2))
-    ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-    ui.text(label)
-    ui.popStyleColor()
-    ui.popFont()
+    ui_utils.textFont(label, ui.Font.Small, theme.text.primary)
 end
 
 --------------------------------------------------------------------------------
@@ -626,11 +622,7 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
 
     -- Header
     ui.setCursor(vec2(panelX + 10, py))
-    ui.pushFont(ui.Font.Main)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-    ui.text("At Cursor")
-    ui.popStyleColor()
-    ui.popFont()
+    ui_utils.textFont("At Cursor", ui.Font.Main, theme.text.primary)
     py = py + lineH
 
     ui.drawLine(vec2(panelX + 5, py), vec2(panelX + panelW - 5, py), theme.grid.line, 1)
@@ -639,15 +631,13 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     -- Time (formatted as m:ss.sss)
     ui.setCursor(vec2(panelX + 10, py))
     ui.pushFont(ui.Font.Main)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
     local mins = math.floor(cursorTime / 60)
     local secs = cursorTime - mins * 60
     if mins > 0 then
-        ui.text(string.format("%d:%06.3f", mins, secs))
+        ui_utils.text(string.format("%d:%06.3f", mins, secs), theme.text.primary)
     else
-        ui.text(string.format("%.3fs", secs))
+        ui_utils.text(string.format("%.3fs", secs), theme.text.primary)
     end
-    ui.popStyleColor()
     ui.popFont()
     py = py + lineH + 5
 
@@ -658,18 +648,10 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     local function drawRow(label, value, color, refValue, unit)
         ui.setCursor(vec2(panelX + 10, py))
         ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text(label)
-        ui.popStyleColor()
-        ui.sameLine(panelX + 70)
-        ui.pushStyleColor(ui.StyleColor.Text, color)
-        ui.text(value)
-        ui.popStyleColor()
+        ui_utils.labelValue(label, value, panelX + 70, theme.text.muted, color)
         if refValue then
             ui.sameLine(panelX + 110)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-            ui.text(refValue)
-            ui.popStyleColor()
+            ui_utils.text(refValue, theme.text.muted)
         end
         ui.popFont()
         py = py + lineH
@@ -837,25 +819,13 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
 
             ui.setCursor(vec2(panelX + 10, epy))
             ui.pushFont(ui.Font.Small)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-            ui.text("Start:")
-            ui.popStyleColor()
-            ui.sameLine(panelX + 50)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-            ui.text(string.format("%.1f%% (%dm)", (corner.startPos or 0) * 100, math.floor((corner.startPos or 0) * trackLength)))
-            ui.popStyleColor()
+            ui_utils.labelValue("Start:", string.format("%.1f%% (%dm)", (corner.startPos or 0) * 100, math.floor((corner.startPos or 0) * trackLength)), panelX + 50)
             ui.popFont()
             epy = epy + eLineH - 4
 
             ui.setCursor(vec2(panelX + 10, epy))
             ui.pushFont(ui.Font.Small)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-            ui.text("End:")
-            ui.popStyleColor()
-            ui.sameLine(panelX + 50)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-            ui.text(string.format("%.1f%% (%dm)", (corner.endPos or 0) * 100, math.floor((corner.endPos or 0) * trackLength)))
-            ui.popStyleColor()
+            ui_utils.labelValue("End:", string.format("%.1f%% (%dm)", (corner.endPos or 0) * 100, math.floor((corner.endPos or 0) * trackLength)), panelX + 50)
             ui.popFont()
             epy = epy + eLineH
 
