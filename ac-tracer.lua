@@ -7,6 +7,7 @@ local settings = require('app_settings')
 local corner = require('corner')
 local corner_analysis = require('corner_analysis')
 local lap_telemetry = require('lap_telemetry')
+local extended_brake = require('extended-brake')
 
 -- Local aliases with fallbacks
 local colors = settings.colors or {
@@ -44,7 +45,8 @@ local updateTimer = 0
 
 local function updateHistory(car)
     table.insert(history.throttle, car.gas)
-    table.insert(history.brake, car.brake)
+    -- Use extended brake pressure if available, otherwise fall back to pedal position
+    table.insert(history.brake, extended_brake.getNormalizedBrake(car))
     table.insert(history.clutch, 1 - car.clutch)
     local s = lap.normalizeSteer(car.steer)
     table.insert(history.steering, s)
@@ -145,7 +147,7 @@ local function drawGrid(origin, x, y, w, h, positions, trackLength)
         
         -- Find first 50m mark after start
         local firstMark = math.ceil(startM / 50) * 50
-        local markerColor = rgbm(0.5, 0.5, 0.5, 0.7)
+        local markerColor = rgbm(0.3, 0.3, 0.3, 0.4)
         
         for m = firstMark, endM, 50 do
             local actualM = m % trackLength
@@ -409,9 +411,6 @@ function script.windowMain(dt)
         -- Draw corner zones (very faint, with partial corner support)
         local corners = state.trackCorners
         local currentPos = car.splinePosition
-        local currentCornerName = nil
-        local currentCornerStartX = nil
-        local currentCornerEndX = nil
         
         if corners and #corners > 0 then
             -- Get position range from history
@@ -462,10 +461,6 @@ function script.windowMain(dt)
                                 traceOrigin + vec2(drawStartX, innerY), 
                                 traceOrigin + vec2(drawEndX, innerY + innerH), 
                                 rgbm(1, 1, 1, 0.15), 1)
-                            
-                            currentCornerName = c.name
-                            currentCornerStartX = drawStartX
-                            currentCornerEndX = drawEndX
                         else
                             -- Inactive corner: very faint dark fill
                             ui.drawRectFilled(
@@ -539,11 +534,10 @@ function script.windowMain(dt)
         if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, colors.clutch) end
         if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, colors.throttle) end
         if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, colors.brake) end
-        
-        -- Corner name is now rendered in the corner zone loop above
     end
 
-    drawBar(origin, brakeX, barY, barW, barH, car.brake, colors.brake)
+    -- Use extended brake pressure for the brake bar
+    drawBar(origin, brakeX, barY, barW, barH, extended_brake.getNormalizedBrake(car), colors.brake)
     drawBar(origin, throttleX, barY, barW, barH, car.gas, colors.throttle)
 
     drawWheel(origin, wheelCX, wheelCY, wheelR, car.steer, state.getGhostSteering())

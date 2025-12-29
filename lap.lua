@@ -4,6 +4,9 @@
 local lap = {}
 lap.__index = lap
 
+-- Extended brake module for better brake pressure data
+local extended_brake = require('extended-brake')
+
 -- Constants
 lap.SAMPLE_RATE = 15  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
@@ -67,7 +70,8 @@ end
 ---@param car table Car state from ac.getCar()
 function lap:addSample(car)
     table.insert(self.throttle, car.gas)
-    table.insert(self.brake, car.brake)
+    -- Use extended brake pressure if available, otherwise fall back to pedal position
+    table.insert(self.brake, extended_brake.getNormalizedBrake(car))
     table.insert(self.clutch, 1 - car.clutch)  -- Invert: 1.0 = foot on pedal
     table.insert(self.steering, lap.normalizeSteer(car.steer))
     table.insert(self.speed, car.speedKmh)

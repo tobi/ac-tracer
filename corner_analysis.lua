@@ -5,6 +5,7 @@ local state = require('state')
 local lap = require('lap')
 local scoring = require('scoring')
 local settings = require('app_settings')
+local extended_brake = require('extended-brake')
 
 local corner_analysis = {}
 
@@ -355,7 +356,7 @@ function corner_analysis.update(car)
     
     local currentPos = car.splinePosition
     local currentSpeed = car.speedKmh
-    local isBraking = car.brake >= BRAKE_THRESHOLD
+    local isBraking = extended_brake.getNormalizedBrake(car) >= BRAKE_THRESHOLD
     local isFullThrottle = car.gas >= THROTTLE_ON_THRESHOLD
     
     local normalizedSteering = lap.normalizeSteer(car.steer)
