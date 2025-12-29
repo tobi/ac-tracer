@@ -231,31 +231,39 @@ local function normalizeToSampleRate(rawData, lapTime)
         return rawData  -- Not enough data to normalize
     end
 
-    -- Find the actual lap start - skip any samples before position is near 0
-    -- This handles CSVs with garbage initial data or that start mid-lap
+    -- Find the actual lap start - skip any garbage samples at the beginning
+    -- This handles CSVs with corrupted/overflow data from previous lap
     local startIdx = 1
 
-    -- Strategy: Find first sample where position is near start line (< 5%)
-    -- and the next sample is incrementing properly
-    for i = 1, math.min(50, #times - 1) do
-        local pos = rawData.pos[i]
-        local nextPos = rawData.pos[i + 1]
-        if pos and nextPos then
-            -- Position should be near start (< 5%) and increasing
-            if pos < 0.05 and nextPos > pos and nextPos < 0.1 then
+    -- Strategy: Find first sample where position is very low (< 5%) AND
+    -- subsequent samples are steadily increasing (not jumping around)
+    for i = 1, math.min(100, #times - 3) do
+        local p1 = rawData.pos[i]
+        local p2 = rawData.pos[i + 1]
+        local p3 = rawData.pos[i + 2]
+
+        if p1 and p2 and p3 then
+            -- Look for: low starting position that increases smoothly
+            local d1 = p2 - p1
+            local d2 = p3 - p2
+
+            -- Position < 5%, both deltas positive and similar magnitude (smooth increase)
+            if p1 < 0.05 and d1 > 0 and d1 < 0.02 and d2 > 0 and d2 < 0.02 then
                 startIdx = i
-                ac.log(string.format("csv_parser: Found lap start at sample %d (pos %.4f)", i, pos))
+                ac.log(string.format("csv_parser: Found lap start at sample %d (pos %.4f, delta %.4f)", i, p1, d1))
                 break
             end
         end
     end
 
-    -- If no good start found, use first sample with position < 10%
-    if startIdx == 1 and rawData.pos[1] > 0.1 then
-        for i = 2, math.min(50, #times) do
-            if rawData.pos[i] and rawData.pos[i] < 0.1 then
+    -- Fallback: if first position is high (garbage), find first low position
+    if startIdx == 1 and rawData.pos[1] and rawData.pos[1] > 0.1 then
+        for i = 2, math.min(100, #times) do
+            local pos = rawData.pos[i]
+            local nextPos = rawData.pos[i + 1]
+            if pos and pos < 0.05 and nextPos and nextPos > pos then
                 startIdx = i
-                ac.log(string.format("csv_parser: Skipping garbage start, using sample %d (pos %.4f)", i, rawData.pos[i]))
+                ac.log(string.format("csv_parser: Skipping garbage, lap starts at sample %d (pos %.4f)", i, pos))
                 break
             end
         end
@@ -326,6 +334,7 @@ end
 
 --- Parse a single lap from CSV data starting at a given position
 --- Collects all samples at native resolution, then normalizes to TARGET_SAMPLE_RATE
+--- Skips initial garbage data until a lap start is detected (position near 0)
 ---@param lines table All lines from CSV file
 ---@param startIdx number Starting line index
 ---@param indices table Column indices
@@ -355,6 +364,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
     local lastPos = nil
     local crossedFinish = false
     local endIdx = startIdx
+    local lapStarted = false  -- Only start collecting after we find a valid lap start
 
     for i = startIdx, #lines do
         local line = lines[i]
@@ -366,7 +376,6 @@ local function parseSingleLap(lines, startIdx, indices, config)
 
             if time then
                 time = time * config.timeFactor
-                if not firstTime then firstTime = time end
 
                 local pos
 
@@ -386,62 +395,81 @@ local function parseSingleLap(lines, startIdx, indices, config)
                 end
 
                 if pos then
-                    -- Detect finish line crossing
-                    if lastPos and lastPos > 0.9 and pos < 0.1 then
-                        finishTime = time
-                        crossedFinish = true
-                        break
+                    -- Detect lap start: position crosses from high to low (finish line)
+                    -- OR we start with a low position that increases smoothly
+                    if not lapStarted then
+                        if lastPos and lastPos > 0.9 and pos < 0.1 then
+                            -- Crossed finish line - lap starts here
+                            lapStarted = true
+                            firstTime = time
+                            ac.log(string.format("csv_parser: Lap start detected at line %d (pos %.3f -> %.3f)", i, lastPos, pos))
+                        elseif pos < 0.05 and not lastPos then
+                            -- First sample is near start - check if it's stable
+                            lapStarted = true
+                            firstTime = time
+                        end
+                        lastPos = pos
                     end
 
-                    lastPos = pos
+                    -- Only collect data after lap has started
+                    if lapStarted then
+                        -- Detect finish line crossing (end of lap)
+                        if lastPos and lastPos > 0.9 and pos < 0.1 then
+                            finishTime = time
+                            crossedFinish = true
+                            break
+                        end
 
-                    local speed = tonumber(fields.speed) or 0
-                    local throttle = tonumber(fields.throttle) or 0
-                    local clutch = tonumber(fields.clutch) or 0
-                    local steering = tonumber(fields.steering) or 0
+                        lastPos = pos
 
-                    local brake = 0
-                    if config.useBrakePressure then
-                        local pressure = tonumber(fields.brakePressure) or 0
-                        brake = pressure / config.brakePressureMax
-                    elseif indices.brakePos then
-                        brake = tonumber(fields.brakePos) or 0
-                        if brake > 1 then brake = brake / 100 end
-                    end
+                        local speed = tonumber(fields.speed) or 0
+                        local throttle = tonumber(fields.throttle) or 0
+                        local clutch = tonumber(fields.clutch) or 0
+                        local steering = tonumber(fields.steering) or 0
 
-                    -- Normalize 0-100 to 0-1
-                    if throttle > 1 and throttle <= 2 then
-                        throttle = 1
-                    elseif throttle > 2 then
-                        throttle = throttle / 100
-                    end
-                    if clutch > 1 then clutch = clutch / 100 end
+                        local brake = 0
+                        if config.useBrakePressure then
+                            local pressure = tonumber(fields.brakePressure) or 0
+                            brake = pressure / config.brakePressureMax
+                        elseif indices.brakePos then
+                            brake = tonumber(fields.brakePos) or 0
+                            if brake > 1 then brake = brake / 100 end
+                        end
 
-                    speed = speed * config.speedFactor
+                        -- Normalize 0-100 to 0-1
+                        if throttle > 1 and throttle <= 2 then
+                            throttle = 1
+                        elseif throttle > 2 then
+                            throttle = throttle / 100
+                        end
+                        if clutch > 1 then clutch = clutch / 100 end
 
-                    local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
+                        speed = speed * config.speedFactor
 
-                    -- Fuel (if available)
-                    local fuel = nil
-                    if indices.fuel then
-                        fuel = tonumber(fields.fuel)
-                        if fuel then
-                            fuel = fuel * (config.fuelFactor or 1.0)
-                            if #data.fuel == 0 then
-                                fuelLeftAtStart = fuel
+                        local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
+
+                        -- Fuel (if available)
+                        local fuel = nil
+                        if indices.fuel then
+                            fuel = tonumber(fields.fuel)
+                            if fuel then
+                                fuel = fuel * (config.fuelFactor or 1.0)
+                                if #data.fuel == 0 then
+                                    fuelLeftAtStart = fuel
+                                end
                             end
                         end
-                    end
 
-                    local sampleTime = time - firstTime
-                    table.insert(data.times, sampleTime)
-                    table.insert(data.pos, pos)
-                    table.insert(data.throttle, throttle)
-                    table.insert(data.brake, brake)
-                    table.insert(data.clutch, 1 - clutch)
-                    table.insert(data.steering, steerNorm)
-                    table.insert(data.speed, speed)
-                    table.insert(data.fuel, fuel or 0)
+                        local sampleTime = time - firstTime
+                        table.insert(data.times, sampleTime)
+                        table.insert(data.pos, pos)
+                        table.insert(data.throttle, throttle)
+                        table.insert(data.brake, brake)
+                        table.insert(data.clutch, 1 - clutch)
+                        table.insert(data.steering, steerNorm)
+                        table.insert(data.speed, speed)
+                        table.insert(data.fuel, fuel or 0)
+                    end
                 end
             end
         end
