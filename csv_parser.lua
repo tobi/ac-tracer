@@ -7,7 +7,8 @@ local csv_parser = {}
 -- Constants
 --------------------------------------------------------------------------------
 
-local SAMPLE_RATE = 15  -- Hz - must match lap.SAMPLE_RATE
+local TARGET_SAMPLE_RATE = 15  -- Hz - must match lap.SAMPLE_RATE
+local TARGET_SAMPLE_INTERVAL = 1 / TARGET_SAMPLE_RATE
 
 -- Column mapping configurations for different CSV sources
 -- Priority order: first entry in list is preferred
@@ -180,7 +181,112 @@ local function extractFields(line, indices)
     return results
 end
 
+--- Linear interpolation between two values
+local function lerp(a, b, t)
+    return a + (b - a) * t
+end
+
+--- Find interpolated value at target time from a time-indexed array
+---@param times table Array of time values
+---@param values table Array of values
+---@param targetTime number Target time to interpolate at
+---@return number Interpolated value
+local function interpolateAtTime(times, values, targetTime)
+    if #times == 0 then return 0 end
+    if #times == 1 then return values[1] end
+
+    -- Binary search for surrounding samples
+    local lo, hi = 1, #times
+    while hi - lo > 1 do
+        local mid = math.floor((lo + hi) / 2)
+        if times[mid] <= targetTime then
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+
+    -- Edge cases
+    if targetTime <= times[1] then return values[1] end
+    if targetTime >= times[#times] then return values[#times] end
+
+    -- Interpolate
+    local t1, t2 = times[lo], times[hi]
+    local v1, v2 = values[lo], values[hi]
+    if t1 == t2 then return v1 end
+
+    local t = (targetTime - t1) / (t2 - t1)
+    return lerp(v1, v2, t)
+end
+
+--- Normalize lap data to exactly TARGET_SAMPLE_RATE Hz
+--- Takes raw parsed data and resamples to evenly-spaced samples
+--- Skips early unstable samples and starts from the first stable data point
+---@param rawData table Raw data with times array
+---@param lapTime number Lap duration in milliseconds
+---@return table Normalized data at TARGET_SAMPLE_RATE Hz
+local function normalizeToSampleRate(rawData, lapTime)
+    local times = rawData.times
+    if not times or #times < 2 then
+        return rawData  -- Not enough data to normalize
+    end
+
+    -- Find a stable starting point - skip first few samples if position is very low
+    -- This handles the case where we start recording mid-lap or near the finish line
+    local startIdx = 1
+    local minStartSamples = math.min(5, #times)  -- Need at least a few samples to stabilize
+
+    -- Skip initial samples if position is unstable (jumping around near 0 or 1)
+    for i = 1, minStartSamples do
+        local pos = rawData.pos[i]
+        local nextPos = rawData.pos[i + 1]
+        if pos and nextPos then
+            local posDiff = math.abs(nextPos - pos)
+            -- If position jumps more than 5% in one sample, skip this initial region
+            if posDiff > 0.05 and posDiff < 0.95 then
+                startIdx = i + 1
+            end
+        end
+    end
+
+    -- Use the time offset from the stable start point
+    local timeOffset = times[startIdx] or 0
+    local effectiveLapDurationS = (lapTime / 1000) - timeOffset
+    local numSamples = math.floor(effectiveLapDurationS * TARGET_SAMPLE_RATE) + 1
+
+    -- Create new evenly-spaced time points
+    local normalized = {
+        throttle = {},
+        brake = {},
+        clutch = {},
+        steering = {},
+        speed = {},
+        pos = {},
+        times = {},
+        fuel = {},
+    }
+
+    for i = 1, numSamples do
+        local t = timeOffset + (i - 1) * TARGET_SAMPLE_INTERVAL
+
+        -- Make sure we're within the data range
+        if t >= times[1] and t <= times[#times] then
+            table.insert(normalized.times, (i - 1) * TARGET_SAMPLE_INTERVAL)  -- Normalized time from 0
+            table.insert(normalized.throttle, interpolateAtTime(times, rawData.throttle, t))
+            table.insert(normalized.brake, interpolateAtTime(times, rawData.brake, t))
+            table.insert(normalized.clutch, interpolateAtTime(times, rawData.clutch, t))
+            table.insert(normalized.steering, interpolateAtTime(times, rawData.steering, t))
+            table.insert(normalized.speed, interpolateAtTime(times, rawData.speed, t))
+            table.insert(normalized.pos, interpolateAtTime(times, rawData.pos, t))
+            table.insert(normalized.fuel, interpolateAtTime(times, rawData.fuel, t))
+        end
+    end
+
+    return normalized
+end
+
 --- Parse a single lap from CSV data starting at a given position
+--- Collects all samples at native resolution, then normalizes to TARGET_SAMPLE_RATE
 ---@param lines table All lines from CSV file
 ---@param startIdx number Starting line index
 ---@param indices table Column indices
@@ -189,10 +295,9 @@ end
 ---@return number endIdx Ending line index
 ---@return boolean completed Whether lap crossed finish line
 local function parseSingleLap(lines, startIdx, indices, config)
-    local SAMPLE_INTERVAL = 1 / SAMPLE_RATE
     local steeringCap = math.pi
 
-    -- Raw data arrays
+    -- Raw data arrays (collect all samples at native resolution)
     local data = {
         throttle = {},
         brake = {},
@@ -205,7 +310,6 @@ local function parseSingleLap(lines, startIdx, indices, config)
     }
     local fuelLeftAtStart = 0
 
-    local lastSampleTime = -SAMPLE_INTERVAL
     local firstTime = nil
     local firstDistance = nil
     local finishTime = nil
@@ -225,90 +329,90 @@ local function parseSingleLap(lines, startIdx, indices, config)
                 time = time * config.timeFactor
                 if not firstTime then firstTime = time end
 
-                if time >= lastSampleTime + SAMPLE_INTERVAL then
-                    local pos
+                local pos
 
-                    if config.useDistance then
-                        local distance = tonumber(fields.distance) or 0
-                        distance = distance * config.distanceFactor
-                        if not firstDistance then firstDistance = distance end
-                        local lapDistance = distance - firstDistance
-                        pos = lapDistance / config.trackLength
-                        if pos > 1 then pos = pos - math.floor(pos) end
-                    else
-                        pos = tonumber(fields.pos)
-                        if pos and pos > 1 then pos = pos / 100 end
+                if config.useDistance then
+                    local distance = tonumber(fields.distance) or 0
+                    distance = distance * config.distanceFactor
+                    if not firstDistance then firstDistance = distance end
+                    local lapDistance = distance - firstDistance
+                    pos = lapDistance / config.trackLength
+                    if pos > 1 then pos = pos - math.floor(pos) end
+                else
+                    pos = tonumber(fields.pos)
+                    if pos and pos > 1 then pos = pos / 100 end
+                end
+
+                if pos then
+                    -- Detect finish line crossing
+                    if lastPos and lastPos > 0.9 and pos < 0.1 then
+                        finishTime = time
+                        crossedFinish = true
+                        break
                     end
 
-                    if pos then
-                        -- Detect finish line crossing
-                        if lastPos and lastPos > 0.9 and pos < 0.1 then
-                            finishTime = time
-                            crossedFinish = true
-                            break
-                        end
+                    lastPos = pos
 
-                        lastSampleTime = time
-                        lastPos = pos
+                    local speed = tonumber(fields.speed) or 0
+                    local throttle = tonumber(fields.throttle) or 0
+                    local clutch = tonumber(fields.clutch) or 0
+                    local steering = tonumber(fields.steering) or 0
 
-                        local speed = tonumber(fields.speed) or 0
-                        local throttle = tonumber(fields.throttle) or 0
-                        local clutch = tonumber(fields.clutch) or 0
-                        local steering = tonumber(fields.steering) or 0
+                    local brake = 0
+                    if config.useBrakePressure then
+                        local pressure = tonumber(fields.brakePressure) or 0
+                        brake = pressure / config.brakePressureMax
+                    elseif indices.brakePos then
+                        brake = tonumber(fields.brakePos) or 0
+                        if brake > 1 then brake = brake / 100 end
+                    end
 
-                        local brake = 0
-                        if config.useBrakePressure then
-                            local pressure = tonumber(fields.brakePressure) or 0
-                            brake = pressure / config.brakePressureMax
-                        elseif indices.brakePos then
-                            brake = tonumber(fields.brakePos) or 0
-                            if brake > 1 then brake = brake / 100 end
-                        end
+                    -- Normalize 0-100 to 0-1
+                    if throttle > 1 and throttle <= 2 then
+                        throttle = 1
+                    elseif throttle > 2 then
+                        throttle = throttle / 100
+                    end
+                    if clutch > 1 then clutch = clutch / 100 end
 
-                        -- Normalize 0-100 to 0-1
-                        if throttle > 1 and throttle <= 2 then
-                            throttle = 1
-                        elseif throttle > 2 then
-                            throttle = throttle / 100
-                        end
-                        if clutch > 1 then clutch = clutch / 100 end
+                    speed = speed * config.speedFactor
 
-                        speed = speed * config.speedFactor
+                    local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
 
-                        local steerNorm = math.clamp(0.5 - math.rad(steering) / (2 * steeringCap), 0, 1)
-
-                        -- Fuel (if available)
-                        local fuel = nil
-                        if indices.fuel then
-                            fuel = tonumber(fields.fuel)
-                            if fuel then
-                                fuel = fuel * (config.fuelFactor or 1.0)
-                                if #data.fuel == 0 then
-                                    fuelLeftAtStart = fuel
-                                end
+                    -- Fuel (if available)
+                    local fuel = nil
+                    if indices.fuel then
+                        fuel = tonumber(fields.fuel)
+                        if fuel then
+                            fuel = fuel * (config.fuelFactor or 1.0)
+                            if #data.fuel == 0 then
+                                fuelLeftAtStart = fuel
                             end
                         end
-
-                        local sampleTime = time - firstTime
-                        table.insert(data.times, sampleTime)
-                        table.insert(data.pos, pos)
-                        table.insert(data.throttle, throttle)
-                        table.insert(data.brake, brake)
-                        table.insert(data.clutch, 1 - clutch)
-                        table.insert(data.steering, steerNorm)
-                        table.insert(data.speed, speed)
-                        table.insert(data.fuel, fuel or 0)
                     end
+
+                    local sampleTime = time - firstTime
+                    table.insert(data.times, sampleTime)
+                    table.insert(data.pos, pos)
+                    table.insert(data.throttle, throttle)
+                    table.insert(data.brake, brake)
+                    table.insert(data.clutch, 1 - clutch)
+                    table.insert(data.steering, steerNorm)
+                    table.insert(data.speed, speed)
+                    table.insert(data.fuel, fuel or 0)
                 end
             end
         end
     end
 
-    local endTime = finishTime or lastSampleTime
+    local endTime = finishTime or (data.times[#data.times] and (firstTime + data.times[#data.times]) or firstTime)
     local lapTime = (endTime - (firstTime or 0)) * 1000  -- ms
 
+    -- Normalize to TARGET_SAMPLE_RATE Hz
+    local normalizedData = normalizeToSampleRate(data, lapTime)
+
     return {
-        data = data,
+        data = normalizedData,
         time = lapTime,
         fuelLeftAtStart = fuelLeftAtStart,
         completed = crossedFinish,
@@ -417,10 +521,15 @@ function csv_parser.parseFile(filePath, trackLength)
         table.insert(warnings, "WARNING: CSV missing time units - assuming seconds")
     end
 
-    -- Warn about high sample rate
-    if sampleRate and sampleRate > 15 then
+    -- Log sample rate info
+    if sampleRate then
+        if sampleRate ~= TARGET_SAMPLE_RATE then
+            table.insert(warnings, string.format(
+                "INFO: CSV sample rate (%.1f Hz) - normalizing to %d Hz", sampleRate, TARGET_SAMPLE_RATE))
+        end
+    else
         table.insert(warnings, string.format(
-            "WARNING: CSV sample rate (%.1f Hz) > 15 Hz - downsampling", sampleRate))
+            "INFO: Unknown CSV sample rate - normalizing to %d Hz", TARGET_SAMPLE_RATE))
     end
 
     -- Determine brake source
@@ -539,8 +648,11 @@ function csv_parser.parseFile(filePath, trackLength)
         ac.log("csv_parser: " .. warn)
     end
 
-    ac.log(string.format("csv_parser: Loaded %d samples (%.3fs)",
-        #bestLap.data.pos, bestLap.time / 1000))
+    ac.log(string.format("csv_parser: Loaded lap: %d samples at %d Hz (%.3fs)",
+        #bestLap.data.pos, TARGET_SAMPLE_RATE, bestLap.time / 1000))
+
+    -- Add normalized sample rate to returned result for debugging
+    bestLap.sampleRate = TARGET_SAMPLE_RATE
 
     return bestLap, #warnings > 0 and warnings or nil
 end
