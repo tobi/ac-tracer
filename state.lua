@@ -1229,26 +1229,30 @@ end
 --- Load lap from CSV and add to references
 ---@param filePath string Path to CSV file
 ---@return table|nil Loaded lap
+---@return table|nil warnings Array of warning messages
 function state.loadCSV(filePath)
-    local loaded = lap.fromCSV(filePath, state.track, state.car)
+    local trackLength = ac.getSim().trackLengthM
+    local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
     if loaded then
         table.insert(state.historyReferences, loaded)
-        return loaded
+        return loaded, warnings
     end
-    return nil
+    return nil, warnings
 end
 
 --- Load CSV and set as best lap
 ---@param filePath string Path to CSV file
 ---@return boolean Success
+---@return table|nil warnings Array of warning messages
 function state.loadCSVAsBest(filePath)
-    local loaded = lap.fromCSV(filePath, state.track, state.car)
+    local trackLength = ac.getSim().trackLengthM
+    local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
     if loaded then
         state.setBestLap(loaded)
         table.insert(state.historyReferences, loaded)
-        return true
+        return true, warnings
     end
-    return false
+    return false, warnings
 end
 
 return state

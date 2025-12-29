@@ -1551,7 +1551,8 @@ function lap_telemetry.draw(dt)
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.5, 0.3, 1))
                     if ui.button("C##csvcur" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local loaded = lap.fromCSV(fileInfo.path, state.track, state.car)
+                        local trackLength = ac.getSim().trackLengthM
+                        local loaded, warnings = lap.fromCSV(fileInfo.path, state.track, state.car, trackLength)
                         if loaded then
                             -- Add to history and select it
                             table.insert(state.history, 1, loaded)
@@ -1561,30 +1562,47 @@ function lap_telemetry.draw(dt)
                             viewStartTime = 0
                             viewDuration = 0
                             showRefPicker = false
-                            ac.setMessage("Loaded as Current", string.format("CSV: %d:%05.2f", 
-                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
+                            local msg = string.format("CSV: %d:%05.2f",
+                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
+                            if warnings and #warnings > 0 then
+                                msg = msg .. " (with warnings)"
+                                for _, w in ipairs(warnings) do
+                                    ac.log("CSV Import: " .. w)
+                                end
+                            end
+                            ac.setMessage("Loaded as Current", msg)
                         else
-                            ac.setMessage("Load Error", "Failed to load CSV")
+                            local errMsg = warnings and warnings[1] or "Failed to load CSV"
+                            ac.setMessage("Load Error", errMsg)
                         end
                         isLoadingRef = false
                     end
                     ui.popStyleColor(2)
-                    
+
                     -- "Ref" button
                     ui.sameLine()
                     ui.pushStyleColor(ui.StyleColor.Button, rgbm(0.2, 0.2, 0.4, 1))
                     ui.pushStyleColor(ui.StyleColor.ButtonHovered, rgbm(0.3, 0.3, 0.5, 1))
                     if ui.button("R##csvref" .. j, vec2(btnW, 0)) and not isLoadingRef then
                         isLoadingRef = true
-                        local loaded = lap.fromCSV(fileInfo.path, state.track, state.car)
+                        local trackLength = ac.getSim().trackLengthM
+                        local loaded, warnings = lap.fromCSV(fileInfo.path, state.track, state.car, trackLength)
                         if loaded then
                             state.setBestLap(loaded)
                             table.insert(state.historyReferences, loaded)
                             showRefPicker = false
-                            ac.setMessage("Reference Loaded", string.format("CSV: %d:%05.2f", 
-                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60))
+                            local msg = string.format("CSV: %d:%05.2f",
+                                math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
+                            if warnings and #warnings > 0 then
+                                msg = msg .. " (with warnings)"
+                                for _, w in ipairs(warnings) do
+                                    ac.log("CSV Import: " .. w)
+                                end
+                            end
+                            ac.setMessage("Reference Loaded", msg)
                         else
-                            ac.setMessage("Load Error", "Failed to load CSV")
+                            local errMsg = warnings and warnings[1] or "Failed to load CSV"
+                            ac.setMessage("Load Error", errMsg)
                         end
                         isLoadingRef = false
                     end
