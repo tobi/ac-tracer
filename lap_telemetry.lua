@@ -14,7 +14,8 @@ local markdown = require('markdown')
 local lap_telemetry = {}
 
 -- View state
-local selectedLapIndex = nil  -- nil = auto-select fastest, or index into state.history
+local selectedLap = nil       -- Direct lap reference (can be CSV or session lap)
+local selectedLapIndex = nil  -- Index for navigation within history
 local autoSelectFastest = true  -- Auto-select fastest lap from session
 
 local viewStartTime = 0  -- Start time of visible window (seconds)
@@ -40,27 +41,16 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
--- Get all available laps (session laps + bestLap if it's a CSV)
-local function getAllLaps()
-    local laps = {}
-
-    -- Add bestLap first if it's a CSV (not in history)
-    if state.bestLap and state.bestLap.csvSource then
-        table.insert(laps, state.bestLap)
-    end
-
-    -- Add session laps from history
-    for _, l in ipairs(state.history or {}) do
-        table.insert(laps, l)
-    end
-
-    return laps
-end
-
--- Get selected lap from combined laps (auto-select fastest if enabled)
+-- Get selected lap (direct reference, or from history if navigating)
 local function getSelectedLap()
-    local allLaps = getAllLaps()
-    if #allLaps == 0 then return nil end
+    -- If we have a direct lap reference (e.g., CSV loaded via "C"), use it
+    if selectedLap and selectedLap:length() > 0 then
+        return selectedLap
+    end
+
+    -- Otherwise use history
+    local history = state.history or {}
+    if #history == 0 then return nil end
 
     if autoSelectFastest then
         local fastest, idx = state.getFastestSessionLap()
@@ -68,22 +58,11 @@ local function getSelectedLap()
             selectedLapIndex = idx
             return fastest
         end
-        -- Fallback to fastest from all laps
-        local bestTime = math.huge
-        local bestIdx = 1
-        for i, l in ipairs(allLaps) do
-            if l.time and l.time > 0 and l.time < bestTime then
-                bestTime = l.time
-                bestIdx = i
-            end
-        end
-        selectedLapIndex = bestIdx
-        return allLaps[bestIdx]
     end
 
     if not selectedLapIndex then selectedLapIndex = 1 end
-    local idx = math.clamp(selectedLapIndex, 1, #allLaps)
-    return allLaps[idx]
+    local idx = math.clamp(selectedLapIndex, 1, #history)
+    return history[idx]
 end
 
 -- Get reference lap (defaults to state.bestLap)
@@ -977,23 +956,24 @@ function lap_telemetry.draw(dt)
         ui.popStyleColor()
 
         ui.sameLine(130)
-        local allLaps = getAllLaps()
-        if #allLaps > 1 then
+        local history = state.history or {}
+        if #history > 1 then
             if ui.button("<", vec2(30, 0)) then
                 autoSelectFastest = false
+                selectedLap = nil  -- Clear direct reference, use index
                 selectedLapIndex = math.max(1, (selectedLapIndex or 1) - 1)
                 viewStartTime = 0
                 viewDuration = 0
             end
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-
-            ui.text(string.format("lap %d/%d", selectedLapIndex or 1, #allLaps))
+            ui.text(string.format("lap %d/%d", selectedLapIndex or 1, #history))
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) then
                 autoSelectFastest = false
-                selectedLapIndex = math.min(#allLaps, (selectedLapIndex or 1) + 1)
+                selectedLap = nil  -- Clear direct reference, use index
+                selectedLapIndex = math.min(#history, (selectedLapIndex or 1) + 1)
                 viewStartTime = 0
                 viewDuration = 0
             end
@@ -1308,6 +1288,7 @@ function lap_telemetry.draw(dt)
         -- Callbacks for lap picker
         local function onSelectCurrent(lapData, idx)
             autoSelectFastest = false
+            selectedLap = lapData  -- Store lap directly (works for CSV and session laps)
             selectedLapIndex = idx
             viewStartTime = 0
             viewDuration = 0
