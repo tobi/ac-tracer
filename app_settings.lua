@@ -1,65 +1,66 @@
 -- Settings module for AC Tracer
+-- Uses ac.storage for automatic persistence (no manual save needed)
 
-local lap = require('lap')
 local lap_picker = require('lap_picker')
-local theme = require('theme')
 
 local M = {}
 
--- Load INI config
-local ini = ac.INIConfig.load(__dirname .. '/settings.ini')
+-- Persistent settings using ac.storage (auto-saves on assignment)
+-- Uses "ac_tracer/" prefix for all keys
+local config = ac.storage({
+    -- Display toggles
+    displayThrottle = true,
+    displayBrake = true,
+    displayClutch = false,
+    displaySteering = false,
+    displaySpeed = false,
 
--- Helper to convert INI values to boolean
-local function toBool(val, default)
-    if val == nil then return default end
-    if type(val) == "boolean" then return val end
-    if type(val) == "string" then
-        local lower = val:lower()
-        if lower == "true" or lower == "1" then return true end
-        if lower == "false" or lower == "0" then return false end
-    end
-    if type(val) == "number" then return val ~= 0 end
-    return default
-end
+    -- Telemetry window
+    telemetryAutoHide = true,
+    telemetryAutoHideSpeed = 20,
 
--- General settings
-M.useKMH = toBool(ini:get('GENERAL', 'use_kmh', true), true)
+    -- General
+    useKMH = true,
 
--- Telemetry window auto-hide settings
-M.telemetryAutoHide = toBool(ini:get('TELEMETRY', 'auto_hide', true), true)
-M.telemetryAutoHideSpeed = tonumber(ini:get('TELEMETRY', 'auto_hide_speed', 20)) or 20
+    -- Detection thresholds
+    brakeThreshold = 0.05,
+    throttleThreshold = 0.98,
+    speedDropThreshold = 0.05,
 
--- Detection parameters
-M.brakeThreshold = tonumber(ini:get('DETECTION', 'brake_threshold', 0.05)) or 0.05  -- 5% brake = brake point
-M.throttleThreshold = tonumber(ini:get('DETECTION', 'throttle_threshold', 0.98)) or 0.98  -- Below 98% = lift point
-M.speedDropThreshold = tonumber(ini:get('DETECTION', 'speed_drop_threshold', 0.05)) or 0.05
+    -- Trace settings
+    timeWindow = 12,
+    sampleRate = 15,
+    thickness = 1.5,
+    steeringCapDeg = 180,
+}, "ac_tracer/")
 
--- Trace settings
-M.timeWindow = ini:get('TRACES', 'trace_time_window', 12)
-M.sampleRate = ini:get('TRACES', 'trace_sample_rate', 15)
-M.thickness = ini:get('TRACES', 'trace_thickness', 1.5)
-M.steeringCap = ini:get('TRACES', 'trace_steering_cap', 180) * math.pi / 180
+-- Export settings as module properties (for compatibility)
+M.useKMH = config.useKMH
+M.telemetryAutoHide = config.telemetryAutoHide
+M.telemetryAutoHideSpeed = config.telemetryAutoHideSpeed
+M.brakeThreshold = config.brakeThreshold
+M.throttleThreshold = config.throttleThreshold
+M.speedDropThreshold = config.speedDropThreshold
+M.timeWindow = config.timeWindow
+M.sampleRate = config.sampleRate
+M.thickness = config.thickness
+M.steeringCap = config.steeringCapDeg * math.pi / 180
 
--- Display toggles (steering and speed default to OFF)
-local rawSteering = ini:get('TRACES', 'display_steering', nil)
-local rawSpeed = ini:get('TRACES', 'display_speed', nil)
-
+-- Display table (for compatibility with existing code)
 M.display = {
-    throttle = toBool(ini:get('TRACES', 'display_throttle', true), true),
-    brake = toBool(ini:get('TRACES', 'display_brake', true), true),
-    clutch = toBool(ini:get('TRACES', 'display_clutch', false), false),
-    steering = toBool(rawSteering, false),
-    speed = toBool(rawSpeed, false),
+    throttle = config.displayThrottle,
+    brake = config.displayBrake,
+    clutch = config.displayClutch,
+    steering = config.displaySteering,
+    speed = config.displaySpeed,
 }
-
--- Colors are now provided by the theme module (require('theme'))
 
 -- UI helper: toggle checkbox that auto-saves
 function M.checkbox(label, key)
-    if ui.checkbox(label, M.display[key]) then
-        M.display[key] = not M.display[key]
-        ini:set('TRACES', 'display_' .. key, M.display[key] and "True" or "False")
-        ini:save()
+    local configKey = 'display' .. key:sub(1, 1):upper() .. key:sub(2)
+    if ui.checkbox(label, config[configKey]) then
+        config[configKey] = not config[configKey]
+        M.display[key] = config[configKey]
     end
 end
 
@@ -86,19 +87,17 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     ui.text("Telemetry Window")
     ui.offsetCursorY(5)
 
-    if ui.checkbox("Auto-hide above speed", M.telemetryAutoHide) then
-        M.telemetryAutoHide = not M.telemetryAutoHide
-        ini:set('TELEMETRY', 'auto_hide', M.telemetryAutoHide and "True" or "False")
-        ini:save()
+    if ui.checkbox("Auto-hide above speed", config.telemetryAutoHide) then
+        config.telemetryAutoHide = not config.telemetryAutoHide
+        M.telemetryAutoHide = config.telemetryAutoHide
     end
 
     ui.sameLine(180)
     ui.pushItemWidth(60)
-    local newSpeed = ui.slider("##autohidespeed", M.telemetryAutoHideSpeed, 5, 100, "%.0f km/h")
-    if newSpeed ~= M.telemetryAutoHideSpeed then
-        M.telemetryAutoHideSpeed = newSpeed
-        ini:set('TELEMETRY', 'auto_hide_speed', tostring(math.floor(newSpeed)))
-        ini:save()
+    local newSpeed = ui.slider("##autohidespeed", config.telemetryAutoHideSpeed, 5, 100, "%.0f km/h")
+    if newSpeed ~= config.telemetryAutoHideSpeed then
+        config.telemetryAutoHideSpeed = newSpeed
+        M.telemetryAutoHideSpeed = config.telemetryAutoHideSpeed
     end
     ui.popItemWidth()
     ui.offsetCursorY(10)

@@ -386,24 +386,25 @@ function lap_picker.draw(dt)
     local st = getState()
     local windowSize = ui.availableSpace()
     local padding = 10
+    local contentW = windowSize.x - padding * 2
 
     -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, theme.bg.panel, 0)
 
-    local py = padding
+    local headerHeight = 0
 
     -- Header with current reference
     ui.pushFont(ui.Font.Main)
-    ui.setCursor(vec2(padding, py))
+    ui.setCursor(vec2(padding, padding))
     ui.textColored("Reference Lap", theme.text.primary)
     ui.popFont()
-    py = py + 22
+    headerHeight = headerHeight + 22
 
     -- Current reference status
     if st.hasBestLap() then
         local bestTime = st.getBestLapTime()
         local bestLap = st.getBestLap()
-        ui.setCursor(vec2(padding, py))
+        ui.setCursor(vec2(padding, padding + headerHeight))
         ui.pushFont(ui.Font.Small)
         ui.textColored(file_utils.formatLapTime(bestTime * 1000), theme.status.success)
         ui.sameLine()
@@ -416,19 +417,18 @@ function lap_picker.draw(dt)
             st.resetBestLap()
         end
     else
-        ui.setCursor(vec2(padding, py))
+        ui.setCursor(vec2(padding, padding + headerHeight))
         ui.pushFont(ui.Font.Small)
         ui.textColored("No reference loaded", theme.status.warning)
         ui.popFont()
     end
-    py = py + 24
+    headerHeight = headerHeight + 24
 
-    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), theme.grid.separator, 1)
-    py = py + 8
+    ui.drawLine(vec2(padding, padding + headerHeight), vec2(windowSize.x - padding, padding + headerHeight), theme.grid.separator, 1)
+    headerHeight = headerHeight + 8
 
     -- Column headers
-    local contentW = windowSize.x - padding * 2
-    ui.setCursor(vec2(padding, py))
+    ui.setCursor(vec2(padding, padding + headerHeight))
     ui.pushFont(ui.Font.Small)
     ui.textColored("Lap", theme.text.muted)
     ui.sameLine(windowSize.x - BTN_WIDTH * 2 - padding - 15)
@@ -436,84 +436,83 @@ function lap_picker.draw(dt)
     ui.sameLine(windowSize.x - BTN_WIDTH - padding - 5)
     ui.textColored("R", theme.text.muted)
     ui.popFont()
-    py = py + 16
+    headerHeight = headerHeight + 16
 
-    -- Current Session
-    ui.setCursor(vec2(padding, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("This Session", theme.status.success)
-    ui.popFont()
-    py = py + 16
+    -- Scrollable content area
+    local scrollAreaY = padding + headerHeight
+    local scrollAreaHeight = windowSize.y - scrollAreaY - padding
+    ui.setCursor(vec2(0, scrollAreaY))
 
-    local currentSessionLaps = st.getCurrentSessionLaps()
-    if #currentSessionLaps > 0 then
-        local shown = 0
-        for _, entry in ipairs(currentSessionLaps) do
-            if shown < 6 and py < windowSize.y - 150 then
+    ui.childWindow('lap_picker_scroll', vec2(windowSize.x, scrollAreaHeight), function()
+        local py = 0
+
+        -- Current Session
+        ui.setCursor(vec2(padding, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("This Session", theme.status.success)
+        ui.popFont()
+        py = py + 16
+
+        local currentSessionLaps = st.getCurrentSessionLaps()
+        if #currentSessionLaps > 0 then
+            for _, entry in ipairs(currentSessionLaps) do
                 py = drawLapRow(padding, py, contentW, entry.lap, entry.index, {})
-                shown = shown + 1
             end
+        else
+            ui.setCursor(vec2(padding + 10, py))
+            ui.pushFont(ui.Font.Small)
+            ui.textColored("No laps yet", theme.text.muted)
+            ui.popFont()
+            py = py + 18
         end
-    else
-        ui.setCursor(vec2(padding + 10, py))
+
+        py = py + 6
+        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
+        py = py + 8
+
+        -- Previous Sessions
+        ui.setCursor(vec2(padding, py))
         ui.pushFont(ui.Font.Small)
-        ui.textColored("No laps yet", theme.text.muted)
+        ui.textColored("Previous Sessions", theme.status.info)
         ui.popFont()
-        py = py + 18
-    end
+        py = py + 16
 
-    py = py + 6
-    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), theme.grid.separator, 1)
-    py = py + 8
-
-    -- Previous Sessions
-    ui.setCursor(vec2(padding, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("Previous Sessions", theme.status.info)
-    ui.popFont()
-    py = py + 16
-
-    local prevSessionLaps = st.getPreviousSessionLaps()
-    if #prevSessionLaps > 0 then
-        local shown = 0
-        for _, entry in ipairs(prevSessionLaps) do
-            if shown < 4 and py < windowSize.y - 100 then
+        local prevSessionLaps = st.getPreviousSessionLaps()
+        if #prevSessionLaps > 0 then
+            for _, entry in ipairs(prevSessionLaps) do
                 py = drawLapRow(padding, py, contentW, entry.lap, entry.index + 1000, {})
-                shown = shown + 1
             end
+        else
+            ui.setCursor(vec2(padding + 10, py))
+            ui.pushFont(ui.Font.Small)
+            ui.textColored("No saved laps", theme.text.muted)
+            ui.popFont()
+            py = py + 18
         end
-    else
-        ui.setCursor(vec2(padding + 10, py))
+
+        py = py + 6
+        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
+        py = py + 8
+
+        -- CSV Files
+        ui.setCursor(vec2(padding, py))
         ui.pushFont(ui.Font.Small)
-        ui.textColored("No saved laps", theme.text.muted)
+        ui.textColored("CSV Files (tracks/)", theme.status.warning)
         ui.popFont()
-        py = py + 18
-    end
+        py = py + 16
 
-    py = py + 6
-    ui.drawLine(vec2(padding, py), vec2(windowSize.x - padding, py), theme.grid.separator, 1)
-    py = py + 8
-
-    -- CSV Files
-    ui.setCursor(vec2(padding, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("CSV Files (tracks/)", theme.status.warning)
-    ui.popFont()
-    py = py + 16
-
-    local files = file_utils.scanCSVFiles()
-    if #files > 0 then
-        for j, fileInfo in ipairs(files) do
-            if py < windowSize.y - 30 then
+        local files = file_utils.scanCSVFiles()
+        if #files > 0 then
+            for j, fileInfo in ipairs(files) do
                 py = drawCSVRow(padding, py, contentW, fileInfo, j, {})
             end
+        else
+            ui.setCursor(vec2(padding + 10, py))
+            ui.pushFont(ui.Font.Small)
+            ui.textColored("No CSV files in tracks/", theme.text.muted)
+            ui.popFont()
         end
-    else
-        ui.setCursor(vec2(padding + 10, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("No CSV files in tracks/", theme.text.muted)
-        ui.popFont()
-    end
+    end)
 end
 
 --------------------------------------------------------------------------------

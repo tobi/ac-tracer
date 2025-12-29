@@ -3,6 +3,7 @@
 
 local lap = require('lap')
 local settings = require('app_settings')
+local history_storage = require('history_storage')
 
 local state = {}
 
@@ -24,7 +25,7 @@ state.trackPosition = 0        -- number: spline position 0.0-1.0
 
 -- Lap data
 state.currentLap = nil         -- lap: being recorded
-state.history = {}             -- array[lap]: completed laps (max 20, persisted)
+-- state.history is now a reference to history_storage.laps
 state.historyReferences = {}   -- array[lap]: external CSVs loaded for comparison
 
 -- Reference lap
@@ -41,8 +42,10 @@ state.cornerRecordTime = nil
 --------------------------------------------------------------------------------
 
 local SAMPLE_RATE = lap.SAMPLE_RATE
-local MAX_HISTORY = 20
 local TAP_THRESHOLD = 1.0
+
+-- state.history is a reference to history_storage.laps
+state.history = history_storage.laps
 
 -- Timing
 local sampleTimer = 0
@@ -164,7 +167,7 @@ local function saveCornersToFile()
     state.trackCorners = removeOverlappingCorners(state.trackCorners)
 
     -- Ensure corners directory exists
-    io.popen('mkdir -p "' .. CORNERS_DIR .. '"'):close()
+    io.createDir(CORNERS_DIR)
 
     -- Write CSV for this track only
     local f = io.open(path, "w")
@@ -310,64 +313,20 @@ local function loadBestLap()
 end
 
 --------------------------------------------------------------------------------
--- Persistence: History
+-- Persistence: History (delegated to history_storage module)
 --------------------------------------------------------------------------------
 
---- Save history to ac.storage
+-- History is now managed by history_storage module
+-- state.history is a reference to history_storage.laps
 local function saveHistory()
-    if not state.history or #state.history == 0 then 
-        ac.log("AC Tracer: No history to save")
-        return 
-    end
-    
-    local serialized = {}
-    for i, lapData in ipairs(state.history) do
-        if i <= MAX_HISTORY then
-            local ser = lapData:serialize()
-            if ser then
-                table.insert(serialized, ser)
-            else
-                ac.log("AC Tracer: Failed to serialize lap " .. i)
-            end
-        end
-    end
-    
-    local key = getStorageKey('history')
-    local dataToSave = stringify(serialized)
-    ac.storage[key] = dataToSave
-    ac.log("AC Tracer: Saved " .. #serialized .. " laps to history (key: " .. key .. ", size: " .. #dataToSave .. " bytes)")
+    history_storage.save()
 end
 
---- Load history from ac.storage
 local function loadHistory()
-    local key = getStorageKey('history')
-    ac.log("AC Tracer: Loading history with key: " .. key)
-    local data = ac.storage[key]
-    if not data then 
-        ac.log("AC Tracer: No history data found in storage")
-        return false 
-    end
-    
-    ac.log("AC Tracer: Found history data, parsing...")
-    local ok, serialized = pcall(function() return stringify.parse(data) end)
-    if not ok or not serialized then 
-        ac.log("AC Tracer: Failed to parse history data")
-        return false 
-    end
-    
-    ac.log("AC Tracer: Parsed " .. #serialized .. " entries, deserializing...")
-    state.history = {}
-    for i, lapStr in ipairs(serialized) do
-        local loaded = lap.deserialize(lapStr)
-        if loaded and loaded:length() > 10 then
-            table.insert(state.history, loaded)
-        else
-            ac.log("AC Tracer: Failed to load lap " .. i)
-        end
-    end
-    
-    ac.log("AC Tracer: Loaded " .. #state.history .. " laps from history")
-    return #state.history > 0
+    local success = history_storage.load()
+    -- Update the reference since history_storage.laps may have been reassigned
+    state.history = history_storage.laps
+    return success
 end
 
 -- Auto-Detection: Corners from Best Lap
@@ -644,10 +603,19 @@ local prevLapTimeMs = 0
 local prevResetCounter = 0
 
 --- Discard current lap and start fresh
+local lastDiscardTime = 0
 local function discardCurrentLap()
+    -- Only log if we haven't discarded in the last second (avoid spam)
+    local now = os.clock()
+    local shouldLog = (now - lastDiscardTime) > 1.0 and state.currentLap and state.currentLap:length() > 10
+    lastDiscardTime = now
+
     state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
-    ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
+
+    if shouldLog then
+        ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
+    end
 end
 
 --- Update state (call from script.update)
@@ -671,7 +639,11 @@ function state.update(dt, car)
     -- Check lap completion FIRST (before any discard logic)
     -- This prevents the lap reset from triggering discard when a lap completes normally
     if car.lapCount > state.lapNumber then
-        if state.lapNumber > 0 and state.currentLap and state.currentLap:length() > 10 then
+        ac.log(string.format("AC Tracer: Lap count changed %d -> %d, currentLap samples: %d",
+            state.lapNumber, car.lapCount, state.currentLap and state.currentLap:length() or 0))
+
+        -- Save lap if we have data (lap 0->1 is the out-lap, typically partial)
+        if state.currentLap and state.currentLap:length() > 10 then
             -- Finalize completed lap
             state.currentLap.completed = true
             state.currentLap.valid = car.isLastLapValid
@@ -679,11 +651,8 @@ function state.update(dt, car)
             state.currentLap.lapNumberInSession = state.lapNumber  -- Lap number in this session
             
             -- Add to history (most recent first)
-            table.insert(state.history, 1, state.currentLap)
-            while #state.history > MAX_HISTORY do
-                table.remove(state.history)
-            end
-            saveHistory()
+            history_storage.add(state.currentLap)
+            state.history = history_storage.laps  -- Update reference
             
             ac.log(string.format("Traces: Lap completed - time: %.3fs, valid: %s, samples: %d, sessionId: %s", 
                 state.currentLap.time / 1000, tostring(state.currentLap.valid), state.currentLap:length(),
@@ -747,6 +716,12 @@ function state.update(dt, car)
         if car.lapTimeMs > 0 and car.splinePosition >= 0 and not inPit then
             state.currentLap:addSample(car)
         end
+
+        -- Debug: Log sample count every ~5 seconds (300 samples at 60Hz)
+        if state.currentLap and state.currentLap:length() % 300 == 0 and state.currentLap:length() > 0 then
+            ac.log(string.format("AC Tracer: Recording lap - %d samples, pos: %.3f, lapTimeMs: %d",
+                state.currentLap:length(), car.splinePosition, car.lapTimeMs))
+        end
     end
     
     -- Update position
@@ -803,55 +778,19 @@ end
 --- Get fastest lap from current session only
 ---@return table|nil lap, number|nil index
 function state.getFastestSessionLap()
-    if not state.history or #state.history == 0 then return nil, nil end
-    if not state.sessionId then return nil, nil end
-    
-    local fastest = nil
-    local fastestIdx = nil
-    for i, lapData in ipairs(state.history) do
-        -- Only consider laps from current session
-        if lapData.sessionId == state.sessionId and 
-           lapData.valid and lapData.time and lapData.time > 0 then
-            if not fastest or lapData.time < fastest.time then
-                fastest = lapData
-                fastestIdx = i
-            end
-        end
-    end
-    return fastest, fastestIdx
+    return history_storage.getFastestFromSession(state.sessionId)
 end
 
 --- Get laps from current session
 ---@return table Array of {lap, index} pairs
 function state.getCurrentSessionLaps()
-    local laps = {}
-    if not state.history or #state.history == 0 then return laps end
-    if not state.sessionId then 
-        ac.log("AC Tracer: getCurrentSessionLaps - no sessionId set")
-        return laps 
-    end
-    
-    for i, lapData in ipairs(state.history) do
-        if lapData.sessionId == state.sessionId then
-            table.insert(laps, {lap = lapData, index = i})
-        end
-    end
-
-    return laps
+    return history_storage.getLapsFromSession(state.sessionId)
 end
 
 --- Get laps from previous sessions
 ---@return table Array of {lap, index} pairs
 function state.getPreviousSessionLaps()
-    local laps = {}
-    if not state.history or #state.history == 0 then return laps end
-    
-    for i, lapData in ipairs(state.history) do
-        if lapData.sessionId ~= state.sessionId then
-            table.insert(laps, {lap = lapData, index = i})
-        end
-    end
-    return laps
+    return history_storage.getLapsNotFromSession(state.sessionId)
 end
 
 --- Set best lap directly

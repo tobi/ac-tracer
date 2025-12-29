@@ -30,6 +30,9 @@ local maxPoints = math.ceil(settings.timeWindow * settings.sampleRate)
 local history = { throttle = {}, brake = {}, clutch = {}, steering = {}, speed = {}, pos = {} }
 local updateTimer = 0
 
+-- Current car reference (updated once per frame in script.update)
+local currentCar = nil
+
 local function updateHistory(car)
     table.insert(history.throttle, car.gas)
     -- Use extended brake pressure if available, otherwise fall back to pedal position
@@ -65,25 +68,25 @@ local function getMaxSpeed(ghostTraces)
 end
 
 function script.update(dt)
-    local car = ac.getCar(0)
-    if not car then return end
-    
+    currentCar = ac.getCar(0)
+    if not currentCar then return end
+
     if not ac.getSim().isPaused then
         -- Update centralized state (handles lap recording, completion, best lap)
-        state.update(dt, car)
-        
+        state.update(dt, currentCar)
+
         -- Update history for trace display
         updateTimer = updateTimer + dt
         if updateTimer >= 1 / settings.sampleRate then
             updateTimer = updateTimer - 1 / settings.sampleRate
-            updateHistory(car)
+            updateHistory(currentCar)
         end
-        
+
         -- Update corner analysis (live tracking)
-        corner_analysis.update(car)
-        
+        corner_analysis.update(currentCar)
+
         -- Handle corner recording button
-        corner.handleRecordButton(car, recordCornerButton)
+        corner.handleRecordButton(currentCar, recordCornerButton)
     end
 end
 
@@ -313,11 +316,11 @@ local function posToX(pos, positions, x, w)
 end
 
 function script.windowMain(dt)
-    local car = ac.getCar(0)
-    if not car then 
+    if not currentCar then
         ui.text("No car data")
-        return 
+        return
     end
+    local car = currentCar
 
     if resetButton:pressed() then
         state.resetBestLap()

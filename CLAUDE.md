@@ -15,6 +15,18 @@ This document describes the desired architecture, data structures, and data flow
 
 ---
 
+## Critical Rules
+
+**NEVER use shell commands or external tools** (`io.popen`, `os.execute`, etc.) in this codebase. CSP provides comprehensive APIs for all file/directory operations:
+- `io.createDir(path)` - Create directories
+- `io.open(path, mode)` - Read/write files
+- `io.exists(path)` - Check if file exists
+- `io.scanDir(path)` - List directory contents
+
+Shell commands launch visible CLI windows which breaks the user experience.
+
+---
+
 ## Resources
 
 - **CSP Lua Skill**: Use the [CSP Lua skill](./.claude/skills/csp-lua.md) for API reference. Update it when it points you into the wrong place.

@@ -113,24 +113,34 @@ myButton:control(vec2(120, 0))
 
 ## Storage
 
-### `ac.storage(layout, prefix)`
-Advanced persistent storage with default values and automatic synchronization.
+### `ac.storage(layout, prefix)` - PREFERRED
+Advanced persistent storage with default values and automatic synchronization. **This is the recommended approach.**
 
 ```lua
--- Define layout with defaults
-local state = ac.storage({
-    lastBestLap = 0,
+-- Define layout with defaults (at module level)
+local config = ac.storage{
     showTraces = true,
-    colors = rgb(1, 0, 0)
-}, "my_app/")
+    autoHide = false,
+    hideSpeed = 20,
+    colorOwn = rgb(0.2, 0.2, 0.2)
+}
 
--- Access/Modify (automatically persists)
-if state.showTraces then
-    state.lastBestLap = currentTime
+-- Access/Modify (automatically persists on assignment)
+if ui.checkbox('Show traces', config.showTraces) then
+    config.showTraces = not config.showTraces  -- Auto-saved!
 end
+
+config.hideSpeed = ui.slider('##speed', config.hideSpeed, 0, 100, 'Speed: %.0f')
 ```
 
-**Note:** Direct access `ac.storage[key] = value` only supports strings. Use the table-based approach for more types.
+Values can be: strings, numbers, booleans, vectors (vec2/vec3/vec4), colors (rgb/rgbm).
+
+**Note:** Direct access `ac.storage[key] = value` only supports strings and requires manual serialization. Avoid this pattern - use the table-based approach instead.
+
+### SDK Examples
+See working examples in other CSP apps:
+- `apps/lua/Radar/Radar.lua` - Simple config with checkboxes, sliders, colors
+- `apps/lua/CSPDataLogger/CSPDataLogger.lua` - Basic boolean/number settings
 
 ## Logging & UI
 
@@ -281,3 +291,22 @@ ac.setAppWindowVisible("ac-tracer", "telemetry", true)
 ## Full API Reference
 
 For the complete API reference with all types, enums, and functions, read the file `reference/lib.lua` in this skill folder (17,000+ lines of type definitions and documentation).
+
+## Scripts
+
+### `scripts/logs.ps1`
+View CSP logs filtered for ac-tracer entries.
+
+```powershell
+# Default: last 20 entries
+.\.claude\skills\scripts\logs.ps1
+
+# Last 50 entries
+.\.claude\skills\scripts\logs.ps1 -l 50
+
+# Only errors
+.\.claude\skills\scripts\logs.ps1 -only ERROR
+
+# Only warnings
+.\.claude\skills\scripts\logs.ps1 -only WARN
+```

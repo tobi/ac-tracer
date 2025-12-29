@@ -9,7 +9,13 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git checkout:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(echo:*)",
+      "Bash(powershell -Command \"((Get-Content ''C:\\Program Files (x86)\\Steam\\steamapps\\common\\assettocorsa\\apps\\lua\\ac-tracer\\tracks\\ier_daytona.csv'')[13] -split '','') | Select-String ''brake''\")",
+      "Bash(powershell -Command:*)",
+      "Bash(git push)",
+      "Bash(ls:*)",
+      "Bash(powershell -File:*)"
     ]
   }
 }

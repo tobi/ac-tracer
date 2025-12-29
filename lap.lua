@@ -89,7 +89,13 @@ end
 --- Get number of samples in this lap
 ---@return number Sample count
 function lap:length()
-    return #self.pos
+    return self.pos and #self.pos or 0
+end
+
+--- Check if lap has no data
+---@return boolean True if lap is empty
+function lap:isEmpty()
+    return not self.pos or #self.pos == 0
 end
 
 --------------------------------------------------------------------------------
@@ -220,8 +226,9 @@ end
 ---@param threshold number Brake threshold (default 0.03)
 ---@return number|nil Spline position of brake point
 function lap:findBrakePoint(startPos, endPos, threshold)
+    if not self.pos then return nil end
     threshold = threshold or 0.1  -- 10% brake pressure
-    
+
     for i = 1, #self.pos do
         local pos = self.pos[i]
         -- Handle wrap-around
@@ -246,6 +253,7 @@ end
 ---@param fullThrottleThreshold number Throttle threshold for "full throttle" (default 0.98)
 ---@return number|nil Spline position of lift point
 function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
+    if not self.pos then return nil end
     fullThrottleThreshold = fullThrottleThreshold or 0.98  -- 98% = full throttle
 
     local wasOnFullThrottle = false
@@ -277,8 +285,9 @@ end
 ---@param endPos number End of search range
 ---@return number Maximum steering in degrees (absolute value)
 function lap:findMaxSteering(startPos, endPos)
+    if not self.pos then return 0 end
     local maxDeg = 0
-    
+
     for i = 1, #self.pos do
         local pos = self.pos[i]
         -- Handle wrap-around
@@ -305,6 +314,7 @@ end
 ---@return number|nil apexPos Position of minimum speed
 ---@return number|nil apexSpeed Speed at apex
 function lap:findApex(startPos, endPos)
+    if not self.pos then return nil, nil end
     local minSpeed = math.huge
     local apexPos = nil
 
@@ -338,6 +348,7 @@ end
 ---@param endPos number End of corner
 ---@return number|nil entrySpeed Max speed in entry phase
 function lap:findEntrySpeed(startPos, endPos)
+    if self:isEmpty() then return nil end
     -- First find the apex (min speed position)
     local apexPos, _ = self:findApex(startPos, endPos)
     if not apexPos then return self:getValueAtPos('speed', startPos) end
@@ -369,6 +380,7 @@ end
 ---@param endPos number End of corner
 ---@return number|nil exitSpeed Max speed in exit phase
 function lap:findExitSpeed(startPos, endPos)
+    if self:isEmpty() then return nil end
     -- First find the apex (min speed position)
     local apexPos, _ = self:findApex(startPos, endPos)
     if not apexPos then return self:getValueAtPos('speed', endPos) end
@@ -445,7 +457,7 @@ end
 --- Check if lap has complete track coverage
 ---@return boolean True if lap covers from ~0% to ~99% of track
 function lap:isComplete()
-    if #self.pos < 10 then return false end
+    if self:isEmpty() or #self.pos < 10 then return false end
     
     local minPos, maxPos = 1, 0
     for i = 1, #self.pos do
@@ -478,19 +490,28 @@ function lap.fromCSV(filePath, track, car, trackLength)
     end
 
     -- Create lap from parsed data
+    -- csv_parser returns { data = {...arrays...}, time, completed, fuelLeftAtStart, csvSource }
+    local data = parsed.data
+    if not data or not data.pos or #data.pos == 0 then
+        return nil, {"CSV parsed but no position data found"}
+    end
+
     local l = lap.new(track or '', car or '')
-    l.pos = parsed.pos
-    l.times = parsed.times
-    l.throttle = parsed.throttle
-    l.brake = parsed.brake
-    l.clutch = parsed.clutch
-    l.steering = parsed.steering
-    l.speed = parsed.speed
-    l.fuel = parsed.fuel or {}
+    l.pos = data.pos
+    l.times = data.times
+    l.throttle = data.throttle
+    l.brake = data.brake
+    l.clutch = data.clutch
+    l.steering = data.steering
+    l.speed = data.speed
+    l.fuel = data.fuel or {}
     l.time = parsed.time
     l.completed = parsed.completed
     l.fuelLeftAtStart = parsed.fuelLeftAtStart or 0
     l.csvSource = parsed.csvSource
+
+    ac.log(string.format("lap.fromCSV: Loaded lap with %d samples, time: %.3fs",
+        l:length(), l.time / 1000))
 
     return l, warnings
 end
