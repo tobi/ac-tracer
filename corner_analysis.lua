@@ -114,21 +114,24 @@ end
 
 --- Analyze a single corner from a lap
 ---@param lapData table Lap instance
----@param cornerDef table Corner definition {number, startPos, endPos, apexPos}
+---@param cornerDef table Corner definition {number, startPos, endPos}
 ---@return table Corner analysis data
 function corner_analysis.analyzeCorner(lapData, cornerDef)
     if not lapData or not cornerDef then return nil end
-    
+
+    -- Calculate apex dynamically for this specific lap
+    local apexPos, apexSpeed = lapData:findApex(cornerDef.startPos, cornerDef.endPos)
+
     return {
         number = cornerDef.number,
         startPos = cornerDef.startPos,
         endPos = cornerDef.endPos,
-        apexPos = cornerDef.apexPos,
+        apexPos = apexPos,
         entrySpeed = lapData:getValueAtPos('speed', cornerDef.startPos),
-        apexSpeed = lapData:getValueAtPos('speed', cornerDef.apexPos),
+        apexSpeed = apexSpeed,
         exitSpeed = lapData:getValueAtPos('speed', cornerDef.endPos),
-        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.apexPos, settings.brakeThreshold),
-        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.apexPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
+        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold),
+        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
         maxSteeringDeg = lapData:findMaxSteering(cornerDef.startPos, cornerDef.endPos),
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
         exitTime = lapData:getTimeAtPos(cornerDef.endPos),
@@ -294,7 +297,6 @@ local function onCornerExit()
     
     -- Get ghost's actual apex (minimum speed point) in the corner range
     local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
-    ghostApexPos = ghostApexPos or cornerInfo.apexPos
     ghostApexSpeed = ghostApexSpeed or 0
     
     -- Build comparison data
@@ -428,11 +430,14 @@ function corner_analysis.update(car)
                 liveCorner.apexPos = currentPos
             end
             
-            -- Check if passed apex
-            if cornerInfo.apexPos then
-                if currentPos >= cornerInfo.apexPos or (cornerInfo.apexPos > 0.9 and currentPos < 0.1) then
-                    liveCorner.passedApex = true
-                end
+            -- Check if passed apex (use midpoint of corner as approximate apex position)
+            local midPos = (cornerInfo.startPos + cornerInfo.endPos) / 2
+            if cornerInfo.endPos < cornerInfo.startPos then
+                midPos = (cornerInfo.startPos + cornerInfo.endPos + 1) / 2
+                if midPos >= 1 then midPos = midPos - 1 end
+            end
+            if currentPos >= midPos or (midPos > 0.9 and currentPos < 0.1) then
+                liveCorner.passedApex = true
             end
             
             -- Exit speed: highest after apex
@@ -479,15 +484,16 @@ function corner_analysis.getCurrentCornerData()
     end
     
     local ghostEntrySpeed = state.getGhostValueAt('speed', cornerInfo.startPos) or 0
-    local ghostApexSpeed = state.getGhostValueAt('speed', cornerInfo.apexPos) or 0
+    local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
+    ghostApexSpeed = ghostApexSpeed or 0
     local ghostExitSpeed = state.getGhostValueAt('speed', cornerInfo.endPos) or 0
-    
+
     return {
         number = liveCorner.cornerNum,
         ghostEntrySpeed = ghostEntrySpeed,
         ghostApexSpeed = ghostApexSpeed,
         ghostExitSpeed = ghostExitSpeed,
-        ghostApexPos = cornerInfo.apexPos,
+        ghostApexPos = ghostApexPos,
         currentEntrySpeed = liveCorner.entrySpeed,
         currentApexSpeed = liveCorner.apexSpeed,
         currentExitSpeed = liveCorner.exitSpeed,
@@ -684,19 +690,7 @@ end
 --- Main window rendering
 function corner_analysis.draw(dt, useKmh)
     local car = ac.getCar(0)
-    
-    -- Auto-hide when traveling above speed threshold
-    if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
-        ui.drawRectFilled(vec2(0, 0), vec2(115, 22), rgbm(0.08, 0.1, 0.08, 0.9), 4)
-        ui.setCursor(vec2(8, 3))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.5, 0.7, 0.4, 1))
-        ui.text("Corner Analysis")
-        ui.popStyleColor()
-        ui.popFont()
-        return
-    end
-    
+
     local windowSize = ui.availableSpace()
     local padding = 8
     local panelX = windowSize.x * 0.68

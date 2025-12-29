@@ -4,6 +4,12 @@
 
 local extended_brake = {}
 
+-- Conversion constant: 1 PSI = 0.0689476 bar
+local PSI_TO_BAR = 0.0689476
+
+-- Max brake pressure for normalization (100 bar, same as CSV import)
+local MAX_PRESSURE_BAR = 100
+
 -- Try to read the cphys_data memory-mapped file
 -- The DLL provides brakePressure as double2 (front, rear) in PSI
 local cphysData = nil
@@ -49,16 +55,16 @@ local function init()
         cphysData = result
         cphysAvailable = true
         ac.log("Extended Brake: SUCCESS - cphys_data connected, brake pressure telemetry enabled")
-        ac.log("Extended Brake: Source: cphys DLL (dwrite.dll) - using actual brake pressure in PSI")
+        ac.log("Extended Brake: Source: cphys DLL (dwrite.dll) - using front brake pressure, normalizing to 100 bar")
 
         -- Test read to verify data is actually flowing
-        local testSuccess, testFront, testRear = pcall(function()
-            return result.brakePressure[0], result.brakePressure[1]
+        local testSuccess, testFront = pcall(function()
+            return result.brakePressure[0]
         end)
         if testSuccess then
-            local total = (testFront or 0) + (testRear or 0)
-            ac.log(string.format("Extended Brake: Initial read - Front: %.2f, Rear: %.2f, Total: %.2f PSI",
-                testFront or 0, testRear or 0, total))
+            local frontBar = (testFront or 0) * PSI_TO_BAR
+            ac.log(string.format("Extended Brake: Initial read - Front: %.2f PSI (%.2f bar)",
+                testFront or 0, frontBar))
         else
             ac.log("Extended Brake: WARNING - Connected but failed to read brake pressure values")
         end
@@ -105,31 +111,20 @@ function extended_brake.isAvailable()
     return cphysAvailable
 end
 
---- Get brake pressure in PSI (front wheel average or specified wheel)
+--- Get front brake pressure in PSI
 --- Falls back to normalized brake pedal position if DLL not available
 ---@param car table|nil Car state from ac.getCar() - used for fallback
----@param wheel number|nil Optional wheel index (1-4, front-left, front-right, rear-left, rear-right)
----                         If nil, returns average of front brakes
----@return number Brake pressure in PSI (0-2000 typical range) or normalized 0-1 as fallback
+---@return number Brake pressure in PSI or normalized 0-1 as fallback
 ---@return boolean True if returning actual PSI, false if returning normalized position
-function extended_brake.getBrakePressure(car, wheel)
+function extended_brake.getBrakePressure(car)
     if not initAttempted then init() end
 
     if cphysAvailable and cphysData then
-        -- Try to read brake pressure from cphys
+        -- Try to read front brake pressure from cphys
         local success, pressure = pcall(function()
             -- brakePressure is double[2]: [0] = front, [1] = rear
-            if wheel then
-                -- Wheels 1-2 are front, 3-4 are rear
-                if wheel <= 2 then
-                    return cphysData.brakePressure[0]  -- Front pressure
-                else
-                    return cphysData.brakePressure[1]  -- Rear pressure
-                end
-            else
-                -- Return total brake pressure (front + rear)
-                return cphysData.brakePressure[0] + cphysData.brakePressure[1]
-            end
+            -- Use front brake pressure only (matches CSV "brake pressure f")
+            return cphysData.brakePressure[0]
         end)
 
         if success and pressure and pressure > 0 then
@@ -147,26 +142,25 @@ end
 
 --- Get normalized brake value (0-1) regardless of source
 --- Uses brake pressure if available, otherwise pedal position
+--- Converts PSI to bar, then normalizes to 100 bar max (same as CSV import)
 ---@param car table Car state from ac.getCar()
----@param maxPressure number|nil Maximum pressure for normalization (default 4000 PSI for front+rear combined)
 ---@return number Normalized brake value 0-1
-function extended_brake.getNormalizedBrake(car, maxPressure)
-    maxPressure = maxPressure or 4000  -- Typical max combined brake pressure (front + rear) in PSI
-
+function extended_brake.getNormalizedBrake(car)
     local pressure, isPSI = extended_brake.getBrakePressure(car)
 
     if isPSI then
-        -- Normalize PSI to 0-1 range
-        return math.clamp(pressure / maxPressure, 0, 1)
+        -- Convert PSI to bar, then normalize to 100 bar max
+        local pressureBar = pressure * PSI_TO_BAR
+        return math.clamp(pressureBar / MAX_PRESSURE_BAR, 0, 1)
     else
-        -- Already normalized
+        -- Already normalized (fallback pedal position)
         return pressure
     end
 end
 
---- Get raw brake data with metadata
+--- Get raw brake data with metadata (values in bar)
 ---@param car table Car state from ac.getCar()
----@return table { value, isPressure, unit, frontPressure, rearPressure }
+---@return table { value, isPressure, unit }
 function extended_brake.getBrakeData(car)
     if not initAttempted then init() end
 
@@ -174,25 +168,19 @@ function extended_brake.getBrakeData(car)
         value = 0,
         isPressure = false,
         unit = "%",
-        frontPressure = nil,
-        rearPressure = nil,
     }
 
     if cphysAvailable and cphysData then
-        local success, front, rear = pcall(function()
-            return cphysData.brakePressure[0], cphysData.brakePressure[1]
+        local success, front = pcall(function()
+            return cphysData.brakePressure[0]
         end)
 
-        if success and front then
-            local total = (front or 0) + (rear or 0)
-            if total > 0 then
-                data.value = total
-                data.isPressure = true
-                data.unit = "PSI"
-                data.frontPressure = front
-                data.rearPressure = rear
-                return data
-            end
+        if success and front and front > 0 then
+            -- Convert PSI to bar (front brake only)
+            data.value = front * PSI_TO_BAR
+            data.isPressure = true
+            data.unit = "bar"
+            return data
         end
     end
 

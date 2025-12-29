@@ -554,14 +554,18 @@ function script.windowMain(dt)
         ui.popFont()
     end
     
-    -- Toggle window buttons (left side, vertically stacked)
-    -- Use window-local coordinates for ui.setCursor
-    local btnLocalX = pad
-    local btnLocalY = pad + h / 2 - buttonSize.y * 2 - 6
+    -- Toggle window buttons (left side, vertically stacked next to trace area)
+    -- Position buttons to fit within the trace area height
+    local numButtons = 4
+    local btnSpacing = 4
+    local totalBtnHeight = numButtons * buttonSize.y + (numButtons - 1) * btnSpacing
+    local btnLocalX = (pad + btnAreaW - buttonSize.x) / 2  -- Center in button area
+    local btnLocalY = pad + (h - totalBtnHeight) / 2  -- Vertically center relative to trace area
+
     drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + 4), "📊", "Lap Telemetry", "telemetry")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + 4) * 2), "Δ", "Delta Bar", "delta")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + 4) * 3), "◎", "Reference Lap", "referencelap")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + btnSpacing), "📊", "Lap Telemetry", "telemetry")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 2), "Δ", "Delta Bar", "delta")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 3), "◎", "Reference Lap", "referencelap")
 end
 
 function script.windowSettings(dt)
