@@ -290,6 +290,41 @@ function ui_utils.deltaRow(x, y, label, delta, unit, labelWidth, lineHeight)
     return y + lineHeight
 end
 
+--- Draw a neutral delta row (no color coding - for values where more/less isn't inherently good/bad)
+--- Returns the Y position for next row
+---@param x number X position
+---@param y number Y position
+---@param label string Label text
+---@param delta number|nil Delta value
+---@param unit string Unit suffix (e.g., "°", "m")
+---@param labelWidth number|nil Width for label column (default 45)
+---@param lineHeight number|nil Line height (default 18)
+---@return number nextY Y position for next row
+function ui_utils.neutralDeltaRow(x, y, label, delta, unit, labelWidth, lineHeight)
+    if delta == nil then return y end
+
+    labelWidth = labelWidth or 45
+    lineHeight = lineHeight or 18
+
+    local rounded = math.floor(math.abs(delta) + 0.5)
+    if rounded == 0 then return y end
+
+    local direction = delta > 0 and "more" or "less"
+
+    ui.setCursor(vec2(x, y))
+    ui.pushFont(ui.Font.Main)
+    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+    ui.text(label)
+    ui.popStyleColor()
+    ui.sameLine(x + labelWidth)
+    ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
+    ui.text(string.format("%d%s %s", rounded, unit, direction))
+    ui.popStyleColor()
+    ui.popFont()
+
+    return y + lineHeight
+end
+
 --- Draw a position delta row (label + meters earlier/later)
 --- Returns the Y position for next row
 ---@param x number X position

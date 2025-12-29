@@ -9,6 +9,7 @@ local theme = require('theme')
 local file_utils = require('file_utils')
 local lap_picker = require('lap_picker')
 local ui_utils = require('ui_utils')
+local markdown = require('markdown')
 
 local lap_telemetry = {}
 
@@ -599,7 +600,8 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     end
 
     cursorValues.throttle = getValueAtTime(selectedLap, cursorTime, "throttle")
-    cursorValues.brake = getValueAtTime(selectedLap, cursorTime, "brake")
+    cursorValues.brake = getValueAtTime(selectedLap, cursorTime, "brake")  -- Front brake
+    cursorValues.brake_r = getValueAtTime(selectedLap, cursorTime, "brake_r")  -- Rear brake
     cursorValues.speed = getValueAtTime(selectedLap, cursorTime, "speed")
     cursorValues.steering = getValueAtTime(selectedLap, cursorTime, "steering")
     cursorValues.fuel = getValueAtTime(selectedLap, cursorTime, "fuel")
@@ -607,6 +609,7 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     if referenceLap and cursorValues.pos then
         cursorValues.refThrottle = referenceLap:getValueAtPos("throttle", cursorValues.pos)
         cursorValues.refBrake = referenceLap:getValueAtPos("brake", cursorValues.pos)
+        cursorValues.refBrake_r = referenceLap:getValueAtPos("brake_r", cursorValues.pos)
         cursorValues.refSpeed = referenceLap:getValueAtPos("speed", cursorValues.pos)
         cursorValues.refSteering = referenceLap:getValueAtPos("steering", cursorValues.pos)
         cursorValues.refFuel = referenceLap:getValueAtPos("fuel", cursorValues.pos)
@@ -667,9 +670,16 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     drawRow("Throttle", ui_utils.formatPercent(cursorValues.throttle or 0, 1), theme.trace.throttle,
         cursorValues.refThrottle and string.format("(%.1f%%)", cursorValues.refThrottle * 100))
 
-    -- Brake
-    drawRow("Brake", ui_utils.formatPercent(cursorValues.brake or 0, 1), theme.trace.brake,
+    -- Brake Front (brake = front)
+    drawRow("Brake F", ui_utils.formatPercent(cursorValues.brake or 0, 1), theme.trace.brake,
         cursorValues.refBrake and string.format("(%.1f%%)", cursorValues.refBrake * 100))
+
+    -- Brake Rear (show if data exists)
+    local hasBrakeR = selectedLap.brake_r and #selectedLap.brake_r > 0
+    if hasBrakeR then
+        drawRow("Brake R", ui_utils.formatPercent(cursorValues.brake_r or 0, 1), theme.trace.brake,
+            cursorValues.refBrake_r and string.format("(%.1f%%)", cursorValues.refBrake_r * 100))
+    end
 
     -- Speed
     drawRow("Speed", string.format("%.1f", cursorValues.speed or 0), theme.trace.speed,
@@ -1022,8 +1032,22 @@ function lap_telemetry.draw(dt)
             end
         end
 
-        -- Load Lap button
+        -- Copy as Markdown button
         ui.sameLine()
+        if ui.button("Copy as Markdown", vec2(120, 0)) then
+            local success, msg = markdown.copyToClipboard(selectedLap, referenceLap, settings.useKMH)
+            if success then
+                ac.setMessage("Copied", msg)
+            else
+                ac.setMessage("Error", msg)
+            end
+        end
+        if ui.itemHovered() then
+            ui.setTooltip("Copy lap telemetry as Markdown for AI coaching")
+        end
+
+        -- Load Lap button (far right)
+        ui.sameLine(windowSize.x - 110)
         loadLapButtonPos = ui.getCursor()  -- Track button position
         if ui.button("Load Lap...", vec2(90, 0)) then
             showRefPicker = not showRefPicker

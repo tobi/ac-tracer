@@ -119,8 +119,10 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold),
         liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold),
         maxSteeringDeg = lapData:findMaxSteering(cornerDef.startPos, cornerDef.endPos),
+        minGear = lapData:findMinGear(cornerDef.startPos, cornerDef.endPos),
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
         exitTime = lapData:getTimeAtPos(cornerDef.endPos),
+        overlapTime = lapData:getOverlapTimeInRange(cornerDef.startPos, cornerDef.endPos),
     }
 end
 
@@ -176,15 +178,21 @@ function corner_analysis.compareCorners(current, reference)
         currentBrakePos = current.brakePos,
         currentLiftOffPos = current.liftOffPos,
         currentMaxSteeringDeg = current.maxSteeringDeg or 0,
+        currentMinGear = current.minGear,
+        currentOverlapTime = current.overlapTime or 0,
+        -- Reference gear
+        refMinGear = reference.minGear,
         -- Deltas
         timeDelta = timeDelta,
-        entrySpeedDelta = current.entrySpeed and reference.entrySpeed and 
+        entrySpeedDelta = current.entrySpeed and reference.entrySpeed and
                           (current.entrySpeed - reference.entrySpeed) or nil,
-        apexSpeedDelta = current.apexSpeed and reference.apexSpeed and 
+        apexSpeedDelta = current.apexSpeed and reference.apexSpeed and
                          (current.apexSpeed - reference.apexSpeed) or nil,
-        exitSpeedDelta = current.exitSpeed and reference.exitSpeed and 
+        exitSpeedDelta = current.exitSpeed and reference.exitSpeed and
                          (current.exitSpeed - reference.exitSpeed) or nil,
         steeringDelta = (current.maxSteeringDeg or 0) - (reference.maxSteeringDeg or 0),
+        gearDelta = (current.minGear and reference.minGear) and (current.minGear - reference.minGear) or nil,
+        refOverlapTime = reference.overlapTime or 0,
     }
 end
 
@@ -577,55 +585,33 @@ end
 
 --- Draw direction indicator between solid (current) and dashed (ref) marker lines
 --- Shows which way the marker should move to match reference
---- Draws a line with arrow head: ---|>--- pointing toward reference
+--- Draws a small arrow at the very top (on the border) pointing toward reference
 ---@param x1 number X position of current (solid) line
 ---@param x2 number X position of reference (dashed) line
----@param y number Y position (top of graph area)
+---@param y number Y position (top of graph area / border line)
 ---@param color rgbm Arrow color
 local function drawDirectionArrows(x1, x2, y, color)
     if not x1 or not x2 then return end
 
     local gap = x2 - x1  -- Positive = ref is to the right
     local dist = math.abs(gap)
-    if dist < 16 then return end  -- Too close to show indicator
+    if dist < 12 then return end  -- Too close to show indicator
 
     local direction = gap > 0 and 1 or -1  -- 1 = right, -1 = left
-
-    -- Position at very top of the bars
-    local lineY = y + 4
-    local margin = 3
-    local leftX = math.min(x1, x2) + margin
-    local rightX = math.max(x1, x2) - margin
     local midX = (x1 + x2) / 2
 
-    -- Arrow head size
-    local arrowLen = math.min(5, dist / 4)
-    local arrowHalfH = 3
-
-    -- Draw line from left to arrow base
-    local arrowBaseX = midX - direction * arrowLen
+    -- Small arrow at very top, on the border line
+    local arrowLen = math.min(4, dist / 5)
+    local arrowHalfH = 2
     local arrowTipX = midX + direction * arrowLen
+    local arrowBaseX = midX - direction * arrowLen
 
-    -- Left segment (from left edge to arrow base)
-    ui.drawLine(vec2(leftX, lineY), vec2(arrowBaseX, lineY), theme.withAlpha(color, 0.6), 1)
-
-    -- Right segment (from arrow tip to right edge)
-    ui.drawLine(vec2(arrowTipX, lineY), vec2(rightX, lineY), theme.withAlpha(color, 0.6), 1)
-
-    -- Arrow head pointing in direction (filled triangle)
+    -- Draw small filled triangle arrow on the border
     ui.pathClear()
-    if direction > 0 then
-        -- Pointing right: >
-        ui.pathLineTo(vec2(arrowBaseX, lineY - arrowHalfH))
-        ui.pathLineTo(vec2(arrowTipX, lineY))
-        ui.pathLineTo(vec2(arrowBaseX, lineY + arrowHalfH))
-    else
-        -- Pointing left: <
-        ui.pathLineTo(vec2(arrowBaseX, lineY - arrowHalfH))
-        ui.pathLineTo(vec2(arrowTipX, lineY))
-        ui.pathLineTo(vec2(arrowBaseX, lineY + arrowHalfH))
-    end
-    ui.pathFillConvex(color)
+    ui.pathLineTo(vec2(arrowBaseX, y - arrowHalfH))
+    ui.pathLineTo(vec2(arrowTipX, y))
+    ui.pathLineTo(vec2(arrowBaseX, y + arrowHalfH))
+    ui.pathFillConvex(theme.withAlpha(color, 0.8))
 end
 
 local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
@@ -698,11 +684,10 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         end
     end
 
-    -- Draw direction arrows at top of bars (between solid and dashed lines)
-    local arrowY = y + 2
-    drawDirectionArrows(curBrakeX, refBrakeX, arrowY, theme.marker.brake)
-    drawDirectionArrows(curApexX, refApexX, arrowY, theme.marker.apex)
-    drawDirectionArrows(curLiftX, refLiftX, arrowY, theme.marker.lift)
+    -- Draw direction arrows at top border (between solid and dashed lines)
+    drawDirectionArrows(curBrakeX, refBrakeX, y, theme.marker.brake)
+    drawDirectionArrows(curApexX, refApexX, y, theme.marker.apex)
+    drawDirectionArrows(curLiftX, refLiftX, y, theme.marker.lift)
 end
 
 local function drawScoreGauge(cx, cy, radius, score)
@@ -896,19 +881,19 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         -- Coast distance (lift to brake) - only show if > 10m
+        -- Coasting is neutral - not inherently good or bad
         local currentCoast, refCoast, coastDelta = scoring.getCoastDistances(displayData)
         if currentCoast and currentCoast > 10 and coastDelta then
             local rounded = math.floor(math.abs(coastDelta) + 0.5)
             if rounded > 5 then
                 statsY = statsY + 4
                 local direction = coastDelta >= 0 and "more" or "less"
-                local valueColor = coastDelta > 0 and theme.delta.negativeFaint or theme.delta.positive
                 ui.setCursor(vec2(panelX, statsY))
                 ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
                 ui.text("Coast:")
                 ui.popStyleColor()
                 ui.sameLine(panelX + labelW)
-                ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+                ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
                 ui.text(string.format("%dm %s", rounded, direction))
                 ui.popStyleColor()
                 statsY = statsY + lineH
@@ -916,9 +901,10 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         -- Steering delta (only show if > 10 degrees difference)
+        -- Steering is neutral - more or less isn't inherently good or bad
         if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 10 then
             statsY = statsY + 4
-            statsY = ui_utils.deltaRow(panelX, statsY, "Steer", displayData.steeringDelta, "°", labelW, lineH)
+            statsY = ui_utils.neutralDeltaRow(panelX, statsY, "Steer", displayData.steeringDelta, "°", labelW, lineH)
         end
 
         ui.popFont()
