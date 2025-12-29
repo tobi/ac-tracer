@@ -193,6 +193,50 @@ function extended_brake.getBrakeData(car)
     return data
 end
 
+--- Get front and rear brake pressure in bar
+--- Falls back to pedal position for both if DLL not available
+---@param car table Car state from ac.getCar()
+---@return number frontBar Front brake pressure in bar (or normalized 0-1 as fallback)
+---@return number rearBar Rear brake pressure in bar (or normalized 0-1 as fallback)
+---@return boolean isPressure True if returning actual pressure, false if returning normalized position
+function extended_brake.getFrontRearPressure(car)
+    if not initAttempted then init() end
+
+    if cphysAvailable and cphysData then
+        local success, front, rear = pcall(function()
+            return cphysData.brakePressure[0], cphysData.brakePressure[1]
+        end)
+
+        if success and front and rear then
+            -- Convert PSI to bar
+            local frontBar = front * PSI_TO_BAR
+            local rearBar = rear * PSI_TO_BAR
+            return frontBar, rearBar, true
+        end
+    end
+
+    -- Fallback: use pedal position for both (no front/rear distinction)
+    local pedal = car and car.brake or 0
+    return pedal, pedal, false
+end
+
+--- Get normalized front and rear brake values (0-1)
+--- Converts pressure to normalized 0-1 based on 100 bar max
+---@param car table Car state from ac.getCar()
+---@return number frontNorm Normalized front brake 0-1
+---@return number rearNorm Normalized rear brake 0-1
+function extended_brake.getNormalizedFrontRear(car)
+    local frontBar, rearBar, isPressure = extended_brake.getFrontRearPressure(car)
+
+    if isPressure then
+        return math.clamp(frontBar / MAX_PRESSURE_BAR, 0, 1),
+               math.clamp(rearBar / MAX_PRESSURE_BAR, 0, 1)
+    else
+        -- Fallback - same value for both
+        return frontBar, rearBar
+    end
+end
+
 --- Get status information for debugging/display
 ---@return table { available, source, status }
 function extended_brake.getStatus()

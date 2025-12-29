@@ -27,11 +27,17 @@ lap.FLAGS = {
     LOCKUP_FR     = 0x10,  -- Front right wheel lockup
     LOCKUP_RL     = 0x20,  -- Rear left wheel lockup
     LOCKUP_RR     = 0x40,  -- Rear right wheel lockup
+    OVERLAP       = 0x80,  -- Both pedals pressed (throttle & brake > 0.1 for > 100ms)
 }
 
 -- Thresholds for detecting events
 local SLIP_THRESHOLD = 0.15      -- Wheel slip ratio threshold (15% difference from road speed)
 local LOCKUP_SPEED_MIN = 20      -- Minimum car speed (km/h) for lockup detection
+local OVERLAP_THRESHOLD = 0.1    -- Both pedals must be > 10% to count as overlap
+local OVERLAP_MIN_DURATION = 0.1 -- 100ms minimum duration for overlap to be flagged
+
+-- Overlap tracking state (per-lap)
+local overlapStartTime = nil     -- When current overlap started (nil = not overlapping)
 
 --------------------------------------------------------------------------------
 -- Constructor
@@ -55,13 +61,14 @@ function lap.new(track, car, sessionId)
 
         -- Telemetry arrays (all synchronized, sampled at 60 Hz)
         throttle = {},         -- 0.0 to 1.0
-        brake = {},            -- 0.0 to 1.0
+        brake = {},            -- 0.0 to 1.0 (front brake pressure normalized)
+        brake_r = {},          -- 0.0 to 1.0 (rear brake pressure normalized)
         clutch = {},           -- 0.0 to 1.0 (inverted: 1.0 = pressed)
         steering = {},         -- 0.0 to 1.0 (normalized, 0.5 = straight)
         speed = {},            -- km/h
+        gear = {},             -- gear number (0=neutral, 1-N=forward, -1=reverse)
         pos = {},              -- spline position 0.0 to 1.0
         times = {},            -- seconds (elapsed lap time at each sample)
-        tcActive = {},         -- boolean: traction control active (legacy, kept for compatibility)
         fuel = {},             -- liters remaining
 
         -- In-sim only telemetry flags (bitmask per sample, see lap.FLAGS)
@@ -101,13 +108,16 @@ end
 function lap:addSample(car)
     table.insert(self.throttle, car.gas)
     -- Use extended brake pressure if available, otherwise fall back to pedal position
-    table.insert(self.brake, extended_brake.getNormalizedBrake(car))
+    -- brake = front brake, brake_r = rear brake (or same as front if no DLL)
+    local brakeFront, brakeRear = extended_brake.getNormalizedFrontRear(car)
+    table.insert(self.brake, brakeFront)
+    table.insert(self.brake_r, brakeRear)
     table.insert(self.clutch, 1 - car.clutch)  -- Invert: 1.0 = foot on pedal
     table.insert(self.steering, lap.normalizeSteer(car.steer))
     table.insert(self.speed, car.speedKmh)
+    table.insert(self.gear, car.gear)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
-    table.insert(self.tcActive, car.tractionControlInAction or false)
     table.insert(self.fuel, car.fuel or 0)  -- Fuel remaining in liters
 
     -- Build flags bitmask for this sample (in-sim only data)
@@ -159,7 +169,30 @@ function lap:addSample(car)
         end
     end
 
+    -- Overlap detection (both throttle and brake pressed > threshold)
+    local currentTime = car.lapTimeMs / 1000
+    local throttle = car.gas
+    local brake = extended_brake.getNormalizedBrake(car)
+
+    if throttle > OVERLAP_THRESHOLD and brake > OVERLAP_THRESHOLD then
+        -- Both pedals pressed
+        if not overlapStartTime then
+            overlapStartTime = currentTime
+        elseif currentTime - overlapStartTime >= OVERLAP_MIN_DURATION then
+            -- Overlap has lasted long enough
+            flagBits = bit.bor(flagBits, lap.FLAGS.OVERLAP)
+        end
+    else
+        -- Pedals released, reset overlap tracking
+        overlapStartTime = nil
+    end
+
     table.insert(self.flags, flagBits)
+end
+
+--- Reset overlap tracking state (call when starting a new lap)
+function lap.resetOverlapTracking()
+    overlapStartTime = nil
 end
 
 --- Get number of samples in this lap
@@ -373,7 +406,7 @@ function lap:findMaxSteering(startPos, endPos)
         else
             inRange = pos >= startPos or pos <= endPos
         end
-        
+
         if inRange then
             local deg = math.abs(lap.steerToDegrees(self.steering[i]))
             if deg > maxDeg then
@@ -382,6 +415,37 @@ function lap:findMaxSteering(startPos, endPos)
         end
     end
     return maxDeg
+end
+
+--- Find minimum gear used in a position range
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@return number|nil Minimum gear (nil if no gear data)
+function lap:findMinGear(startPos, endPos)
+    if not self.gear or #self.gear == 0 then return nil end
+
+    local minGear = nil
+
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.gear[i] then
+            local g = self.gear[i]
+            -- Only consider forward gears (1+)
+            if g >= 1 then
+                if not minGear or g < minGear then
+                    minGear = g
+                end
+            end
+        end
+    end
+    return minGear
 end
 
 --- Find apex (minimum speed point) in a position range
@@ -572,6 +636,37 @@ function lap:countFlagInRange(startPos, endPos, flag)
     return count
 end
 
+--- Get total overlap time in a position range (in seconds)
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@return number overlapTime Total time in seconds with overlap flag set
+function lap:getOverlapTimeInRange(startPos, endPos)
+    if not self.flags or #self.flags == 0 or not self.times or #self.times == 0 then
+        return 0
+    end
+
+    local totalTime = 0
+    local sampleDt = 1 / lap.SAMPLE_RATE  -- Time per sample
+
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.flags[i] then
+            if bit.band(self.flags[i], lap.FLAGS.OVERLAP) ~= 0 then
+                totalTime = totalTime + sampleDt
+            end
+        end
+    end
+
+    return totalTime
+end
+
 --------------------------------------------------------------------------------
 -- Serialization
 --------------------------------------------------------------------------------
@@ -667,6 +762,7 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l.times = data.times
     l.throttle = data.throttle
     l.brake = data.brake
+    l.brake_r = data.brake_r or data.brake  -- Rear brake (or same as front if not available)
     l.clutch = data.clutch
     l.steering = data.steering
     l.speed = data.speed

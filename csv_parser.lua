@@ -29,7 +29,8 @@ local COLUMN_MAPPINGS = {
     steering = { "steering angle" },
 
     -- Brake: prefer pressure over pedal position for accuracy
-    brakePressure = { "brake pressure f", "brake pressure fr", "p_f_brake" },
+    brakePressure = { "brake pressure f", "brake pressure fr", "p_f_brake" },  -- Front brake
+    brakePressureR = { "brake pressure r", "brake pressure rl", "p_r_brake" },  -- Rear brake
     brakePos = { "brake pos" },  -- fallback only
 
     -- Fuel
@@ -276,6 +277,7 @@ local function normalizeToSampleRate(rawData, lapTime)
         local trimmedData = {
             throttle = {},
             brake = {},
+            brake_r = {},
             clutch = {},
             steering = {},
             speed = {},
@@ -287,6 +289,7 @@ local function normalizeToSampleRate(rawData, lapTime)
             table.insert(trimmedTimes, times[i] - timeOffset)  -- Normalize to start at 0
             table.insert(trimmedData.throttle, rawData.throttle[i])
             table.insert(trimmedData.brake, rawData.brake[i])
+            table.insert(trimmedData.brake_r, rawData.brake_r[i])
             table.insert(trimmedData.clutch, rawData.clutch[i])
             table.insert(trimmedData.steering, rawData.steering[i])
             table.insert(trimmedData.speed, rawData.speed[i])
@@ -305,6 +308,7 @@ local function normalizeToSampleRate(rawData, lapTime)
     local normalized = {
         throttle = {},
         brake = {},
+        brake_r = {},
         clutch = {},
         steering = {},
         speed = {},
@@ -321,6 +325,7 @@ local function normalizeToSampleRate(rawData, lapTime)
             table.insert(normalized.times, t)
             table.insert(normalized.throttle, interpolateAtTime(times, rawData.throttle, t))
             table.insert(normalized.brake, interpolateAtTime(times, rawData.brake, t))
+            table.insert(normalized.brake_r, interpolateAtTime(times, rawData.brake_r, t))
             table.insert(normalized.clutch, interpolateAtTime(times, rawData.clutch, t))
             table.insert(normalized.steering, interpolateAtTime(times, rawData.steering, t))
             table.insert(normalized.speed, interpolateAtTime(times, rawData.speed, t))
@@ -349,6 +354,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
     local data = {
         throttle = {},
         brake = {},
+        brake_r = {},
         clutch = {},
         steering = {},
         speed = {},
@@ -427,6 +433,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         local clutch = tonumber(fields.clutch) or 0
                         local steering = tonumber(fields.steering) or 0
 
+                        -- Front brake (brake = front)
                         local brake = 0
                         if config.useBrakePressure then
                             local pressure = tonumber(fields.brakePressure) or 0
@@ -434,6 +441,13 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         elseif indices.brakePos then
                             brake = tonumber(fields.brakePos) or 0
                             if brake > 1 then brake = brake / 100 end
+                        end
+
+                        -- Rear brake (use rear pressure if available, else same as front)
+                        local brake_r = brake
+                        if config.useBrakePressureR then
+                            local pressureR = tonumber(fields.brakePressureR) or 0
+                            brake_r = pressureR / config.brakePressureMax
                         end
 
                         -- Normalize 0-100 to 0-1
@@ -465,6 +479,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         table.insert(data.pos, pos)
                         table.insert(data.throttle, throttle)
                         table.insert(data.brake, brake)
+                        table.insert(data.brake_r, brake_r)
                         table.insert(data.clutch, 1 - clutch)
                         table.insert(data.steering, steerNorm)
                         table.insert(data.speed, speed)
@@ -602,8 +617,9 @@ function csv_parser.parseFile(filePath, trackLength)
             "INFO: Unknown CSV sample rate - normalizing to %d Hz", TARGET_SAMPLE_RATE))
     end
 
-    -- Determine brake source
+    -- Determine brake source (front and rear)
     local useBrakePressure = indices.brakePressure ~= nil
+    local useBrakePressureR = indices.brakePressureR ~= nil
     local brakePressureMax = 100  -- default bar
     local brakePressureUnit = nil
 
@@ -618,7 +634,10 @@ function csv_parser.parseFile(filePath, trackLength)
     end
 
     if useBrakePressure then
-        ac.log("csv_parser: Using brake pressure (unit: " .. (brakePressureUnit or "bar") .. ")")
+        ac.log("csv_parser: Using front brake pressure (unit: " .. (brakePressureUnit or "bar") .. ")")
+        if useBrakePressureR then
+            ac.log("csv_parser: Using rear brake pressure")
+        end
     elseif indices.brakePos then
         ac.log("csv_parser: Using brake pedal position")
     else
@@ -667,6 +686,7 @@ function csv_parser.parseFile(filePath, trackLength)
         distanceFactor = distanceFactor,
         speedFactor = speedFactor,
         useBrakePressure = useBrakePressure,
+        useBrakePressureR = useBrakePressureR,
         brakePressureMax = brakePressureMax,
         fuelFactor = fuelFactor,
         posIsPercentage = posIsPercentage,
