@@ -48,9 +48,7 @@ local function loadCSVLap(fileInfo)
     isLoadingLap = false
 
     if loaded then
-        -- Add to history (CSV laps have csvSource marker, won't be persisted)
-        table.insert(st.history, 1, loaded)
-
+        -- CSV laps are not added to history - just returned for use as reference
         local msg = string.format("%d:%05.2f",
             math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
         if warnings and #warnings > 0 then

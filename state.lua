@@ -1056,8 +1056,7 @@ end
 -- CSV Loading
 --------------------------------------------------------------------------------
 
---- Load lap from CSV and add to history
---- CSV laps are added at the front of history but NOT persisted (have csvSource marker)
+--- Load lap from CSV (does not add to history - just returns the lap)
 ---@param filePath string Path to CSV file
 ---@return table|nil Loaded lap
 ---@return table|nil warnings Array of warning messages
@@ -1065,28 +1064,20 @@ function state.loadCSV(filePath)
     local trackLength = ac.getSim().trackLengthM
     local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
     if loaded then
-        -- Add to front of history (CSV laps won't be persisted due to csvSource marker)
-        table.insert(state.history, 1, loaded)
         ac.log(string.format("AC Tracer: Loaded CSV lap (%.3fs, %d samples)",
             loaded.time / 1000, loaded:length()))
-        return loaded, warnings
     end
-    return nil, warnings
+    return loaded, warnings
 end
 
---- Load CSV and set as best lap
+--- Load CSV and set as reference (best) lap
 ---@param filePath string Path to CSV file
 ---@return boolean Success
 ---@return table|nil warnings Array of warning messages
 function state.loadCSVAsBest(filePath)
-    local trackLength = ac.getSim().trackLengthM
-    local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
+    local loaded, warnings = state.loadCSV(filePath)
     if loaded then
         state.setBestLap(loaded)
-        -- Add to front of history (CSV laps won't be persisted due to csvSource marker)
-        table.insert(state.history, 1, loaded)
-        ac.log(string.format("AC Tracer: Loaded CSV as best lap (%.3fs, %d samples)",
-            loaded.time / 1000, loaded:length()))
         return true, warnings
     end
     return false, warnings
