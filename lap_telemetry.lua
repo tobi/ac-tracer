@@ -15,8 +15,6 @@ local lap_telemetry = {}
 
 -- View state
 local selectedLap = nil       -- Direct lap reference (can be CSV or session lap)
-local selectedLapIndex = nil  -- Index for navigation within history
-local autoSelectFastest = true  -- Auto-select fastest lap from session
 
 local viewStartTime = 0  -- Start time of visible window (seconds)
 local viewDuration = 0   -- Duration of visible window (seconds, 0 = full lap)
@@ -41,28 +39,22 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
--- Get selected lap (direct reference, or from history if navigating)
+-- Get selected lap (direct reference, or auto-select fastest from session)
 local function getSelectedLap()
-    -- If we have a direct lap reference (e.g., CSV loaded via "C"), use it
+    -- If we have a direct lap reference, use it
     if selectedLap and selectedLap:length() > 0 then
         return selectedLap
     end
 
-    -- Otherwise use history
-    local history = state.history or {}
-    if #history == 0 then return nil end
-
-    if autoSelectFastest then
-        local fastest, idx = state.getFastestSessionLap()
-        if fastest then
-            selectedLapIndex = idx
-            return fastest
-        end
+    -- Auto-select fastest from current session
+    local fastest = state.getFastestSessionLap()
+    if fastest then
+        return fastest
     end
 
-    if not selectedLapIndex then selectedLapIndex = 1 end
-    local idx = math.clamp(selectedLapIndex, 1, #history)
-    return history[idx]
+    -- Fallback to first history lap
+    local history = state.history or {}
+    return history[1]
 end
 
 -- Get reference lap (defaults to state.bestLap)
@@ -951,29 +943,33 @@ function lap_telemetry.draw(dt)
         local lapTimeS = selectedLap.time / 1000
         local mins = math.floor(lapTimeS / 60)
         local secs = lapTimeS - mins * 60
-        local autoLabel = autoSelectFastest and " (fastest)" or ""
-        ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, autoLabel))
+        -- Show (CSV) label if viewing a CSV lap
+        local label = (selectedLap and selectedLap.csvSource) and " (CSV)" or ""
+        ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, label))
         ui.popStyleColor()
 
+        -- Navigation through history
         ui.sameLine(130)
         local history = state.history or {}
-        if #history > 1 then
-            if ui.button("<", vec2(30, 0)) then
-                autoSelectFastest = false
-                selectedLap = nil  -- Clear direct reference, use index
-                selectedLapIndex = math.max(1, (selectedLapIndex or 1) - 1)
+        if #history > 0 then
+            -- Find current index in history
+            local currentIdx = 1
+            for i, l in ipairs(history) do
+                if l == selectedLap then currentIdx = i break end
+            end
+
+            if ui.button("<", vec2(30, 0)) and currentIdx > 1 then
+                selectedLap = history[currentIdx - 1]
                 viewStartTime = 0
                 viewDuration = 0
             end
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-            ui.text(string.format("lap %d/%d", selectedLapIndex or 1, #history))
+            ui.text(string.format("%d/%d", currentIdx, #history))
             ui.popStyleColor()
             ui.sameLine()
-            if ui.button(">", vec2(30, 0)) then
-                autoSelectFastest = false
-                selectedLap = nil  -- Clear direct reference, use index
-                selectedLapIndex = math.min(#history, (selectedLapIndex or 1) + 1)
+            if ui.button(">", vec2(30, 0)) and currentIdx < #history then
+                selectedLap = history[currentIdx + 1]
                 viewStartTime = 0
                 viewDuration = 0
             end
@@ -1287,9 +1283,7 @@ function lap_telemetry.draw(dt)
 
         -- Callbacks for lap picker
         local function onSelectCurrent(lapData, idx)
-            autoSelectFastest = false
             selectedLap = lapData  -- Store lap directly (works for CSV and session laps)
-            selectedLapIndex = idx
             viewStartTime = 0
             viewDuration = 0
             showRefPicker = false
