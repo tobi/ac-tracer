@@ -575,6 +575,43 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refStartPos, refE
 end
 
 
+--- Draw direction indicator between solid (current) and dashed (ref) marker lines
+--- Shows which way the marker should move to match reference
+--- Draws a connecting line with a single arrow in the middle if there's room
+---@param x1 number X position of current (solid) line
+---@param x2 number X position of reference (dashed) line
+---@param y number Y position (top of bars)
+---@param color rgbm Arrow color
+local function drawDirectionArrows(x1, x2, y, color)
+    if not x1 or not x2 then return end
+
+    local gap = x2 - x1  -- Positive = ref is to the right (we're early)
+    local dist = math.abs(gap)
+    if dist < 12 then return end  -- Too close to show indicator
+
+    local direction = gap > 0 and 1 or -1  -- 1 = right, -1 = left
+
+    -- Calculate the midpoint and boundaries (leave margin from both lines)
+    local margin = 4
+    local leftX = math.min(x1, x2) + margin
+    local rightX = math.max(x1, x2) - margin
+    local midX = (x1 + x2) / 2
+
+    -- Draw a faint connecting line between the two markers
+    local lineY = y + 5
+    ui.drawLine(vec2(leftX, lineY), vec2(rightX, lineY), theme.withAlpha(color, 0.4), 1)
+
+    -- Draw a single arrow in the middle pointing toward reference
+    ui.pushFont(ui.Font.Small)
+    local arrowChar = direction > 0 and ">" or "<"
+    local textSize = ui.measureText(arrowChar)
+    ui.setCursor(vec2(midX - textSize.x / 2, y))
+    ui.pushStyleColor(ui.StyleColor.Text, color)
+    ui.text(arrowChar)
+    ui.popStyleColor()
+    ui.popFont()
+end
+
 local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     if not currentSpeeds or #currentSpeeds < 2 then return end
     local startPos = currentSpeeds[1].pos
@@ -603,6 +640,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     end
 
     -- Reference lift line (dashed green) - only show if > 10m earlier than ref brake
+    local refLiftX = nil
     if data.refLiftOffPos and data.refBrakePos then
         local refLiftM = data.refLiftOffPos * trackLen
         local refBrakeM = data.refBrakePos * trackLen
@@ -610,7 +648,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         if refLiftToBrakeDist < 0 then refLiftToBrakeDist = refLiftToBrakeDist + trackLen end
 
         if refLiftToBrakeDist > 10 then
-            local refLiftX = posToX(data.refLiftOffPos)
+            refLiftX = posToX(data.refLiftOffPos)
             if refLiftX then
                 ui_utils.drawDashedLine(vec2(refLiftX, y), vec2(refLiftX, y + h), theme.marker.liftRef, 2, 4, 3)
             end
@@ -629,6 +667,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     end
 
     -- Current lift point line (green) - only show if > 10m earlier than brake point
+    local curLiftX = nil
     if data.currentLiftOffPos and data.currentBrakePos then
         local liftM = data.currentLiftOffPos * trackLen
         local brakeM = data.currentBrakePos * trackLen
@@ -636,12 +675,18 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         if liftToBreakeDist < 0 then liftToBreakeDist = liftToBreakeDist + trackLen end
 
         if liftToBreakeDist > 10 then
-            local curLiftX = posToX(data.currentLiftOffPos)
+            curLiftX = posToX(data.currentLiftOffPos)
             if curLiftX then
                 ui.drawLine(vec2(curLiftX, y), vec2(curLiftX, y + h), theme.marker.lift, 2)
             end
         end
     end
+
+    -- Draw direction arrows at top of bars (between solid and dashed lines)
+    local arrowY = y + 2
+    drawDirectionArrows(curBrakeX, refBrakeX, arrowY, theme.marker.brake)
+    drawDirectionArrows(curApexX, refApexX, arrowY, theme.marker.apex)
+    drawDirectionArrows(curLiftX, refLiftX, arrowY, theme.marker.lift)
 end
 
 local function drawScoreGauge(cx, cy, radius, score)
@@ -740,17 +785,19 @@ function corner_analysis.draw(dt, useKmh)
             outlineColor, 4, 2
         )
 
-        -- Graph content
+        -- Draw marker lines FIRST (behind other graphics)
+        drawMarkerLines(
+            padding + 4, graphY + 4,
+            graphWidth - 8, graphHeight - 8,
+            displayData.currentSpeeds, displayData
+        )
+
+        -- Graph content (filled comparison on top of markers)
         drawFilledComparison(
             padding + 4, graphY + 4,
             graphWidth - 8, graphHeight - 8,
             displayData.currentSpeeds,
             displayData.refStartPos, displayData.refEndPos, displayData.refApexPos
-        )
-        drawMarkerLines(
-            padding + 4, graphY + 4,
-            graphWidth - 8, graphHeight - 8,
-            displayData.currentSpeeds, displayData
         )
 
         -- Meter annotations at bottom
@@ -813,15 +860,6 @@ function corner_analysis.draw(dt, useKmh)
             ui.popFont()
         end
 
-        -- Corner label
-        ui.setCursor(vec2(panelX, gaugeCenterY + gaugeRadius + 8))
-        ui.pushFont(ui.Font.Small)
-        local labelColor = frozenCorner.active and theme.corner.focusedBorder or theme.text.muted
-        ui.pushStyleColor(ui.StyleColor.Text, labelColor)
-        ui.text("Corner " .. displayData.number .. (frozenCorner.active and " (frozen)" or ""))
-        ui.popStyleColor()
-        ui.popFont()
-        
         -- Stats panel
         ui.pushFont(ui.Font.Main)
 
@@ -839,6 +877,28 @@ function corner_analysis.draw(dt, useKmh)
         statsY = ui_utils.positionRow(panelX, statsY, "Lift", liftOffMeters, labelW, lineH)
         if displayData.currentApexPos and displayData.refApexPos then
             statsY = ui_utils.positionRow(panelX, statsY, "Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000, labelW, lineH)
+        end
+
+        -- Coast distance (lift to brake) - only show if > 10m
+        local currentCoast, refCoast, coastDelta = scoring.getCoastDistances(displayData)
+        if currentCoast and currentCoast > 10 then
+            statsY = statsY + 4
+            statsY = statsY + ui_utils.sectionLabel("COAST", panelX)
+            if coastDelta then
+                local sign = coastDelta >= 0 and "+" or ""
+                local rounded = math.floor(math.abs(coastDelta) + 0.5)
+                local direction = coastDelta >= 0 and "more" or "less"
+                local valueColor = theme.text.primary
+                if rounded > 5 then
+                    -- Notable coast difference
+                    valueColor = coastDelta > 0 and theme.delta.negativeFaint or theme.delta.positive
+                end
+                ui.setCursor(vec2(panelX, statsY))
+                ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+                ui.text(string.format("%dm %s", rounded, direction))
+                ui.popStyleColor()
+                statsY = statsY + lineH
+            end
         end
 
         -- Steering delta (only show if > 10 degrees difference)

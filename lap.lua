@@ -13,6 +13,27 @@ lap.SAMPLE_RATE = 60  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
 
 --------------------------------------------------------------------------------
+-- Flags Bitmask (in-sim only telemetry events)
+-- NOTE: These flags are ONLY recorded for in-game laps, NOT loaded from CSV.
+-- CSV imports don't have access to this low-level sim data (wheel slip, lockups, etc.)
+-- The flags array stores a bitmask per sample for compact storage.
+--------------------------------------------------------------------------------
+
+lap.FLAGS = {
+    TC_ACTIVE     = 0x01,  -- Traction control intervening
+    LIMITER_HIT   = 0x02,  -- Rev limiter hit
+    WHEEL_SLIP    = 0x04,  -- Significant wheel slip (any wheel spinning faster than road speed)
+    LOCKUP_FL     = 0x08,  -- Front left wheel lockup (wheel stopped while car moving)
+    LOCKUP_FR     = 0x10,  -- Front right wheel lockup
+    LOCKUP_RL     = 0x20,  -- Rear left wheel lockup
+    LOCKUP_RR     = 0x40,  -- Rear right wheel lockup
+}
+
+-- Thresholds for detecting events
+local SLIP_THRESHOLD = 0.15      -- Wheel slip ratio threshold (15% difference from road speed)
+local LOCKUP_SPEED_MIN = 20      -- Minimum car speed (km/h) for lockup detection
+
+--------------------------------------------------------------------------------
 -- Constructor
 --------------------------------------------------------------------------------
 
@@ -40,8 +61,12 @@ function lap.new(track, car, sessionId)
         speed = {},            -- km/h
         pos = {},              -- spline position 0.0 to 1.0
         times = {},            -- seconds (elapsed lap time at each sample)
-        tcActive = {},         -- boolean: traction control active
+        tcActive = {},         -- boolean: traction control active (legacy, kept for compatibility)
         fuel = {},             -- liters remaining
+
+        -- In-sim only telemetry flags (bitmask per sample, see lap.FLAGS)
+        -- NOTE: Not populated for CSV imports - these are sim-only events
+        flags = {},            -- Bitmask: TC, limiter, wheel slip, lockups
 
         -- CSV import metadata (nil for in-game recorded laps)
         csvSource = nil,       -- { throttle, brake, speed, steering, clutch, position, fuel }
@@ -84,6 +109,57 @@ function lap:addSample(car)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
     table.insert(self.tcActive, car.tractionControlInAction or false)
     table.insert(self.fuel, car.fuel or 0)  -- Fuel remaining in liters
+
+    -- Build flags bitmask for this sample (in-sim only data)
+    local flagBits = 0
+
+    -- TC active
+    if car.tractionControlInAction then
+        flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
+    end
+
+    -- Rev limiter (engine hitting rev limit)
+    if car.isEngineLimiterOn then
+        flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
+    end
+
+    -- Wheel slip detection (any wheel significantly faster than road speed)
+    -- car.wheels[i].slip contains slip ratio
+    if car.wheels then
+        local hasSlip = false
+        for i = 0, 3 do
+            local wheel = car.wheels[i]
+            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
+                hasSlip = true
+                break
+            end
+        end
+        if hasSlip then
+            flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
+        end
+
+        -- Lockup detection (wheel locked while car is moving)
+        -- Only detect lockups above minimum speed to avoid false positives at standstill
+        if car.speedKmh > LOCKUP_SPEED_MIN then
+            -- Lockup = wheel slip is very negative (wheel stopped, car moving)
+            -- In AC, slip < -0.9 typically indicates a locked wheel
+            local wheels = car.wheels
+            if wheels[0] and wheels[0].slip and wheels[0].slip < -0.9 then
+                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL)
+            end
+            if wheels[1] and wheels[1].slip and wheels[1].slip < -0.9 then
+                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR)
+            end
+            if wheels[2] and wheels[2].slip and wheels[2].slip < -0.9 then
+                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL)
+            end
+            if wheels[3] and wheels[3].slip and wheels[3].slip < -0.9 then
+                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR)
+            end
+        end
+    end
+
+    table.insert(self.flags, flagBits)
 end
 
 --- Get number of samples in this lap
@@ -408,6 +484,95 @@ function lap:findExitSpeed(startPos, endPos)
 end
 
 --------------------------------------------------------------------------------
+-- Flags Helpers (in-sim only data - will be nil/empty for CSV imports)
+--------------------------------------------------------------------------------
+
+--- Check if any sample in a position range has a specific flag set
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@param flag number Flag bit to check (from lap.FLAGS)
+---@return boolean True if flag was set at any point in range
+function lap:hasFlagInRange(startPos, endPos, flag)
+    if not self.flags or #self.flags == 0 then return false end
+
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.flags[i] then
+            if bit.band(self.flags[i], flag) ~= 0 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+--- Check if any lockup occurred in a position range
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@return boolean anyLockup True if any wheel locked up
+---@return table|nil wheels Table of locked wheels {fl=bool, fr=bool, rl=bool, rr=bool}
+function lap:hasLockupInRange(startPos, endPos)
+    if not self.flags or #self.flags == 0 then return false, nil end
+
+    local lockups = { fl = false, fr = false, rl = false, rr = false }
+    local anyLockup = false
+
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.flags[i] then
+            local f = self.flags[i]
+            if bit.band(f, lap.FLAGS.LOCKUP_FL) ~= 0 then lockups.fl = true; anyLockup = true end
+            if bit.band(f, lap.FLAGS.LOCKUP_FR) ~= 0 then lockups.fr = true; anyLockup = true end
+            if bit.band(f, lap.FLAGS.LOCKUP_RL) ~= 0 then lockups.rl = true; anyLockup = true end
+            if bit.band(f, lap.FLAGS.LOCKUP_RR) ~= 0 then lockups.rr = true; anyLockup = true end
+        end
+    end
+
+    return anyLockup, anyLockup and lockups or nil
+end
+
+--- Count samples with a specific flag set in a position range
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@param flag number Flag bit to check (from lap.FLAGS)
+---@return number count Number of samples with flag set
+function lap:countFlagInRange(startPos, endPos, flag)
+    if not self.flags or #self.flags == 0 then return 0 end
+
+    local count = 0
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.flags[i] then
+            if bit.band(self.flags[i], flag) ~= 0 then
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+
+--------------------------------------------------------------------------------
 -- Serialization
 --------------------------------------------------------------------------------
 
@@ -431,6 +596,7 @@ function lap:serialize()
         pos = self.pos,
         times = self.times,  -- Actual elapsed time at each sample
         fuel = self.fuel,    -- Fuel remaining in liters
+        flags = self.flags,  -- In-sim only: TC, limiter, slip, lockups (bitmask per sample)
         csvSource = self.csvSource,  -- CSV column mappings
     }
     return stringify(data)

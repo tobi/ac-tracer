@@ -89,9 +89,9 @@ theme.delta = {
 
 -- Corner analysis specific
 theme.corner = {
-    faster = rgbm(0.55, 0.20, 0.70, 0.85),   -- Purple: faster than ref
-    onSpeed = rgbm(0.20, 0.70, 0.20, 0.85),  -- Green: matching ref
-    slower = rgbm(0.70, 0.20, 0.20, 0.85),   -- Red: slower than ref
+    faster = rgbm(0.55, 0.20, 0.70, 1.0),    -- Purple: faster than ref (solid)
+    onSpeed = rgbm(0.20, 0.70, 0.20, 1.0),   -- Green: matching ref (solid)
+    slower = rgbm(0.70, 0.20, 0.20, 1.0),    -- Red: slower than ref (solid)
     -- Zone backgrounds (alternating)
     even = rgbm(0.25, 0.25, 0.35, 0.12),
     odd = rgbm(0.2, 0.3, 0.25, 0.12),

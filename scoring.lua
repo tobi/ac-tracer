@@ -209,6 +209,40 @@ function scoring.getMeterDeltas(cornerData)
     return brakeMeters, liftOffMeters
 end
 
+-- Calculate coast distance (meters between lift-off and brake application)
+-- Returns current coast distance, reference coast distance, and delta
+function scoring.getCoastDistances(cornerData)
+    if not cornerData then return nil, nil, nil end
+
+    local trackLength = getTrackLength()
+
+    -- Current lap coast distance
+    local currentCoast = nil
+    if cornerData.currentLiftOffPos and cornerData.currentBrakePos then
+        local liftM = cornerData.currentLiftOffPos * trackLength
+        local brakeM = cornerData.currentBrakePos * trackLength
+        currentCoast = brakeM - liftM
+        if currentCoast < 0 then currentCoast = currentCoast + trackLength end
+    end
+
+    -- Reference lap coast distance
+    local refCoast = nil
+    if cornerData.refLiftOffPos and cornerData.refBrakePos then
+        local liftM = cornerData.refLiftOffPos * trackLength
+        local brakeM = cornerData.refBrakePos * trackLength
+        refCoast = brakeM - liftM
+        if refCoast < 0 then refCoast = refCoast + trackLength end
+    end
+
+    -- Delta (positive = more coasting than reference)
+    local coastDelta = nil
+    if currentCoast and refCoast then
+        coastDelta = currentCoast - refCoast
+    end
+
+    return currentCoast, refCoast, coastDelta
+end
+
 -- Configure weights
 function scoring.configure(settings)
     if settings.time_weight then weights.time = settings.time_weight end

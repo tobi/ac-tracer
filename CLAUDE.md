@@ -76,7 +76,11 @@ lap = {
     speed = { number, ... },     -- Speed in km/h
     pos = { number, ... },       -- Spline position (0.0 to 1.0)
     times = { number, ... },     -- Elapsed lap time in seconds at each sample
-    tcActive = { boolean, ... }  -- Traction control active at each sample
+    tcActive = { boolean, ... }, -- Traction control active at each sample (legacy)
+
+    -- In-sim only flags (bitmask per sample - NOT loaded from CSV imports)
+    -- These capture sim-specific events that aren't available in external telemetry
+    flags = { number, ... },     -- Bitmask of lap.FLAGS per sample
 }
 ```
 
@@ -99,7 +103,29 @@ lap = {
 | `speed[i]` | number | km/h | Ground speed at sample i |
 | `pos[i]` | number | 0.0-1.0 | Track spline position at sample i |
 | `times[i]` | number | seconds | Elapsed lap time at sample i |
-| `tcActive[i]` | boolean | - | Traction control active at sample i |
+| `tcActive[i]` | boolean | - | Traction control active at sample i (legacy) |
+| `flags[i]` | number | bitmask | In-sim only events (see Flags section below) |
+
+### Flags (In-Sim Only)
+
+The `flags` array stores a bitmask per sample for sim-specific events. These are **NOT loaded from CSV imports** because external telemetry doesn't have access to this data.
+
+```lua
+lap.FLAGS = {
+    TC_ACTIVE     = 0x01,  -- Traction control intervening
+    LIMITER_HIT   = 0x02,  -- Rev limiter hit
+    WHEEL_SLIP    = 0x04,  -- Significant wheel slip (any wheel)
+    LOCKUP_FL     = 0x08,  -- Front left wheel lockup
+    LOCKUP_FR     = 0x10,  -- Front right wheel lockup
+    LOCKUP_RL     = 0x20,  -- Rear left wheel lockup
+    LOCKUP_RR     = 0x40,  -- Rear right wheel lockup
+}
+```
+
+Helper functions:
+- `lap:hasFlagInRange(startPos, endPos, flag)` - Check if flag occurred in range
+- `lap:hasLockupInRange(startPos, endPos)` - Check for any lockups, returns wheel details
+- `lap:countFlagInRange(startPos, endPos, flag)` - Count samples with flag set
 
 ### Sampling
 
