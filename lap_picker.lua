@@ -381,12 +381,16 @@ end
 -- Public: Draw as Standalone Window
 --------------------------------------------------------------------------------
 
+-- Option to hide C button (set by window function)
+lap_picker.showCurrentButton = true
+
 --- Draw the lap picker as a full window (for reference lap selection)
 function lap_picker.draw(dt)
     local st = getState()
     local windowSize = ui.availableSpace()
     local padding = 10
     local contentW = windowSize.x - padding * 2
+    local showC = lap_picker.showCurrentButton
 
     -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, theme.bg.panel, 0)
@@ -431,12 +435,17 @@ function lap_picker.draw(dt)
     ui.setCursor(vec2(padding, padding + headerHeight))
     ui.pushFont(ui.Font.Small)
     ui.textColored("Lap", theme.text.muted)
-    ui.sameLine(windowSize.x - BTN_WIDTH * 2 - padding - 15)
-    ui.textColored("C", theme.text.muted)
+    if showC then
+        ui.sameLine(windowSize.x - BTN_WIDTH * 2 - padding - 15)
+        ui.textColored("C", theme.text.muted)
+    end
     ui.sameLine(windowSize.x - BTN_WIDTH - padding - 5)
     ui.textColored("R", theme.text.muted)
     ui.popFont()
     headerHeight = headerHeight + 16
+
+    -- Row options based on showCurrentButton
+    local rowOptions = { showCurrent = showC, showReference = true }
 
     -- Scrollable content area
     local scrollAreaY = padding + headerHeight
@@ -456,7 +465,7 @@ function lap_picker.draw(dt)
         local currentSessionLaps = st.getCurrentSessionLaps()
         if #currentSessionLaps > 0 then
             for _, entry in ipairs(currentSessionLaps) do
-                py = drawLapRow(padding, py, contentW, entry.lap, entry.index, {})
+                py = drawLapRow(padding, py, contentW, entry.lap, entry.index, rowOptions)
             end
         else
             ui.setCursor(vec2(padding + 10, py))
@@ -480,7 +489,7 @@ function lap_picker.draw(dt)
         local prevSessionLaps = st.getPreviousSessionLaps()
         if #prevSessionLaps > 0 then
             for _, entry in ipairs(prevSessionLaps) do
-                py = drawLapRow(padding, py, contentW, entry.lap, entry.index + 1000, {})
+                py = drawLapRow(padding, py, contentW, entry.lap, entry.index + 1000, rowOptions)
             end
         else
             ui.setCursor(vec2(padding + 10, py))
@@ -504,7 +513,7 @@ function lap_picker.draw(dt)
         local files = file_utils.scanCSVFiles()
         if #files > 0 then
             for j, fileInfo in ipairs(files) do
-                py = drawCSVRow(padding, py, contentW, fileInfo, j, {})
+                py = drawCSVRow(padding, py, contentW, fileInfo, j, rowOptions)
             end
         else
             ui.setCursor(vec2(padding + 10, py))

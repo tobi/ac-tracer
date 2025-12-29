@@ -70,13 +70,15 @@ lap = {
     
     -- Telemetry arrays (all synchronized, same length, sampled at 60 Hz)
     throttle = { number, ... },  -- Throttle input (0.0 to 1.0)
-    brake = { number, ... },     -- Brake input (0.0 to 1.0)
+    brake = { number, ... },     -- Front brake pressure (0.0 to 1.0, normalized to 100 bar)
+    brake_r = { number, ... },   -- Rear brake pressure (0.0 to 1.0, or same as front if no DLL)
     clutch = { number, ... },    -- Clutch input (0.0 to 1.0, inverted: 1.0 = pressed)
     steering = { number, ... },  -- Steering input (0.0 to 1.0, normalized, 0.5 = straight)
     speed = { number, ... },     -- Speed in km/h
+    gear = { number, ... },      -- Gear number (0=neutral, 1-N=forward, -1=reverse)
     pos = { number, ... },       -- Spline position (0.0 to 1.0)
     times = { number, ... },     -- Elapsed lap time in seconds at each sample
-    tcActive = { boolean, ... }, -- Traction control active at each sample (legacy)
+    fuel = { number, ... },      -- Fuel remaining in liters
 
     -- In-sim only flags (bitmask per sample - NOT loaded from CSV imports)
     -- These capture sim-specific events that aren't available in external telemetry
@@ -97,13 +99,15 @@ lap = {
 | `fuelLeftAtStart` | number | liters | Fuel level when crossing start line |
 | `lapNumberInSession` | number | 1, 2, 3... | Which lap number in this session |
 | `throttle[i]` | number | 0.0-1.0 | Throttle position at sample i |
-| `brake[i]` | number | 0.0-1.0 | Brake pressure at sample i |
+| `brake[i]` | number | 0.0-1.0 | Front brake pressure at sample i (normalized to 100 bar) |
+| `brake_r[i]` | number | 0.0-1.0 | Rear brake pressure at sample i (or same as front if no DLL) |
 | `clutch[i]` | number | 0.0-1.0 | Clutch position (inverted: 1.0 = foot on pedal) |
 | `steering[i]` | number | 0.0-1.0 | Steering angle normalized (0.5 = straight) |
 | `speed[i]` | number | km/h | Ground speed at sample i |
+| `gear[i]` | number | -1 to N | Gear at sample i (0=neutral, 1-N=forward, -1=reverse) |
 | `pos[i]` | number | 0.0-1.0 | Track spline position at sample i |
 | `times[i]` | number | seconds | Elapsed lap time at sample i |
-| `tcActive[i]` | boolean | - | Traction control active at sample i (legacy) |
+| `fuel[i]` | number | liters | Fuel remaining at sample i |
 | `flags[i]` | number | bitmask | In-sim only events (see Flags section below) |
 
 ### Flags (In-Sim Only)
@@ -119,6 +123,7 @@ lap.FLAGS = {
     LOCKUP_FR     = 0x10,  -- Front right wheel lockup
     LOCKUP_RL     = 0x20,  -- Rear left wheel lockup
     LOCKUP_RR     = 0x40,  -- Rear right wheel lockup
+    OVERLAP       = 0x80,  -- Both pedals pressed (throttle & brake > 0.1 for > 100ms)
 }
 ```
 
@@ -532,6 +537,8 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 - **Normalized inputs** - all 0.0-1.0 for consistent display
 - **Time in milliseconds** - internal storage uses ms for precision
 - **Corner files** - saved as `./corners/<track_id>.csv` (per-track)
+- **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position
+- **Front/rear brake** - `brake` = front, `brake_r` = rear (or same as front if no DLL/CSV data)
 
 ---
 

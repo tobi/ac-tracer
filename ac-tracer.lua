@@ -4,7 +4,6 @@
 local state = require('state')
 local lap = require('lap')
 local settings = require('app_settings')
-local corner = require('corner')
 local corner_analysis = require('corner_analysis')
 local lap_telemetry = require('lap_telemetry')
 local extended_brake = require('extended-brake')
@@ -21,9 +20,6 @@ local display = settings.display or {
     speed = false,
 }
 
--- Hotkeys
-local resetButton = ac.ControlButton('__APP_AC_TRACER_RESET_BEST')
-local recordCornerButton = ac.ControlButton('__APP_AC_TRACER_RECORD_CORNER')
 
 -- History for trace display (rolling window)
 local maxPoints = math.ceil(settings.timeWindow * settings.sampleRate)
@@ -84,9 +80,6 @@ function script.update(dt)
 
         -- Update corner analysis (live tracking)
         corner_analysis.update(currentCar)
-
-        -- Handle corner recording button
-        corner.handleRecordButton(currentCar, recordCornerButton)
     end
 end
 
@@ -322,10 +315,6 @@ function script.windowMain(dt)
     end
     local car = currentCar
 
-    if resetButton:pressed() then
-        state.resetBestLap()
-    end
-
     local windowSize = ui.availableSpace()
     
     -- Use local coordinates (0,0 = top-left of window content)
@@ -520,15 +509,6 @@ function script.windowMain(dt)
     drawGear(origin, wheelCX, wheelCY, wheelR, car.gear)
     drawSpeed(origin, wheelCX, wheelCY + wheelR + 2, wheelW, car)
 
-    if corner.isRecording() then
-        ui.pushFont(ui.Font.Title)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.status.recording)
-        ui.setCursor(vec2(10, 5))
-        ui.text("REC")
-        ui.popStyleColor()
-        ui.popFont()
-    end
-    
     -- Toggle window buttons (left side, vertically stacked next to trace area)
     -- Position buttons to fit within the trace area height
     local numButtons = 4
@@ -544,7 +524,7 @@ function script.windowMain(dt)
 end
 
 function script.windowSettings(dt)
-    settings.windowSettings(corner, resetButton, recordCornerButton)
+    settings.windowSettings()
 end
 
 function script.windowCorners(dt)
@@ -557,6 +537,8 @@ function script.windowTelemetry(dt)
 end
 
 function script.windowReferenceLap(dt)
+    -- Reference lap picker only shows R button (no C button)
+    lap_picker.showCurrentButton = false
     lap_picker.draw(dt)
 end
 

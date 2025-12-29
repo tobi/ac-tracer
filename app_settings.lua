@@ -64,8 +64,8 @@ function M.checkbox(label, key)
     end
 end
 
--- Settings window UI
-function M.windowSettings(corner, resetButton, recordCornerButton)
+-- Settings window UI (simplified)
+function M.windowSettings()
     ui.text("Display Traces")
     ui.offsetCursorY(5)
 
@@ -105,28 +105,19 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     ui.separator()
     ui.offsetCursorY(10)
 
-    -- Reference lap section (compact)
+    -- Reference lap section
     ui.text("Reference Lap")
     ui.offsetCursorY(5)
     lap_picker.drawCompact()
 
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-
-    -- Hotkeys section
-    ui.text("Hotkeys")
     ui.offsetCursorY(5)
-
-    ui.text("Reset Hotkey:")
-    ui.sameLine(130)
-    resetButton:control(vec2(120, 0))
-
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-
-    corner.settingsUI(recordCornerButton)
+    if ui.button("Load Reference Lap...", vec2(150, 0)) then
+        -- Open the reference lap picker window
+        local acc = ac.accessAppWindow("IMGUI_LUA_AC Tracer_referencelap")
+        if acc and acc:valid() then
+            acc:setVisible(true)
+        end
+    end
 end
 
 return M
