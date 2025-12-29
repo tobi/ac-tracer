@@ -48,8 +48,8 @@ local function loadCSVLap(fileInfo)
     isLoadingLap = false
 
     if loaded then
-        -- Add to history references for tracking
-        table.insert(st.historyReferences, loaded)
+        -- Add to history (CSV laps have csvSource marker, won't be persisted)
+        table.insert(st.history, 1, loaded)
 
         local msg = string.format("%d:%05.2f",
             math.floor(loaded.time / 60000), (loaded.time / 1000) % 60)
@@ -190,11 +190,9 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         if ui.button("C##csvc" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
-                -- Add to references (not history - CSV laps don't persist)
-                local st = getState()
-                table.insert(st.historyReferences, loaded)
+                -- loadCSVLap already adds to history
                 if lap_picker.onSelectCurrent then
-                    lap_picker.onSelectCurrent(loaded, #st.historyReferences)
+                    lap_picker.onSelectCurrent(loaded, 1)  -- Added at front
                 end
                 ac.setMessage("CSV Loaded", msg)
             else

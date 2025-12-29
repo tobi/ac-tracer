@@ -25,8 +25,8 @@ state.trackPosition = 0        -- number: spline position 0.0-1.0
 
 -- Lap data
 state.currentLap = nil         -- lap: being recorded
--- state.history is now a reference to history_storage.laps
-state.historyReferences = {}   -- array[lap]: external CSVs loaded for comparison
+-- state.history is now a reference to history_storage.laps (persisted session laps)
+-- CSV-loaded laps are added to history but marked with csvSource (not persisted)
 
 -- Reference lap
 state.bestLap = nil            -- lap: current reference for ghost comparison
@@ -1056,7 +1056,8 @@ end
 -- CSV Loading
 --------------------------------------------------------------------------------
 
---- Load lap from CSV and add to references
+--- Load lap from CSV and add to history
+--- CSV laps are added at the front of history but NOT persisted (have csvSource marker)
 ---@param filePath string Path to CSV file
 ---@return table|nil Loaded lap
 ---@return table|nil warnings Array of warning messages
@@ -1064,7 +1065,10 @@ function state.loadCSV(filePath)
     local trackLength = ac.getSim().trackLengthM
     local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
     if loaded then
-        table.insert(state.historyReferences, loaded)
+        -- Add to front of history (CSV laps won't be persisted due to csvSource marker)
+        table.insert(state.history, 1, loaded)
+        ac.log(string.format("AC Tracer: Loaded CSV lap (%.3fs, %d samples)",
+            loaded.time / 1000, loaded:length()))
         return loaded, warnings
     end
     return nil, warnings
@@ -1079,7 +1083,10 @@ function state.loadCSVAsBest(filePath)
     local loaded, warnings = lap.fromCSV(filePath, state.track, state.car, trackLength)
     if loaded then
         state.setBestLap(loaded)
-        table.insert(state.historyReferences, loaded)
+        -- Add to front of history (CSV laps won't be persisted due to csvSource marker)
+        table.insert(state.history, 1, loaded)
+        ac.log(string.format("AC Tracer: Loaded CSV as best lap (%.3fs, %d samples)",
+            loaded.time / 1000, loaded:length()))
         return true, warnings
     end
     return false, warnings

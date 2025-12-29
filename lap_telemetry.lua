@@ -40,18 +40,9 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
--- Get all available laps (history + historyReferences combined)
+-- Get all available laps (session + CSV laps in one list)
 local function getAllLaps()
-    local laps = {}
-    -- Add session history laps first
-    for _, l in ipairs(state.history) do
-        table.insert(laps, l)
-    end
-    -- Add CSV reference laps
-    for _, l in ipairs(state.historyReferences or {}) do
-        table.insert(laps, l)
-    end
-    return laps
+    return state.history or {}
 end
 
 -- Get selected lap from combined laps (auto-select fastest if enabled)

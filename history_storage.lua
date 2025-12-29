@@ -11,7 +11,7 @@ local STORAGE_KEY = 'ac_tracer/history'
 -- In-memory history
 M.laps = {}
 
---- Save history to storage
+--- Save history to storage (excludes CSV-loaded laps)
 function M.save()
     if not M.laps or #M.laps == 0 then
         ac.storage[STORAGE_KEY] = nil
@@ -20,13 +20,14 @@ function M.save()
     end
 
     local serialized = {}
-    for i, lapData in ipairs(M.laps) do
-        if i <= MAX_HISTORY then
+    local count = 0
+    for _, lapData in ipairs(M.laps) do
+        -- Skip CSV-loaded laps (they have csvSource marker)
+        if not lapData.csvSource and count < MAX_HISTORY then
             local ser = lapData:serialize()
             if ser then
                 table.insert(serialized, ser)
-            else
-                ac.log("AC Tracer: WARNING - Failed to serialize lap " .. i)
+                count = count + 1
             end
         end
     end
@@ -34,9 +35,9 @@ function M.save()
     if #serialized > 0 then
         local data = stringify(serialized)
         ac.storage[STORAGE_KEY] = data
-        ac.log(string.format("AC Tracer: Saved %d laps to history (%.1f KB)", #serialized, #data / 1024))
+        ac.log(string.format("AC Tracer: Saved %d session laps to history (%.1f KB)", #serialized, #data / 1024))
     else
-        ac.log("AC Tracer: WARNING - No laps serialized successfully")
+        ac.log("AC Tracer: No session laps to save (CSV laps are not persisted)")
     end
 end
 
