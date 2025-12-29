@@ -15,6 +15,7 @@ M.laps = {}
 function M.save()
     if not M.laps or #M.laps == 0 then
         ac.storage[STORAGE_KEY] = nil
+        ac.log("AC Tracer: History empty, cleared storage")
         return
     end
 
@@ -24,37 +25,52 @@ function M.save()
             local ser = lapData:serialize()
             if ser then
                 table.insert(serialized, ser)
+            else
+                ac.log("AC Tracer: WARNING - Failed to serialize lap " .. i)
             end
         end
     end
 
-    ac.storage[STORAGE_KEY] = stringify(serialized)
-    ac.log("AC Tracer: Saved " .. #serialized .. " laps to history")
+    if #serialized > 0 then
+        local data = stringify(serialized)
+        ac.storage[STORAGE_KEY] = data
+        ac.log(string.format("AC Tracer: Saved %d laps to history (%.1f KB)", #serialized, #data / 1024))
+    else
+        ac.log("AC Tracer: WARNING - No laps serialized successfully")
+    end
 end
 
 --- Load history from storage
 function M.load()
     local data = ac.storage[STORAGE_KEY]
     if not data then
+        ac.log("AC Tracer: No history in storage")
         M.laps = {}
         return false
     end
+
+    ac.log(string.format("AC Tracer: Loading history (%.1f KB)", #data / 1024))
 
     local ok, serialized = pcall(function() return stringify.parse(data) end)
     if not ok or not serialized then
+        ac.log("AC Tracer: WARNING - Failed to parse history data")
         M.laps = {}
         return false
     end
 
+    ac.log(string.format("AC Tracer: Parsed %d serialized laps", #serialized))
+
     M.laps = {}
-    for _, lapStr in ipairs(serialized) do
+    for i, lapStr in ipairs(serialized) do
         local loaded = lap.deserialize(lapStr)
         if loaded and loaded:length() > 10 then
             table.insert(M.laps, loaded)
+        else
+            ac.log(string.format("AC Tracer: Skipped lap %d (invalid or too short)", i))
         end
     end
 
-    ac.log("AC Tracer: Loaded " .. #M.laps .. " laps from history")
+    ac.log("AC Tracer: Loaded " .. #M.laps .. " valid laps from history")
     return #M.laps > 0
 end
 

@@ -685,9 +685,11 @@ function lap:serialize()
         lapNumberInSession = self.lapNumberInSession,
         throttle = self.throttle,
         brake = self.brake,
+        brake_r = self.brake_r,  -- Rear brake pressure
         clutch = self.clutch,
         steering = self.steering,
         speed = self.speed,
+        gear = self.gear,        -- Gear number
         pos = self.pos,
         times = self.times,  -- Actual elapsed time at each sample
         fuel = self.fuel,    -- Fuel remaining in liters
