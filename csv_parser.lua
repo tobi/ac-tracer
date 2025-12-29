@@ -221,7 +221,7 @@ end
 
 --- Normalize lap data to exactly TARGET_SAMPLE_RATE Hz
 --- Takes raw parsed data and resamples to evenly-spaced samples
---- Skips early unstable samples and starts from the first stable data point
+--- Finds the actual lap start (first crossing of position 0) and trims data
 ---@param rawData table Raw data with times array
 ---@param lapTime number Lap duration in milliseconds
 ---@return table Normalized data at TARGET_SAMPLE_RATE Hz
@@ -231,27 +231,66 @@ local function normalizeToSampleRate(rawData, lapTime)
         return rawData  -- Not enough data to normalize
     end
 
-    -- Find a stable starting point - skip first few samples if position is very low
-    -- This handles the case where we start recording mid-lap or near the finish line
+    -- Find the actual lap start - skip any samples before position is near 0
+    -- This handles CSVs with garbage initial data or that start mid-lap
     local startIdx = 1
-    local minStartSamples = math.min(5, #times)  -- Need at least a few samples to stabilize
 
-    -- Skip initial samples if position is unstable (jumping around near 0 or 1)
-    for i = 1, minStartSamples do
+    -- Strategy: Find first sample where position is near start line (< 5%)
+    -- and the next sample is incrementing properly
+    for i = 1, math.min(50, #times - 1) do
         local pos = rawData.pos[i]
         local nextPos = rawData.pos[i + 1]
         if pos and nextPos then
-            local posDiff = math.abs(nextPos - pos)
-            -- If position jumps more than 5% in one sample, skip this initial region
-            if posDiff > 0.05 and posDiff < 0.95 then
-                startIdx = i + 1
+            -- Position should be near start (< 5%) and increasing
+            if pos < 0.05 and nextPos > pos and nextPos < 0.1 then
+                startIdx = i
+                ac.log(string.format("csv_parser: Found lap start at sample %d (pos %.4f)", i, pos))
+                break
             end
         end
     end
 
-    -- Use the time offset from the stable start point
-    local timeOffset = times[startIdx] or 0
-    local effectiveLapDurationS = (lapTime / 1000) - timeOffset
+    -- If no good start found, use first sample with position < 10%
+    if startIdx == 1 and rawData.pos[1] > 0.1 then
+        for i = 2, math.min(50, #times) do
+            if rawData.pos[i] and rawData.pos[i] < 0.1 then
+                startIdx = i
+                ac.log(string.format("csv_parser: Skipping garbage start, using sample %d (pos %.4f)", i, rawData.pos[i]))
+                break
+            end
+        end
+    end
+
+    -- Trim raw data to start from the stable point
+    -- This removes garbage samples from the beginning
+    if startIdx > 1 then
+        local trimmedTimes = {}
+        local trimmedData = {
+            throttle = {},
+            brake = {},
+            clutch = {},
+            steering = {},
+            speed = {},
+            pos = {},
+            fuel = {},
+        }
+        local timeOffset = times[startIdx]
+        for i = startIdx, #times do
+            table.insert(trimmedTimes, times[i] - timeOffset)  -- Normalize to start at 0
+            table.insert(trimmedData.throttle, rawData.throttle[i])
+            table.insert(trimmedData.brake, rawData.brake[i])
+            table.insert(trimmedData.clutch, rawData.clutch[i])
+            table.insert(trimmedData.steering, rawData.steering[i])
+            table.insert(trimmedData.speed, rawData.speed[i])
+            table.insert(trimmedData.pos, rawData.pos[i])
+            table.insert(trimmedData.fuel, rawData.fuel[i])
+        end
+        times = trimmedTimes
+        rawData = trimmedData
+    end
+
+    -- Calculate number of output samples based on trimmed data
+    local effectiveLapDurationS = times[#times] or (lapTime / 1000)
     local numSamples = math.floor(effectiveLapDurationS * TARGET_SAMPLE_RATE) + 1
 
     -- Create new evenly-spaced time points
@@ -267,11 +306,11 @@ local function normalizeToSampleRate(rawData, lapTime)
     }
 
     for i = 1, numSamples do
-        local t = timeOffset + (i - 1) * TARGET_SAMPLE_INTERVAL
+        local t = (i - 1) * TARGET_SAMPLE_INTERVAL
 
         -- Make sure we're within the data range
         if t >= times[1] and t <= times[#times] then
-            table.insert(normalized.times, (i - 1) * TARGET_SAMPLE_INTERVAL)  -- Normalized time from 0
+            table.insert(normalized.times, t)
             table.insert(normalized.throttle, interpolateAtTime(times, rawData.throttle, t))
             table.insert(normalized.brake, interpolateAtTime(times, rawData.brake, t))
             table.insert(normalized.clutch, interpolateAtTime(times, rawData.clutch, t))
@@ -340,7 +379,10 @@ local function parseSingleLap(lines, startIdx, indices, config)
                     if pos > 1 then pos = pos - math.floor(pos) end
                 else
                     pos = tonumber(fields.pos)
-                    if pos and pos > 1 then pos = pos / 100 end
+                    -- Normalize to 0-1 range (CSV may have 0-100 percentage)
+                    if pos and config.posIsPercentage then
+                        pos = pos / 100
+                    end
                 end
 
                 if pos then
@@ -571,6 +613,24 @@ function csv_parser.parseFile(filePath, trackLength)
     end
     local fuelFactor = fuelUnit and UNIT_CONVERSIONS.fuel[fuelUnit] or 1.0
 
+    -- Detect if position is in percentage format (0-100) by scanning first ~100 data rows
+    -- If any value > 1, the entire file uses percentage format
+    local posIsPercentage = false
+    if not useDistance and indices.pos then
+        for i = dataStartLine, math.min(dataStartLine + 100, #allLines) do
+            local line = allLines[i]
+            if line and line ~= "" and not line:match("^%s*$") then
+                local fields = extractFields(line, { pos = indices.pos })
+                local pos = tonumber(fields.pos)
+                if pos and pos > 1 then
+                    posIsPercentage = true
+                    ac.log("csv_parser: Detected percentage format for Lap Progression (value > 1 found: " .. pos .. ")")
+                    break
+                end
+            end
+        end
+    end
+
     -- Build config
     local config = {
         useDistance = useDistance,
@@ -581,6 +641,7 @@ function csv_parser.parseFile(filePath, trackLength)
         useBrakePressure = useBrakePressure,
         brakePressureMax = brakePressureMax,
         fuelFactor = fuelFactor,
+        posIsPercentage = posIsPercentage,
     }
 
     -- Parse all laps

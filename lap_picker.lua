@@ -190,11 +190,11 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         if ui.button("C##csvc" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
-                -- Add to history so it can be selected as current
+                -- Add to references (not history - CSV laps don't persist)
                 local st = getState()
-                table.insert(st.history, 1, loaded)
+                table.insert(st.historyReferences, loaded)
                 if lap_picker.onSelectCurrent then
-                    lap_picker.onSelectCurrent(loaded, 1)
+                    lap_picker.onSelectCurrent(loaded, #st.historyReferences)
                 end
                 ac.setMessage("CSV Loaded", msg)
             else
