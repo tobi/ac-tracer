@@ -6,9 +6,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "mcp__plugin_context7_context7__resolve-library-id",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nAdd extended-brake module for enhanced brake pressure telemetry\n\nIntroduces a new module that reads brake pressure data from the cphys\nDLL''s memory-mapped file. Falls back gracefully to pedal position if\nthe DLL is unavailable. Provides normalized brake values (0-1) for\nconsistent integration across all brake-related functionality.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git commit:*)"
+      "Bash(git mv:*)",
+      "Bash(cmd /c mklink AGENTS.md CLAUDE.md)",
+      "Bash(dir:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(git add:*)"
     ]
   }
 }

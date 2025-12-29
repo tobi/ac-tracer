@@ -15,7 +15,10 @@ This document describes the desired architecture, data structures, and data flow
 
 ---
 
-YOU ALSO MUST USE THE [SKILL.md](./SKILL.md) file, and update it when it points you into the wrong place.  
+## Resources
+
+- **CSP Lua Skill**: Use the [CSP Lua skill](./.claude/skills/csp-lua.md) for API reference. Update it when it points you into the wrong place.
+- **Full API Reference**: See [.claude/skills/reference/lib.lua](./.claude/skills/reference/lib.lua) for complete CSP type definitions (17k+ lines).
 
 ---
 
