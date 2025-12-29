@@ -970,7 +970,7 @@ function state.analyzeCorners(lapData)
                 apexSpeed = apexSpeed,
                 exitSpeed = lapData:getValueAtPos('speed', corner.endPos),
                 brakePos = lapData:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold),
-                liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
+                liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold),
                 maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)
             }
         end

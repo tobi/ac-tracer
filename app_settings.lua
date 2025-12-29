@@ -29,8 +29,8 @@ M.telemetryAutoHide = toBool(ini:get('TELEMETRY', 'auto_hide', true), true)
 M.telemetryAutoHideSpeed = tonumber(ini:get('TELEMETRY', 'auto_hide_speed', 20)) or 20
 
 -- Detection parameters
-M.brakeThreshold = tonumber(ini:get('DETECTION', 'brake_threshold', 0.03)) or 0.03
-M.throttleThreshold = tonumber(ini:get('DETECTION', 'throttle_threshold', 0.10)) or 0.10
+M.brakeThreshold = tonumber(ini:get('DETECTION', 'brake_threshold', 0.05)) or 0.05  -- 5% brake = brake point
+M.throttleThreshold = tonumber(ini:get('DETECTION', 'throttle_threshold', 0.98)) or 0.98  -- Below 98% = lift point
 M.speedDropThreshold = tonumber(ini:get('DETECTION', 'speed_drop_threshold', 0.05)) or 0.05
 
 -- Trace settings

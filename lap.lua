@@ -219,7 +219,7 @@ end
 ---@param threshold number Brake threshold (default 0.03)
 ---@return number|nil Spline position of brake point
 function lap:findBrakePoint(startPos, endPos, threshold)
-    threshold = threshold or 0.03
+    threshold = threshold or 0.1  -- 10% brake pressure
     
     for i = 1, #self.pos do
         local pos = self.pos[i]
@@ -239,17 +239,16 @@ function lap:findBrakePoint(startPos, endPos, threshold)
 end
 
 --- Find throttle lift point in a position range
+--- Lift point = first position where throttle drops below threshold after being at full throttle
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param onThreshold number Throttle "on" threshold (default 0.10)
----@param offThreshold number Throttle "off" threshold (default 0.08)
+---@param fullThrottleThreshold number Throttle threshold for "full throttle" (default 0.98)
 ---@return number|nil Spline position of lift point
-function lap:findLiftPoint(startPos, endPos, onThreshold, offThreshold)
-    onThreshold = onThreshold or 0.10
-    offThreshold = offThreshold or 0.08
-    
-    local wasOnThrottle = false
-    
+function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
+    fullThrottleThreshold = fullThrottleThreshold or 0.98  -- 98% = full throttle
+
+    local wasOnFullThrottle = false
+
     for i = 1, #self.pos do
         local pos = self.pos[i]
         -- Handle wrap-around
@@ -259,13 +258,13 @@ function lap:findLiftPoint(startPos, endPos, onThreshold, offThreshold)
         else
             inRange = pos >= startPos or pos <= endPos
         end
-        
+
         if inRange then
             local throttle = self.throttle[i]
-            if throttle >= onThreshold then
-                wasOnThrottle = true
-            elseif wasOnThrottle and throttle < offThreshold then
-                return pos
+            if throttle >= fullThrottleThreshold then
+                wasOnFullThrottle = true
+            elseif wasOnFullThrottle and throttle < fullThrottleThreshold then
+                return pos  -- First drop below 98%
             end
         end
     end
@@ -307,7 +306,7 @@ end
 function lap:findApex(startPos, endPos)
     local minSpeed = math.huge
     local apexPos = nil
-    
+
     for i = 1, #self.pos do
         local pos = self.pos[i]
         -- Handle wrap-around
@@ -317,7 +316,7 @@ function lap:findApex(startPos, endPos)
         else
             inRange = pos >= startPos or pos <= endPos
         end
-        
+
         if inRange then
             local speed = self.speed[i]
             if speed and speed < minSpeed then
@@ -326,11 +325,73 @@ function lap:findApex(startPos, endPos)
             end
         end
     end
-    
+
     if apexPos then
         return apexPos, minSpeed
     end
     return nil, nil
+end
+
+--- Find entry speed (max speed in first half of corner or before min speed point)
+---@param startPos number Start of corner
+---@param endPos number End of corner
+---@return number|nil entrySpeed Max speed in entry phase
+function lap:findEntrySpeed(startPos, endPos)
+    -- First find the apex (min speed position)
+    local apexPos, _ = self:findApex(startPos, endPos)
+    if not apexPos then return self:getValueAtPos('speed', startPos) end
+
+    -- Find max speed from start to apex
+    local maxSpeed = 0
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= apexPos then
+            inRange = pos >= startPos and pos <= apexPos
+        else
+            inRange = pos >= startPos or pos <= apexPos
+        end
+
+        if inRange then
+            local speed = self.speed[i]
+            if speed and speed > maxSpeed then
+                maxSpeed = speed
+            end
+        end
+    end
+
+    return maxSpeed > 0 and maxSpeed or nil
+end
+
+--- Find exit speed (max speed in second half of corner or after min speed point)
+---@param startPos number Start of corner
+---@param endPos number End of corner
+---@return number|nil exitSpeed Max speed in exit phase
+function lap:findExitSpeed(startPos, endPos)
+    -- First find the apex (min speed position)
+    local apexPos, _ = self:findApex(startPos, endPos)
+    if not apexPos then return self:getValueAtPos('speed', endPos) end
+
+    -- Find max speed from apex to end
+    local maxSpeed = 0
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if apexPos <= endPos then
+            inRange = pos >= apexPos and pos <= endPos
+        else
+            inRange = pos >= apexPos or pos <= endPos
+        end
+
+        if inRange then
+            local speed = self.speed[i]
+            if speed and speed > maxSpeed then
+                maxSpeed = speed
+            end
+        end
+    end
+
+    return maxSpeed > 0 and maxSpeed or nil
 end
 
 --------------------------------------------------------------------------------

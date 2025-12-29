@@ -28,10 +28,12 @@ local colors = {
     faster = rgbm(0.55, 0.20, 0.70, 0.85),
     onSpeed = rgbm(0.20, 0.70, 0.20, 0.85),
     slower = rgbm(0.70, 0.20, 0.20, 0.85),
-    refApexLine = rgbm(0.5, 0.5, 0.5, 0.4),
+    refApexLine = rgbm(0.7, 0.7, 0.5, 0.6),      -- More visible yellow-gray
     currentApexLine = rgbm(1.0, 1.0, 0.0, 1.0),
-    refBrakeLine = rgbm(1.0, 0.3, 0.3, 0.4),
+    refBrakeLine = rgbm(1.0, 0.4, 0.4, 0.6),     -- More visible red
+    refLiftLine = rgbm(0.4, 1.0, 0.4, 0.6),      -- Green for ref lift
     currentBrakeLine = rgbm(1.0, 0.2, 0.2, 1.0),
+    currentLiftLine = rgbm(0.2, 1.0, 0.2, 1.0),  -- Green for lift point
     scoreYellow = rgbm(1.0, 0.85, 0.0, 1.0),
     gaugeBg = rgbm(0.25, 0.25, 0.25, 1.0),
     textDim = rgbm(0.6, 0.6, 0.6, 1.0),
@@ -119,19 +121,24 @@ end
 function corner_analysis.analyzeCorner(lapData, cornerDef)
     if not lapData or not cornerDef then return nil end
 
-    -- Calculate apex dynamically for this specific lap
+    -- Calculate apex dynamically for this specific lap (min speed point)
     local apexPos, apexSpeed = lapData:findApex(cornerDef.startPos, cornerDef.endPos)
+
+    -- Entry speed: max speed before min speed point
+    -- Exit speed: max speed after min speed point
+    local entrySpeed = lapData:findEntrySpeed(cornerDef.startPos, cornerDef.endPos)
+    local exitSpeed = lapData:findExitSpeed(cornerDef.startPos, cornerDef.endPos)
 
     return {
         number = cornerDef.number,
         startPos = cornerDef.startPos,
         endPos = cornerDef.endPos,
         apexPos = apexPos,
-        entrySpeed = lapData:getValueAtPos('speed', cornerDef.startPos),
+        entrySpeed = entrySpeed,
         apexSpeed = apexSpeed,
-        exitSpeed = lapData:getValueAtPos('speed', cornerDef.endPos),
+        exitSpeed = exitSpeed,
         brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold),
-        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold, settings.throttleThreshold * 0.8),
+        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold),
         maxSteeringDeg = lapData:findMaxSteering(cornerDef.startPos, cornerDef.endPos),
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
         exitTime = lapData:getTimeAtPos(cornerDef.endPos),
@@ -414,33 +421,26 @@ function corner_analysis.update(car)
                 liveCorner.brakePos = currentPos
             end
             
-            -- Entry speed: highest before braking
-            if not liveCorner.wasBraking then
-                if isBraking then
-                    liveCorner.wasBraking = true
-                elseif currentSpeed > liveCorner.entrySpeed then
+            -- Apex speed: minimum in corner (track continuously)
+            if currentSpeed < liveCorner.apexSpeed then
+                liveCorner.apexSpeed = currentSpeed
+                liveCorner.apexPos = currentPos
+                -- Reset passedApex since we found a new min speed point
+                liveCorner.passedApex = false
+            else
+                -- Speed is increasing, we've passed the min speed point
+                liveCorner.passedApex = true
+            end
+
+            -- Entry speed: max speed before min speed point
+            if not liveCorner.passedApex then
+                if currentSpeed > liveCorner.entrySpeed then
                     liveCorner.entrySpeed = currentSpeed
                     liveCorner.entryPos = currentPos
                 end
             end
-            
-            -- Apex speed: minimum in corner
-            if currentSpeed < liveCorner.apexSpeed then
-                liveCorner.apexSpeed = currentSpeed
-                liveCorner.apexPos = currentPos
-            end
-            
-            -- Check if passed apex (use midpoint of corner as approximate apex position)
-            local midPos = (cornerInfo.startPos + cornerInfo.endPos) / 2
-            if cornerInfo.endPos < cornerInfo.startPos then
-                midPos = (cornerInfo.startPos + cornerInfo.endPos + 1) / 2
-                if midPos >= 1 then midPos = midPos - 1 end
-            end
-            if currentPos >= midPos or (midPos > 0.9 and currentPos < 0.1) then
-                liveCorner.passedApex = true
-            end
-            
-            -- Exit speed: highest after apex
+
+            -- Exit speed: max speed after min speed point
             if liveCorner.passedApex then
                 if liveCorner.exitSpeed == nil or currentSpeed > liveCorner.exitSpeed then
                     liveCorner.exitSpeed = currentSpeed
@@ -631,16 +631,35 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         return nil
     end
 
+    local trackLen = ac.getSim().trackLengthM or 5000
+
+    -- Reference lines (dashed, thicker for visibility)
     local refBrakeX = posToX(data.refBrakePos)
     if refBrakeX then
-        drawDashedLine(refBrakeX, y, refBrakeX, y + h, colors.refBrakeLine, 3, 3, 1)
+        drawDashedLine(refBrakeX, y, refBrakeX, y + h, colors.refBrakeLine, 4, 3, 2)
     end
 
     local refApexX = posToX(data.refApexPos)
     if refApexX then
-        drawDashedLine(refApexX, y, refApexX, y + h, colors.refApexLine, 4, 3, 1)
+        drawDashedLine(refApexX, y, refApexX, y + h, colors.refApexLine, 5, 3, 2)
     end
 
+    -- Reference lift line (dashed green) - only show if > 10m earlier than ref brake
+    if data.refLiftOffPos and data.refBrakePos then
+        local refLiftM = data.refLiftOffPos * trackLen
+        local refBrakeM = data.refBrakePos * trackLen
+        local refLiftToBrakeDist = refBrakeM - refLiftM
+        if refLiftToBrakeDist < 0 then refLiftToBrakeDist = refLiftToBrakeDist + trackLen end
+
+        if refLiftToBrakeDist > 10 then
+            local refLiftX = posToX(data.refLiftOffPos)
+            if refLiftX then
+                drawDashedLine(refLiftX, y, refLiftX, y + h, colors.refLiftLine, 4, 3, 2)
+            end
+        end
+    end
+
+    -- Current lines (solid)
     local curBrakeX = posToX(data.currentBrakePos)
     if curBrakeX then
         ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), colors.currentBrakeLine, 2)
@@ -649,6 +668,21 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     local curApexX = posToX(data.currentApexPos)
     if curApexX then
         ui.drawLine(vec2(curApexX, y), vec2(curApexX, y + h), colors.currentApexLine, 3)
+    end
+
+    -- Current lift point line (green) - only show if > 10m earlier than brake point
+    if data.currentLiftOffPos and data.currentBrakePos then
+        local liftM = data.currentLiftOffPos * trackLen
+        local brakeM = data.currentBrakePos * trackLen
+        local liftToBreakeDist = brakeM - liftM
+        if liftToBreakeDist < 0 then liftToBreakeDist = liftToBreakeDist + trackLen end
+
+        if liftToBreakeDist > 10 then
+            local curLiftX = posToX(data.currentLiftOffPos)
+            if curLiftX then
+                ui.drawLine(vec2(curLiftX, y), vec2(curLiftX, y + h), colors.currentLiftLine, 2)
+            end
+        end
     end
 end
 
@@ -696,7 +730,8 @@ function corner_analysis.draw(dt, useKmh)
     local panelX = windowSize.x * 0.68
     local graphWidth = panelX - padding * 2
     local graphY = 22
-    local graphHeight = windowSize.y - padding - graphY
+    local meterLabelHeight = 16  -- Space for meter annotations at bottom
+    local graphHeight = windowSize.y - padding - graphY - meterLabelHeight
     
     -- Fixed layout constants
     local gaugeRadius = 25
@@ -777,7 +812,7 @@ function corner_analysis.draw(dt, useKmh)
     
     if displayData then
         -- Graph outline (blue for frozen, green for live)
-        local outlineColor = frozenCorner.active 
+        local outlineColor = frozenCorner.active
             and rgbm(0.4, 0.7, 1, 0.8)
             or rgbm(0.6, 0.8, 0.4, 0.6)
         ui.drawRect(
@@ -785,7 +820,7 @@ function corner_analysis.draw(dt, useKmh)
             vec2(padding + graphWidth, graphY + graphHeight),
             outlineColor, 4, 2
         )
-        
+
         -- Graph content
         drawFilledComparison(
             padding + 4, graphY + 4,
@@ -798,6 +833,52 @@ function corner_analysis.draw(dt, useKmh)
             graphWidth - 8, graphHeight - 8,
             displayData.currentSpeeds, displayData
         )
+
+        -- Meter annotations at bottom
+        if displayData.refStartPos and displayData.refEndPos then
+            local trackLen = ac.getSim().trackLengthM or 5000
+            local startM = displayData.refStartPos * trackLen
+            local endM = displayData.refEndPos * trackLen
+            local cornerLenM = endM - startM
+            if cornerLenM < 0 then cornerLenM = cornerLenM + trackLen end
+
+            -- Choose nice round intervals based on corner length (fewer labels)
+            local interval = 50
+            if cornerLenM > 300 then interval = 100
+            elseif cornerLenM < 100 then interval = 25
+            end
+
+            local labelY = graphY + graphHeight + 2
+            ui.pushFont(ui.Font.Small)
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+
+            -- Draw 0m at start
+            ui.setCursor(vec2(padding, labelY))
+            ui.text("0m")
+
+            -- Draw intermediate labels at round intervals
+            local numLabels = math.floor(cornerLenM / interval)
+            for i = 1, numLabels do
+                local meters = i * interval
+                local frac = meters / cornerLenM
+                if frac < 0.95 then  -- Don't draw too close to end
+                    local labelX = padding + 4 + (graphWidth - 8) * frac
+                    local labelText = tostring(meters) .. "m"
+                    local textW = ui.measureText(labelText).x
+                    ui.setCursor(vec2(labelX - textW / 2, labelY))
+                    ui.text(labelText)
+                end
+            end
+
+            -- Draw total length at end
+            local endText = string.format("%dm", math.floor(cornerLenM + 0.5))
+            local endTextW = ui.measureText(endText).x
+            ui.setCursor(vec2(padding + graphWidth - endTextW, labelY))
+            ui.text(endText)
+
+            ui.popStyleColor()
+            ui.popFont()
+        end
         
         -- Time delta (left of gauge, vertically centered)
         if displayData.timeDelta then
@@ -838,7 +919,7 @@ function corner_analysis.draw(dt, useKmh)
         drawStatRow("Apex", displayData.apexSpeedDelta, speedUnit)
         drawStatRow("Exit", displayData.exitSpeedDelta, speedUnit)
         statsY = statsY + 4
-        
+
         -- POSITION section
         ui.setCursor(vec2(panelX, statsY))
         ui.pushFont(ui.Font.Small)
@@ -847,14 +928,32 @@ function corner_analysis.draw(dt, useKmh)
         ui.popStyleColor()
         ui.popFont()
         statsY = statsY + 14
-        
+
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
         drawPosRow("Brake", brakeMeters)
         drawPosRow("Lift", liftOffMeters)
         if displayData.currentApexPos and displayData.refApexPos then
             drawPosRow("Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000)
         end
-        
+
+        -- Steering delta (only show if > 10 degrees difference)
+        if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 10 then
+            statsY = statsY + 4
+            local steerSign = displayData.steeringDelta >= 0 and "+" or ""
+            local steerColor = colors.textBright
+            if math.abs(displayData.steeringDelta) > 10 then
+                steerColor = displayData.steeringDelta > 0 and rgbm(1, 0.4, 0.4, 1) or rgbm(0.3, 1, 0.3, 1)
+            end
+            ui.setCursor(vec2(panelX, statsY))
+            ui.pushStyleColor(ui.StyleColor.Text, colors.textDim)
+            ui.text("Steer")
+            ui.popStyleColor()
+            ui.sameLine(panelX + labelW)
+            ui.pushStyleColor(ui.StyleColor.Text, steerColor)
+            ui.text(string.format("%s%.0f°", steerSign, displayData.steeringDelta))
+            ui.popStyleColor()
+        end
+
         ui.popFont()
     else
         -- Empty state: message in graph area
