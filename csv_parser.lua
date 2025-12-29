@@ -7,7 +7,7 @@ local csv_parser = {}
 -- Constants
 --------------------------------------------------------------------------------
 
-local TARGET_SAMPLE_RATE = 15  -- Hz - must match lap.SAMPLE_RATE
+local TARGET_SAMPLE_RATE = 60  -- Hz - must match lap.SAMPLE_RATE
 local TARGET_SAMPLE_INTERVAL = 1 / TARGET_SAMPLE_RATE
 
 -- Column mapping configurations for different CSV sources

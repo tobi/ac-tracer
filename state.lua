@@ -732,7 +732,7 @@ function state.update(dt, car)
     prevLapTimeMs = car.lapTimeMs
     prevResetCounter = car.resetCounter or 0
     
-    -- Sample at 15 Hz
+    -- Sample at 60 Hz
     sampleTimer = sampleTimer + dt
     if sampleTimer >= 1 / SAMPLE_RATE then
         sampleTimer = sampleTimer - 1 / SAMPLE_RATE

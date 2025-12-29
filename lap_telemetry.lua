@@ -93,7 +93,7 @@ local function getValueAtTime(lapObj, time, field)
             t = math.clamp((time - t1) / (t2 - t1), 0, 1)
         end
     else
-        -- Fallback: Convert time to index (assuming 15 Hz from time 0)
+        -- Fallback: Convert time to index (assuming 60 Hz from time 0)
         local index = time * lap.SAMPLE_RATE + 1
         lo = math.floor(index)
         hi = math.ceil(index)

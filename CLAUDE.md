@@ -56,7 +56,7 @@ lap = {
     fuelLeftAtStart = number, -- Fuel at lap start in liters (for fuel strategy)
     lapNumberInSession = number, -- Which lap number in this session (1, 2, 3...)
     
-    -- Telemetry arrays (all synchronized, same length, sampled at 15 Hz)
+    -- Telemetry arrays (all synchronized, same length, sampled at 60 Hz)
     throttle = { number, ... },  -- Throttle input (0.0 to 1.0)
     brake = { number, ... },     -- Brake input (0.0 to 1.0)
     clutch = { number, ... },    -- Clutch input (0.0 to 1.0, inverted: 1.0 = pressed)
@@ -91,8 +91,8 @@ lap = {
 
 ### Sampling
 
-- **Sample Rate**: 15 Hz (66.67ms between samples)
-- **Typical Lap**: ~1400 samples for a 90-second lap
+- **Sample Rate**: 60 Hz (16.67ms between samples)
+- **Typical Lap**: ~5400 samples for a 90-second lap
 - All arrays are synchronized: `throttle[i]`, `brake[i]`, etc. correspond to the same moment
 
 ### Steering Normalization
@@ -303,7 +303,7 @@ Initialize state
 ```
 script.update(dt)
     ↓
-Sample at 15 Hz → append to state.currentLap arrays
+Sample at 60 Hz → append to state.currentLap arrays
     ↓
 Check lap completion → finalize, add to history, update bestLap
     ↓
@@ -489,7 +489,7 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 
 ## Notes
 
-- **All sampling is 15 Hz** - consistent across recording, CSV import, and display
+- **All sampling is 60 Hz** - consistent across recording, CSV import, and display
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - all 0.0-1.0 for consistent display
 - **Time in milliseconds** - internal storage uses ms for precision
