@@ -28,8 +28,7 @@ local isLoadingLap = false
 --------------------------------------------------------------------------------
 
 -- These can be set by the caller to handle lap selection
-lap_picker.onSelectCurrent = nil   -- function(lap, index) - called when "C" pressed
-lap_picker.onSelectReference = nil -- function(lap) - called when "R" pressed
+-- Callbacks are now passed via options to drawPopover/drawLapRow/drawCSVRow
 lap_picker.onClose = nil           -- function() - called when dialog should close
 
 --------------------------------------------------------------------------------
@@ -127,8 +126,8 @@ local function drawLapRow(x, y, width, lapData, idx, options)
         ui.pushStyleColor(ui.StyleColor.Button, theme.button.success)
         ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.successHover)
         if ui.button("C##c" .. tostring(idx), vec2(BTN_WIDTH, 18)) then
-            if lap_picker.onSelectCurrent then
-                lap_picker.onSelectCurrent(lapData, idx)
+            if options.onSelectCurrent then
+                options.onSelectCurrent(lapData, idx)
             end
             ac.setMessage("Current Set", string.format("%d:%05.2f", mins, secs))
         end
@@ -142,8 +141,8 @@ local function drawLapRow(x, y, width, lapData, idx, options)
         ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.referenceHover)
         if ui.button("R##r" .. tostring(idx), vec2(BTN_WIDTH, 18)) then
             st.setBestLap(lapData)
-            if lap_picker.onSelectReference then
-                lap_picker.onSelectReference(lapData)
+            if options.onSelectReference then
+                options.onSelectReference(lapData)
             end
             ac.setMessage("Reference Set", string.format("%d:%05.2f", mins, secs))
         end
@@ -188,8 +187,8 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         if ui.button("C##csvc" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
-                if lap_picker.onSelectCurrent then
-                    lap_picker.onSelectCurrent(loaded)
+                if options.onSelectCurrent then
+                    options.onSelectCurrent(loaded)
                 end
                 ac.setMessage("Lap loaded from CSV", msg)
             else
@@ -209,8 +208,8 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
             if loaded then
                 local st = getState()
                 st.setBestLap(loaded)
-                if lap_picker.onSelectReference then
-                    lap_picker.onSelectReference(loaded)
+                if options.onSelectReference then
+                    options.onSelectReference(loaded)
                 end
                 ac.setMessage("Reference loaded from CSV", msg)
             else
@@ -290,6 +289,8 @@ function lap_picker.drawPopover(x, y, width, height, options)
                 py = drawLapRow(contentX, py, contentW, entry.lap, entry.index, {
                     showCurrent = showCurrent,
                     showReference = showReference,
+                    onSelectCurrent = options.onSelectCurrent,
+                    onSelectReference = options.onSelectReference,
                 })
                 shown = shown + 1
             end
@@ -321,6 +322,8 @@ function lap_picker.drawPopover(x, y, width, height, options)
                 py = drawLapRow(contentX, py, contentW, entry.lap, entry.index + 1000, {
                     showCurrent = showCurrent,
                     showReference = showReference,
+                    onSelectCurrent = options.onSelectCurrent,
+                    onSelectReference = options.onSelectReference,
                 })
                 shown = shown + 1
             end
@@ -351,6 +354,8 @@ function lap_picker.drawPopover(x, y, width, height, options)
                 py = drawCSVRow(contentX, py, contentW, fileInfo, j, {
                     showCurrent = showCurrent,
                     showReference = showReference,
+                    onSelectCurrent = options.onSelectCurrent,
+                    onSelectReference = options.onSelectReference,
                 })
             end
         end

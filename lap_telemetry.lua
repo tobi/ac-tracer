@@ -14,8 +14,7 @@ local markdown = require('markdown')
 local lap_telemetry = {}
 
 -- View state
-local selectedLap = nil       -- Direct lap reference (can be CSV or session lap)
-
+local selectedLap = nil    -- Direct lap reference (can be CSV or session lap)
 local viewStartTime = 0  -- Start time of visible window (seconds)
 local viewDuration = 0   -- Duration of visible window (seconds, 0 = full lap)
 local cursorTime = nil   -- Cursor time position (nil = no cursor)
@@ -42,12 +41,8 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Get selected lap (direct reference, or auto-select fastest from session)
 local function getSelectedLap()
     -- If we have a direct lap reference, use it
-    if selectedLap then
-        local len = selectedLap:length()
-        if len > 0 then
-            return selectedLap
-        end
-        ac.log("AC Tracer: selectedLap exists but has 0 samples")
+    if selectedLap and selectedLap:length() > 0 then
+        return selectedLap
     end
 
     -- Auto-select fastest from current session
@@ -939,16 +934,16 @@ function lap_telemetry.draw(dt)
     ui.setCursor(vec2(padding, controlsY))
     ui.pushFont(ui.Font.Small)
 
-    local selectedLap = getSelectedLap()
+    local viewingLap = getSelectedLap()
     local referenceLap = getReferenceLap()
 
-    if selectedLap then
+    if viewingLap then
         ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-        local lapTimeS = selectedLap.time / 1000
+        local lapTimeS = viewingLap.time / 1000
         local mins = math.floor(lapTimeS / 60)
         local secs = lapTimeS - mins * 60
         -- Show (CSV) label if viewing a CSV lap
-        local label = (selectedLap and selectedLap.csvSource) and " (CSV)" or ""
+        local label = (viewingLap and viewingLap.csvSource) and " (CSV)" or ""
         ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, label))
         ui.popStyleColor()
 
@@ -959,7 +954,7 @@ function lap_telemetry.draw(dt)
             -- Find current index in history
             local currentIdx = 1
             for i, l in ipairs(history) do
-                if l == selectedLap then currentIdx = i break end
+                if l == viewingLap then currentIdx = i break end
             end
 
             if ui.button("<", vec2(30, 0)) and currentIdx > 1 then
@@ -1287,9 +1282,7 @@ function lap_telemetry.draw(dt)
 
         -- Callbacks for lap picker
         local function onSelectCurrent(lapData, idx)
-            ac.log(string.format("AC Tracer: onSelectCurrent called, lap has %d samples",
-                lapData and lapData:length() or 0))
-            selectedLap = lapData  -- Store lap directly (works for CSV and session laps)
+            selectedLap = lapData
             viewStartTime = 0
             viewDuration = 0
             showRefPicker = false
