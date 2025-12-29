@@ -24,6 +24,10 @@ end
 -- General settings
 M.useKMH = toBool(ini:get('GENERAL', 'use_kmh', true), true)
 
+-- Telemetry window auto-hide settings
+M.telemetryAutoHide = toBool(ini:get('TELEMETRY', 'auto_hide', true), true)
+M.telemetryAutoHideSpeed = tonumber(ini:get('TELEMETRY', 'auto_hide_speed', 20)) or 20
+
 -- Detection parameters
 M.brakeThreshold = tonumber(ini:get('DETECTION', 'brake_threshold', 0.03)) or 0.03
 M.throttleThreshold = tonumber(ini:get('DETECTION', 'throttle_threshold', 0.10)) or 0.10
@@ -96,6 +100,30 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     M.checkbox("Clutch", "clutch")
     ui.sameLine(120)
     M.checkbox("Speed", "speed")
+    ui.offsetCursorY(10)
+
+    ui.separator()
+    ui.offsetCursorY(10)
+
+    -- Telemetry auto-hide settings
+    ui.text("Telemetry Window")
+    ui.offsetCursorY(5)
+
+    if ui.checkbox("Auto-hide above speed", M.telemetryAutoHide) then
+        M.telemetryAutoHide = not M.telemetryAutoHide
+        ini:set('TELEMETRY', 'auto_hide', M.telemetryAutoHide and "True" or "False")
+        ini:save()
+    end
+
+    ui.sameLine(180)
+    ui.pushItemWidth(60)
+    local newSpeed = ui.slider("##autohidespeed", M.telemetryAutoHideSpeed, 5, 100, "%.0f km/h")
+    if newSpeed ~= M.telemetryAutoHideSpeed then
+        M.telemetryAutoHideSpeed = newSpeed
+        ini:set('TELEMETRY', 'auto_hide_speed', tostring(math.floor(newSpeed)))
+        ini:save()
+    end
+    ui.popItemWidth()
     ui.offsetCursorY(10)
 
     ui.separator()

@@ -10,24 +10,26 @@ local cphysData = nil
 local cphysAvailable = false
 local initAttempted = false
 
+
 -- Structure definition matching the DLL's output
+-- Using C FFI syntax - arrays for multi-value fields
 local CPHYS_STRUCT = [[
-float4 FX;
-float4 FY;
-float4 carcassTemp;
-float4 slipAngle;
-float4 slipRatio;
-float4 vkm;
+float FX[4];
+float FY[4];
+float carcassTemp[4];
+float slipAngle[4];
+float slipRatio[4];
+float vkm[4];
 float yawAngle;
 float rollAngle;
-float2 downforce;
+float downforce[2];
 float drag;
-float3 accIMU;
-float4 toe;
-float4 damperTravel;
+float accIMU[3];
+float toe[4];
+float damperTravel[4];
 float engTorque;
 float engThrottle;
-double2 brakePressure;
+double brakePressure[2];
 ]]
 
 --- Initialize the extended brake module
@@ -48,10 +50,48 @@ local function init()
         cphysAvailable = true
         ac.log("Extended Brake: SUCCESS - cphys_data connected, brake pressure telemetry enabled")
         ac.log("Extended Brake: Source: cphys DLL (dwrite.dll) - using actual brake pressure in PSI")
+
+        -- Test read to verify data is actually flowing
+        local testSuccess, testFront, testRear = pcall(function()
+            return result.brakePressure[0], result.brakePressure[1]
+        end)
+        if testSuccess then
+            local total = (testFront or 0) + (testRear or 0)
+            ac.log(string.format("Extended Brake: Initial read - Front: %.2f, Rear: %.2f, Total: %.2f PSI",
+                testFront or 0, testRear or 0, total))
+        else
+            ac.log("Extended Brake: WARNING - Connected but failed to read brake pressure values")
+        end
     else
         cphysAvailable = false
         ac.log("Extended Brake: cphys_data not available - falling back to brake pedal position")
         ac.log("Extended Brake: To enable pressure telemetry, place dwrite.dll in AC root folder")
+
+        -- Diagnostic: Try to understand WHY it failed
+        if not success then
+            ac.log("Extended Brake: pcall failed - error: " .. tostring(result))
+        elseif not result then
+            ac.log("Extended Brake: readMemoryMappedFile returned nil (file doesn't exist or wrong format)")
+        end
+
+        -- Try some alternative memory-mapped file names the DLL might use
+        local altNames = {"cphys", "acCphys", "ac_cphys", "Local\\cphys_data", "Global\\cphys_data"}
+        for _, name in ipairs(altNames) do
+            local altSuccess, altResult = pcall(function()
+                return ac.readMemoryMappedFile(name, CPHYS_STRUCT, false)
+            end)
+            if altSuccess and altResult then
+                ac.log("Extended Brake: Found alternative MMF name: " .. name)
+                cphysData = altResult
+                cphysAvailable = true
+                break
+            end
+        end
+
+        if not cphysAvailable then
+            ac.log("Extended Brake: No memory-mapped file found with any known name")
+            ac.log("Extended Brake: Check that dwrite.dll is in AC root and AC was restarted")
+        end
     end
 end
 
@@ -78,17 +118,17 @@ function extended_brake.getBrakePressure(car, wheel)
     if cphysAvailable and cphysData then
         -- Try to read brake pressure from cphys
         local success, pressure = pcall(function()
-            -- brakePressure is double2: (1) = front, (2) = rear
+            -- brakePressure is double[2]: [0] = front, [1] = rear
             if wheel then
                 -- Wheels 1-2 are front, 3-4 are rear
                 if wheel <= 2 then
-                    return cphysData.brakePressure(1)  -- Front pressure
+                    return cphysData.brakePressure[0]  -- Front pressure
                 else
-                    return cphysData.brakePressure(2)  -- Rear pressure
+                    return cphysData.brakePressure[1]  -- Rear pressure
                 end
             else
-                -- Return front pressure (most relevant for driver feel)
-                return cphysData.brakePressure(1)
+                -- Return total brake pressure (front + rear)
+                return cphysData.brakePressure[0] + cphysData.brakePressure[1]
             end
         end)
 
@@ -108,10 +148,10 @@ end
 --- Get normalized brake value (0-1) regardless of source
 --- Uses brake pressure if available, otherwise pedal position
 ---@param car table Car state from ac.getCar()
----@param maxPressure number|nil Maximum pressure for normalization (default 2000 PSI)
+---@param maxPressure number|nil Maximum pressure for normalization (default 4000 PSI for front+rear combined)
 ---@return number Normalized brake value 0-1
 function extended_brake.getNormalizedBrake(car, maxPressure)
-    maxPressure = maxPressure or 2000  -- Typical max brake pressure in PSI
+    maxPressure = maxPressure or 4000  -- Typical max combined brake pressure (front + rear) in PSI
 
     local pressure, isPSI = extended_brake.getBrakePressure(car)
 
@@ -140,16 +180,19 @@ function extended_brake.getBrakeData(car)
 
     if cphysAvailable and cphysData then
         local success, front, rear = pcall(function()
-            return cphysData.brakePressure(1), cphysData.brakePressure(2)
+            return cphysData.brakePressure[0], cphysData.brakePressure[1]
         end)
 
-        if success and front and front > 0 then
-            data.value = front
-            data.isPressure = true
-            data.unit = "PSI"
-            data.frontPressure = front
-            data.rearPressure = rear
-            return data
+        if success and front then
+            local total = (front or 0) + (rear or 0)
+            if total > 0 then
+                data.value = total
+                data.isPressure = true
+                data.unit = "PSI"
+                data.frontPressure = front
+                data.rearPressure = rear
+                return data
+            end
         end
     end
 

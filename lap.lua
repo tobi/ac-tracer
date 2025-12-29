@@ -758,10 +758,11 @@ function lap.fromCSV(filePath, track, car, trackLength)
 
     -- Determine brake source (prefer pressure over position)
     local useBrakePressure = indices.brakePressure ~= nil
-    local brakePressureMax = 0
+    -- Fixed max brake pressure for normalization (100 bar = typical max for real car brake systems)
+    local brakePressureMax = 100
 
     if useBrakePressure then
-        ac.log("lap.fromCSV: Using brake pressure data")
+        ac.log("lap.fromCSV: Using brake pressure data (normalizing to 100 bar max)")
     elseif indices.brakePos then
         ac.log("lap.fromCSV: Using brake pedal position (pressure not available)")
     else
@@ -779,22 +780,6 @@ function lap.fromCSV(filePath, track, car, trackLength)
     local speedFactor = speedUnit and UNIT_CONVERSIONS.speed[speedUnit] or 3.6
     local timeFactor = UNIT_CONVERSIONS.time[timeUnit] or 1.0
     local distanceFactor = UNIT_CONVERSIONS.distance[distanceUnit] or 1.0
-
-    -- First pass: find max brake pressure for normalization
-    if useBrakePressure then
-        for i = dataStartLine, #allLines do
-            local line = allLines[i]
-            if line ~= "" and not line:match("^%s*$") then
-                local fields = extractFields(line, indices)
-                local pressure = tonumber(fields.brakePressure) or 0
-                if pressure > brakePressureMax then
-                    brakePressureMax = pressure
-                end
-            end
-        end
-        if brakePressureMax == 0 then brakePressureMax = 1 end
-        ac.log(string.format("lap.fromCSV: Max brake pressure: %.2f bar", brakePressureMax))
-    end
 
     -- Parse all laps in the file
     local allLaps = {}
