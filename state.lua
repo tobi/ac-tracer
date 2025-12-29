@@ -43,6 +43,7 @@ state.cornerRecordTime = nil
 
 local SAMPLE_RATE = lap.SAMPLE_RATE
 local TAP_THRESHOLD = 1.0
+local MAX_SAMPLES = 36000  -- ~10 minutes at 60Hz (36000 samples)
 
 -- state.history is a reference to history_storage.laps
 state.history = history_storage.laps
@@ -104,13 +105,6 @@ local function removeOverlappingCorners(corners)
             table.insert(result, corner)
         end
     end
-    -- Renumber corners
-    for i, corner in ipairs(result) do
-        corner.number = i
-        if corner.name and corner.name:match("^Corner %d+$") then
-            corner.name = "Corner " .. i
-        end
-    end
     return result
 end
 
@@ -160,8 +154,14 @@ end
 --- Save corners to per-track CSV file (corners/<track>.csv)
 local function saveCornersToFile()
     local path = getCornersPath()
-    if not path then return false end
-    if not state.trackCorners or #state.trackCorners == 0 then return false end
+    if not path then
+        ac.log("AC Tracer: Cannot save corners - no track path")
+        return false
+    end
+    if not state.trackCorners or #state.trackCorners == 0 then
+        ac.log("AC Tracer: Cannot save corners - no corners defined")
+        return false
+    end
 
     -- Remove overlapping corners before saving
     state.trackCorners = removeOverlappingCorners(state.trackCorners)
@@ -182,11 +182,13 @@ local function saveCornersToFile()
     -- Write corners
     for _, corner in ipairs(state.trackCorners) do
         if corner.startPos and corner.endPos then
+            local name = corner.name or ("Corner " .. corner.number)
             f:write(string.format("%s,%.6f,%.6f\n",
-                escapeCSV(corner.name or ("Corner " .. corner.number)),
+                escapeCSV(name),
                 corner.startPos,
                 corner.endPos
             ))
+            ac.log(string.format("AC Tracer: Writing corner %d: %s", corner.number, name))
         end
     end
 
@@ -237,50 +239,6 @@ local function loadCornersFromFile()
         return true
     end
     return false
-end
-
---- Save corners to ac.storage
-local function saveCornersToStorage()
-    local key = getStorageKey('corners')
-    if state.trackCorners and #state.trackCorners > 0 then
-        local pairs = {}
-        for _, c in ipairs(state.trackCorners) do
-            if c.startPos and c.endPos then
-                table.insert(pairs, {c.startPos, c.endPos})
-            else
-                table.insert(pairs, {})
-            end
-        end
-        ac.storage[key] = stringify(pairs)
-    else
-        ac.storage[key] = nil
-    end
-end
-
---- Load corners from ac.storage
-local function loadCornersFromStorage()
-    local key = getStorageKey('corners')
-    local data = ac.storage[key]
-    if not data then return false end
-    
-    local ok, pairs = pcall(function() return stringify.parse(data) end)
-    if not ok or not pairs then return false end
-    
-    state.trackCorners = {}
-    for i, pair in ipairs(pairs) do
-        if pair and #pair == 2 then
-            local startPos, endPos = pair[1], pair[2]
-            table.insert(state.trackCorners, {
-                number = i,
-                startPos = startPos,
-                endPos = endPos,
-                name = "Corner " .. i
-            })
-        end
-    end
-    
-    ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from storage")
-    return true
 end
 
 --------------------------------------------------------------------------------
@@ -572,10 +530,8 @@ function state.init(car)
     
     ac.log("AC Tracer: Session ID: " .. state.sessionId)
     
-    -- Load corners (file first, then storage)
-    if not loadCornersFromFile() then
-        loadCornersFromStorage()
-    end
+    -- Load corners from file
+    loadCornersFromFile()
     
     -- Load best lap and history
     loadBestLap()
@@ -612,6 +568,7 @@ local function discardCurrentLap()
 
     state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
+    lap.resetOverlapTracking()  -- Reset overlap detection state
 
     if shouldLog then
         ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
@@ -674,6 +631,7 @@ function state.update(dt, car)
         state.currentLap = lap.new(state.track, state.car, state.sessionId)
         state.currentLap.fuelLeftAtStart = car.fuel
         state.lapNumber = car.lapCount
+        lap.resetOverlapTracking()  -- Reset overlap detection state
     end
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
@@ -712,15 +670,11 @@ function state.update(dt, car)
             state.currentLap.fuelLeftAtStart = car.fuel
         end
         
-        -- Add sample if valid (and not in pits)
+        -- Add sample if valid (and not in pits) and under max limit
         if car.lapTimeMs > 0 and car.splinePosition >= 0 and not inPit then
-            state.currentLap:addSample(car)
-        end
-
-        -- Debug: Log sample count every ~5 seconds (300 samples at 60Hz)
-        if state.currentLap and state.currentLap:length() % 300 == 0 and state.currentLap:length() > 0 then
-            ac.log(string.format("AC Tracer: Recording lap - %d samples, pos: %.3f, lapTimeMs: %d",
-                state.currentLap:length(), car.splinePosition, car.lapTimeMs))
+            if state.currentLap:length() < MAX_SAMPLES then
+                state.currentLap:addSample(car)
+            end
         end
     end
     
@@ -962,7 +916,7 @@ end
 --- Clear all corners
 function state.clearCorners()
     state.trackCorners = {}
-    saveCornersToStorage()
+    saveCornersToFile()
     ac.log("AC Tracer: Cleared corners")
 end
 
@@ -1017,7 +971,7 @@ function state.deleteCorner(cornerNum)
                 end
             end
             ac.log(string.format("Traces: Deleted corner %d", cornerNum))
-            saveCornersToStorage()
+            saveCornersToFile()
             return true
         end
     end
@@ -1037,7 +991,7 @@ function state.insertCorner(startPos, endPos)
     }
 
     table.insert(state.trackCorners, newCorner)
-    saveCornersToStorage()
+    saveCornersToFile()
     ac.log(string.format("Traces: Inserted corner %d at %.2f-%.2f", newCorner.number, startPos, endPos))
     return newCorner.number
 end
@@ -1082,9 +1036,9 @@ function state.stopCornerRecording(pos)
         })
         ac.log("AC Tracer: Recorded corner #" .. #state.trackCorners)
     end
-    
-    saveCornersToStorage()
-    
+
+    saveCornersToFile()
+
     state.cornerRecording = false
     state.cornerRecordStart = nil
     state.cornerRecordTime = nil
