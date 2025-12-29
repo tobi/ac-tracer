@@ -40,9 +40,24 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
--- Get selected lap from state.history (auto-select fastest if enabled)
+-- Get all available laps (history + historyReferences combined)
+local function getAllLaps()
+    local laps = {}
+    -- Add session history laps first
+    for _, l in ipairs(state.history) do
+        table.insert(laps, l)
+    end
+    -- Add CSV reference laps
+    for _, l in ipairs(state.historyReferences or {}) do
+        table.insert(laps, l)
+    end
+    return laps
+end
+
+-- Get selected lap from combined laps (auto-select fastest if enabled)
 local function getSelectedLap()
-    if #state.history == 0 then return nil end
+    local allLaps = getAllLaps()
+    if #allLaps == 0 then return nil end
 
     if autoSelectFastest then
         local fastest, idx = state.getFastestSessionLap()
@@ -50,11 +65,22 @@ local function getSelectedLap()
             selectedLapIndex = idx
             return fastest
         end
+        -- Fallback to fastest from all laps
+        local bestTime = math.huge
+        local bestIdx = 1
+        for i, l in ipairs(allLaps) do
+            if l.time and l.time > 0 and l.time < bestTime then
+                bestTime = l.time
+                bestIdx = i
+            end
+        end
+        selectedLapIndex = bestIdx
+        return allLaps[bestIdx]
     end
 
     if not selectedLapIndex then selectedLapIndex = 1 end
-    local idx = math.clamp(selectedLapIndex, 1, #state.history)
-    return state.history[idx]
+    local idx = math.clamp(selectedLapIndex, 1, #allLaps)
+    return allLaps[idx]
 end
 
 -- Get reference lap (defaults to state.bestLap)
@@ -948,7 +974,8 @@ function lap_telemetry.draw(dt)
         ui.popStyleColor()
 
         ui.sameLine(130)
-        if #state.history > 1 then
+        local allLaps = getAllLaps()
+        if #allLaps > 1 then
             if ui.button("<", vec2(30, 0)) then
                 autoSelectFastest = false
                 selectedLapIndex = math.max(1, (selectedLapIndex or 1) - 1)
@@ -958,12 +985,12 @@ function lap_telemetry.draw(dt)
             ui.sameLine()
             ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
 
-            ui.text(string.format("lap %d", selectedLap.lapNumberInSession or selectedLapIndex or 1))
+            ui.text(string.format("lap %d/%d", selectedLapIndex or 1, #allLaps))
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) then
                 autoSelectFastest = false
-                selectedLapIndex = math.min(#state.history, (selectedLapIndex or 1) + 1)
+                selectedLapIndex = math.min(#allLaps, (selectedLapIndex or 1) + 1)
                 viewStartTime = 0
                 viewDuration = 0
             end
