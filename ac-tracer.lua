@@ -8,25 +8,11 @@ local corner = require('corner')
 local corner_analysis = require('corner_analysis')
 local lap_telemetry = require('lap_telemetry')
 local extended_brake = require('extended-brake')
-local reference_lap = require('reference_lap')
+local lap_picker = require('lap_picker')
+local delta_bar = require('delta_bar')
+local theme = require('theme')
 
--- Local aliases with fallbacks
-local colors = settings.colors or {
-    throttle = rgbm(0, 1, 0, 0.85),
-    brake = rgbm(1, 0, 0, 0.85),
-    clutch = rgbm(0, 0.4, 1, 0.85),
-    steering = rgbm(0.7, 0.7, 0.7, 0.85),
-    speed = rgbm(0.5, 0.5, 0.5, 0.5),
-    grid = rgbm(0.1, 0.1, 0.1, 0.9),
-    wheelBg = rgbm(0, 0, 0, 0.6),
-    wheelIndicator = rgbm(1, 1, 0, 1),
-    background = rgbm(0.12, 0.12, 0.12, 1.0),
-    ghostThrottle = rgbm(0, 1, 0, 0.25),
-    ghostBrake = rgbm(1, 0, 0, 0.25),
-    ghostClutch = rgbm(0, 0.4, 1, 0.25),
-    ghostSteering = rgbm(0.7, 0.7, 0.7, 0.25),
-    ghostSpeed = rgbm(0.5, 0.5, 0.5, 0.2),
-}
+-- Display settings
 local display = settings.display or {
     throttle = true,
     brake = true,
@@ -127,14 +113,14 @@ end
 
 local function drawGrid(origin, x, y, w, h, positions, trackLength)
     -- Border
-    ui.drawLine(origin + vec2(x, y), origin + vec2(x + w, y), colors.grid, 1)
-    ui.drawLine(origin + vec2(x + w, y), origin + vec2(x + w, y + h), colors.grid, 1)
-    ui.drawLine(origin + vec2(x + w, y + h), origin + vec2(x, y + h), colors.grid, 1)
-    ui.drawLine(origin + vec2(x, y + h), origin + vec2(x, y), colors.grid, 1)
+    ui.drawLine(origin + vec2(x, y), origin + vec2(x + w, y), theme.grid.line, 1)
+    ui.drawLine(origin + vec2(x + w, y), origin + vec2(x + w, y + h), theme.grid.line, 1)
+    ui.drawLine(origin + vec2(x + w, y + h), origin + vec2(x, y + h), theme.grid.line, 1)
+    ui.drawLine(origin + vec2(x, y + h), origin + vec2(x, y), theme.grid.line, 1)
 
     -- Horizontal line at 50%
     local ly = y + h / 2
-    ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), colors.grid, 1)
+    ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), theme.grid.line, 1)
     
     -- 50m vertical markers
     if positions and #positions >= 2 and trackLength and trackLength > 0 then
@@ -188,11 +174,11 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
     local center = origin + vec2(cx, cy)
     local arcThickness = r - innerR
     local indicatorR = (innerR + r) / 2
-    
+
     -- Background wheel ring
-    ui.drawCircleFilled(center, r, colors.wheelBg, 48)
-    ui.drawCircleFilled(center, innerR, colors.background, 48)
-    
+    ui.drawCircleFilled(center, r, theme.wheel.bg, 48)
+    ui.drawCircleFilled(center, innerR, theme.bg.window, 48)
+
     -- Center notch (always visible, subtle gray marker at top/center)
     local notchAngle = 0  -- Top = center/straight
     local notchLen = arcThickness * 0.6
@@ -202,35 +188,35 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
     local notchY1 = center.y - math.cos(notchAngle) * notchInner
     local notchX2 = center.x + math.sin(notchAngle) * notchOuter
     local notchY2 = center.y - math.cos(notchAngle) * notchOuter
-    ui.drawLine(vec2(notchX1, notchY1), vec2(notchX2, notchY2), rgbm(0.5, 0.5, 0.5, 0.6), 2)
+    ui.drawLine(vec2(notchX1, notchY1), vec2(notchX2, notchY2), theme.wheel.notch, 2)
 
     -- Ghost steering (more visible)
     if ghostSteerDeg then
         local ghostAngle = math.rad(ghostSteerDeg)
         ui.pathClear()
         ui.pathArcTo(center, indicatorR, -math.pi/2 + ghostAngle - 0.25, -math.pi/2 + ghostAngle + 0.25, 16)
-        ui.pathStroke(rgbm(0.6, 0.6, 0.6, 0.7), false, arcThickness * 0.7)
-        
+        ui.pathStroke(theme.wheel.ghost, false, arcThickness * 0.7)
+
         -- Ghost center line
         local ghostInnerX = center.x + math.sin(ghostAngle) * innerR
         local ghostInnerY = center.y - math.cos(ghostAngle) * innerR
         local ghostOuterX = center.x + math.sin(ghostAngle) * r
         local ghostOuterY = center.y - math.cos(ghostAngle) * r
-        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), rgbm(0.5, 0.5, 0.5, 0.5), 2)
+        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), theme.withAlpha(theme.wheel.ghost, 0.5), 2)
     end
 
     -- Current steering indicator
     local angle = math.rad(steerDeg)
     ui.pathClear()
     ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.25, -math.pi/2 + angle + 0.25, 16)
-    ui.pathStroke(colors.wheelIndicator, false, arcThickness)
-    
+    ui.pathStroke(theme.wheel.indicator, false, arcThickness)
+
     -- Red center line (current position)
     local lineInnerX = center.x + math.sin(angle) * innerR
     local lineInnerY = center.y - math.cos(angle) * innerR
     local lineOuterX = center.x + math.sin(angle) * r
     local lineOuterY = center.y - math.cos(angle) * r
-    ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), rgbm(1, 0.2, 0.2, 1), 2)
+    ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), theme.wheel.centerLine, 2)
 end
 
 local function drawGear(origin, cx, cy, r, gear)
@@ -256,14 +242,6 @@ end
 
 -- Window toggle buttons
 local buttonSize = vec2(26, 26)
-local buttonColors = {
-    bg = rgbm(0.2, 0.2, 0.25, 0.9),
-    bgHover = rgbm(0.3, 0.35, 0.4, 0.95),
-    bgActive = rgbm(0.15, 0.15, 0.18, 0.95),
-    icon = rgbm(0.6, 0.7, 0.8, 1),
-    iconHover = rgbm(1, 1, 1, 1),
-    iconActive = rgbm(0.8, 0.8, 0.8, 1),
-}
 
 local function getWindowName(windowId)
     -- CSP uses format: IMGUI_LUA_<AppName>_<windowId>
@@ -291,28 +269,28 @@ end
 
 local function drawToggleButton(localPos, icon, tooltip, windowId)
     local isActive = isWindowVisible(windowId)
-    
+
     -- Determine colors based on state
-    local bg = isActive and buttonColors.bgActive or buttonColors.bg
-    local bgHover = isActive and buttonColors.bgActive or buttonColors.bgHover
-    local fg = isActive and buttonColors.iconActive or buttonColors.icon
-    
+    local bg = isActive and theme.bg.buttonActive or theme.bg.button
+    local bgHover = isActive and theme.bg.buttonActive or theme.bg.buttonHover
+    local fg = isActive and theme.text.secondary or theme.text.muted
+
     -- Use styled button
     ui.setCursor(localPos)
     ui.pushStyleColor(ui.StyleColor.Button, bg)
     ui.pushStyleColor(ui.StyleColor.ButtonHovered, bgHover)
-    ui.pushStyleColor(ui.StyleColor.ButtonActive, buttonColors.bgActive)
+    ui.pushStyleColor(ui.StyleColor.ButtonActive, theme.bg.buttonActive)
     ui.pushStyleColor(ui.StyleColor.Text, fg)
     ui.pushStyleVar(ui.StyleVar.FrameRounding, 4)
-    
+
     if ui.button(icon .. "##" .. windowId, buttonSize) then
         ac.log("AC Tracer: Button clicked for " .. windowId)
         toggleWindow(windowId)
     end
-    
+
     ui.popStyleVar()
     ui.popStyleColor(4)
-    
+
     if ui.itemHovered() then
         ui.setTooltip(tooltip)
     end
@@ -350,13 +328,7 @@ function script.windowMain(dt)
     -- Use local coordinates (0,0 = top-left of window content)
     local windowOrigin = vec2(0, 0)
     
-    -- Debug: check if colors loaded
-    if not colors or not colors.background then
-        ui.text("Colors not loaded!")
-        return
-    end
-
-    ui.drawRectFilled(windowOrigin, windowOrigin + windowSize, colors.background, 16)
+    ui.drawRectFilled(windowOrigin, windowOrigin + windowSize, theme.bg.window, 16)
 
     local pad = 15
     local btnAreaW = 32  -- Space for toggle buttons on left
@@ -522,24 +494,24 @@ function script.windowMain(dt)
         
         -- Ghost traces (reference) - use inner dimensions with padding
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, colors.ghostSpeed, maxSpeed) end
-            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, colors.ghostSteering) end
-            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, colors.ghostClutch) end
-            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, colors.ghostThrottle) end
-            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, colors.ghostBrake) end
+            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed) end
+            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering) end
+            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch) end
+            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle) end
+            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake) end
         end
 
         -- Current traces - use inner dimensions with padding
-        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, colors.speed, maxSpeed) end
-        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, colors.steering) end
-        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, colors.clutch) end
-        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, colors.throttle) end
-        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, colors.brake) end
+        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed) end
+        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering) end
+        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch) end
+        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle) end
+        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake) end
     end
 
     -- Use extended brake pressure for the brake bar
-    drawBar(origin, brakeX, barY, barW, barH, extended_brake.getNormalizedBrake(car), colors.brake)
-    drawBar(origin, throttleX, barY, barW, barH, car.gas, colors.throttle)
+    drawBar(origin, brakeX, barY, barW, barH, extended_brake.getNormalizedBrake(car), theme.trace.brake)
+    drawBar(origin, throttleX, barY, barW, barH, car.gas, theme.trace.throttle)
 
     drawWheel(origin, wheelCX, wheelCY, wheelR, car.steer, state.getGhostSteering())
     drawGear(origin, wheelCX, wheelCY, wheelR, car.gear)
@@ -547,7 +519,7 @@ function script.windowMain(dt)
 
     if corner.isRecording() then
         ui.pushFont(ui.Font.Title)
-        ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 0.3, 0.3, 1))
+        ui.pushStyleColor(ui.StyleColor.Text, theme.status.recording)
         ui.setCursor(vec2(10, 5))
         ui.text("REC")
         ui.popStyleColor()
@@ -582,174 +554,9 @@ function script.windowTelemetry(dt)
 end
 
 function script.windowReferenceLap(dt)
-    reference_lap.draw(dt)
+    lap_picker.draw(dt)
 end
 
---------------------------------------------------------------------------------
--- Delta Bar Window (iRacing-style)
---------------------------------------------------------------------------------
-
--- Delta bar configuration
-local deltaBar = {
-    maxDelta = 2.0,        -- Max delta shown (seconds) - bar is full at this value
-    barHeight = 20,        -- Height of the delta bar
-    textSize = 24,         -- Delta time text size
-    smoothing = 0.15,      -- Smoothing factor for color transitions (0-1)
-    lastSpeedDiff = 0,     -- For smoothing
-    lastDisplayDelta = 0,  -- Last displayed delta value
-    displayUpdateTimer = 0, -- Timer for throttling display updates
-    displayUpdateRate = 0.1, -- Update display every 100ms (10 Hz)
-}
-
 function script.windowDelta(dt)
-    local car = ac.getCar(0)
-    if not car then return end
-    
-    local windowSize = ui.availableSpace()
-    local centerX = windowSize.x / 2
-    local centerY = windowSize.y / 2
-    
-    -- Get delta vs best lap
-    local delta = state.getDelta()  -- positive = behind/slower
-    local currentPos = car.splinePosition
-    local currentSpeed = car.speedKmh
-    
-    -- Throttle display updates to reduce jitter (10 Hz)
-    deltaBar.displayUpdateTimer = deltaBar.displayUpdateTimer + dt
-    if deltaBar.displayUpdateTimer >= deltaBar.displayUpdateRate then
-        deltaBar.displayUpdateTimer = 0
-        deltaBar.lastDisplayDelta = delta
-    end
-    local displayDelta = deltaBar.lastDisplayDelta
-    
-    -- Get ghost speed at same position for relative speed comparison
-    local ghostSpeed = state.getGhostValueAt('speed', currentPos)
-    local speedDiff = 0
-    if ghostSpeed and ghostSpeed > 0 then
-        speedDiff = currentSpeed - ghostSpeed  -- positive = gaining, negative = losing
-    end
-    
-    -- Smooth the speed difference for less jittery colors
-    deltaBar.lastSpeedDiff = deltaBar.lastSpeedDiff + (speedDiff - deltaBar.lastSpeedDiff) * deltaBar.smoothing
-    local smoothedSpeedDiff = deltaBar.lastSpeedDiff
-    
-    -- Calculate bar width based on delta time
-    local maxBarWidth = (windowSize.x / 2) - 40  -- Leave room for text in center
-    local normalizedDelta = math.clamp(math.abs(delta) / deltaBar.maxDelta, 0, 1)
-    local barWidth = normalizedDelta * maxBarWidth
-    
-    -- Determine color based on relative speed (green = gaining, red = losing)
-    -- Intensity varies with how much faster/slower
-    local speedThreshold = 5  -- km/h difference for full color saturation
-    local colorIntensity = math.clamp(math.abs(smoothedSpeedDiff) / speedThreshold, 0.3, 1)
-    
-    local barColor
-    if smoothedSpeedDiff > 0.5 then
-        -- Gaining time (faster than ghost) - GREEN
-        barColor = rgbm(0.1, 0.9 * colorIntensity, 0.1, 0.9)
-    elseif smoothedSpeedDiff < -0.5 then
-        -- Losing time (slower than ghost) - RED
-        barColor = rgbm(0.9 * colorIntensity, 0.1, 0.1, 0.9)
-    else
-        -- Neutral (same speed) - use delta to determine base color
-        if delta < 0 then
-            barColor = rgbm(0.1, 0.6, 0.1, 0.7)  -- Slightly green when ahead
-        else
-            barColor = rgbm(0.6, 0.1, 0.1, 0.7)  -- Slightly red when behind
-        end
-    end
-    
-    -- Draw the delta bar
-    local barY = centerY - deltaBar.barHeight / 2
-    local barTop = barY
-    local barBottom = barY + deltaBar.barHeight
-    
-    -- Center line (subtle)
-    ui.drawLine(vec2(centerX, barTop - 5), vec2(centerX, barBottom + 5), rgbm(1, 1, 1, 0.4), 2)
-    
-    if state.hasBestLap() and math.abs(delta) > 0.001 then
-        if delta < 0 then
-            -- Ahead: bar goes LEFT from center
-            ui.drawRectFilled(
-                vec2(centerX - barWidth, barTop),
-                vec2(centerX, barBottom),
-                barColor, 2
-            )
-        else
-            -- Behind: bar goes RIGHT from center
-            ui.drawRectFilled(
-                vec2(centerX, barTop),
-                vec2(centerX + barWidth, barBottom),
-                barColor, 2
-            )
-        end
-        
-        -- Subtle outline
-        local outlineColor = rgbm(1, 1, 1, 0.3)
-        if delta < 0 then
-            ui.drawRect(vec2(centerX - barWidth, barTop), vec2(centerX, barBottom), outlineColor, 2, 1)
-        else
-            ui.drawRect(vec2(centerX, barTop), vec2(centerX + barWidth, barBottom), outlineColor, 2, 1)
-        end
-    end
-    
-    -- Delta time text (centered below bar) - use throttled value for stability
-    local textY = barBottom + 8
-    local sign = displayDelta >= 0 and "+" or ""
-    local deltaText = string.format("%s%.1f", sign, displayDelta)
-    
-    -- Text color matches bar color but brighter
-    local textColor
-    if not state.hasBestLap() then
-        textColor = rgbm(0.6, 0.6, 0.6, 1)
-        deltaText = "NO REF"
-    elseif displayDelta < -0.05 then
-        textColor = rgbm(0.3, 1, 0.3, 1)  -- Green when ahead
-    elseif displayDelta > 0.05 then
-        textColor = rgbm(1, 0.3, 0.3, 1)  -- Red when behind
-    else
-        textColor = rgbm(1, 1, 1, 1)  -- White when even
-    end
-    
-    -- Draw delta text with shadow for visibility
-    ui.pushFont(ui.Font.Title)
-    local textSize = ui.measureText(deltaText)
-    local textX = centerX - textSize.x / 2
-    
-    -- Shadow
-    ui.setCursor(vec2(textX + 1, textY + 1))
-    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0, 0, 0, 0.7))
-    ui.text(deltaText)
-    ui.popStyleColor()
-    
-    -- Main text
-    ui.setCursor(vec2(textX, textY))
-    ui.pushStyleColor(ui.StyleColor.Text, textColor)
-    ui.text(deltaText)
-    ui.popStyleColor()
-    ui.popFont()
-    
-    -- Small speed difference indicator (optional - shows if gaining/losing)
-    if state.hasBestLap() and ghostSpeed then
-        local speedText = string.format("%+.0f", smoothedSpeedDiff)
-        ui.pushFont(ui.Font.Small)
-        local speedTextSize = ui.measureText(speedText)
-        local speedTextX = centerX - speedTextSize.x / 2
-        local speedTextY = barTop - 15
-        
-        local speedTextColor
-        if smoothedSpeedDiff > 1 then
-            speedTextColor = rgbm(0.4, 1, 0.4, 0.8)
-        elseif smoothedSpeedDiff < -1 then
-            speedTextColor = rgbm(1, 0.4, 0.4, 0.8)
-        else
-            speedTextColor = rgbm(0.8, 0.8, 0.8, 0.5)
-        end
-        
-        ui.setCursor(vec2(speedTextX, speedTextY))
-        ui.pushStyleColor(ui.StyleColor.Text, speedTextColor)
-        ui.text(speedText)
-        ui.popStyleColor()
-        ui.popFont()
-    end
+    delta_bar.draw(dt)
 end

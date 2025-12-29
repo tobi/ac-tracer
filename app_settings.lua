@@ -1,7 +1,8 @@
 -- Settings module for AC Tracer
 
 local lap = require('lap')
-local reference_lap = require('reference_lap')
+local lap_picker = require('lap_picker')
+local theme = require('theme')
 
 local M = {}
 
@@ -51,31 +52,7 @@ M.display = {
     speed = toBool(rawSpeed, false),
 }
 
--- Colors
-M.colors = {
-    throttle = rgbm(0, 1, 0, 0.85),
-    brake = rgbm(1, 0, 0, 0.85),
-    clutch = rgbm(0, 0.4, 1, 0.85),
-    steering = rgbm(0.7, 0.7, 0.7, 0.85),
-    speed = rgbm(0.5, 0.5, 0.5, 0.5),
-    grid = rgbm(16/255, 12/255, 8/255, 0.9),
-    wheelBg = rgbm(0, 0, 0, 0.6),
-    wheelCenter = rgbm(0.2, 0.2, 0.2, 0.0),
-    wheelIndicator = rgbm(1, 1, 0, 1),
-    background = rgbm(0.12, 0.12, 0.12, 1.0),
-    deltaPos = rgbm(1, 0.2, 0.2, 1),
-    deltaNeg = rgbm(0.2, 1, 0.2, 1),
-    ghostThrottle = rgbm(0, 1, 0, 0.25),
-    ghostBrake = rgbm(1, 0, 0, 0.25),
-    ghostClutch = rgbm(0, 0.4, 1, 0.25),
-    ghostSteering = rgbm(0.7, 0.7, 0.7, 0.25),
-    ghostSpeed = rgbm(0.5, 0.5, 0.5, 0.2),
-    ghostWheel = rgbm(0.5, 0.5, 0.5, 0.4),
-    cornerOutline = rgbm(1, 1, 1, 0.15),
-    cornerText = rgbm(1, 1, 1, 0.8),
-    apexLine = rgbm(1, 1, 0, 0.5),
-    startFinishLine = rgbm(1, 1, 1, 0.4),
-}
+-- Colors are now provided by the theme module (require('theme'))
 
 -- UI helper: toggle checkbox that auto-saves
 function M.checkbox(label, key)
@@ -132,7 +109,7 @@ function M.windowSettings(corner, resetButton, recordCornerButton)
     -- Reference lap section (compact)
     ui.text("Reference Lap")
     ui.offsetCursorY(5)
-    reference_lap.drawCompact()
+    lap_picker.drawCompact()
 
     ui.offsetCursorY(10)
     ui.separator()
