@@ -1,70 +1,12 @@
 -- Settings module for AC Tracer
 
 local lap = require('lap')
+local reference_lap = require('reference_lap')
 
 local M = {}
 
 -- Load INI config
 local ini = ac.INIConfig.load(__dirname .. '/settings.ini')
-
--- Ghost file loader
-local ghostFiles = nil
-local ghostFilesLastScan = 0
-local showGhostPicker = false
-local isLoadingGhost = false
-local ghostCache = {}  -- Cache: filename -> lap
-
--- Check if a file exists
-local function fileExists(path)
-    local f = io.open(path, "r")
-    if f then
-        f:close()
-        return true
-    end
-    return false
-end
-
--- Get track-based ghost filename (CSV)
-local function getTrackGhostName()
-    local trackId = ac.getTrackID()
-    if not trackId then return nil end
-    return trackId:gsub("[/\\:]", "_") .. ".csv"
-end
-
--- Scan for CSV ghost files in tracks folder
-local function scanGhostFiles()
-    local now = os.clock()
-    if ghostFiles and (now - ghostFilesLastScan) < 5 then
-        return ghostFiles
-    end
-    
-    ghostFiles = {}
-    local tracksPath = __dirname .. "/tracks/"
-    
-    local trackGhost = getTrackGhostName()
-    if trackGhost and fileExists(tracksPath .. trackGhost) then
-        table.insert(ghostFiles, trackGhost)
-    end
-    
-    local knownFiles = {"ier_daytona.csv"}
-    for _, filename in ipairs(knownFiles) do
-        if fileExists(tracksPath .. filename) then
-            local found = false
-            for _, existing in ipairs(ghostFiles) do
-                if existing == filename then
-                    found = true
-                    break
-                end
-            end
-            if not found then
-                table.insert(ghostFiles, filename)
-            end
-        end
-    end
-    
-    ghostFilesLastScan = now
-    return ghostFiles
-end
 
 -- Helper to convert INI values to boolean
 local function toBool(val, default)
@@ -142,106 +84,39 @@ end
 
 -- Settings window UI
 function M.windowSettings(corner, resetButton, recordCornerButton)
-    local state = require('state')
-
-    ui.text("Ghost Lap")
-    ui.separator()
-
-    ui.text("Reset Hotkey:")
-    ui.sameLine(130)
-    resetButton:control(vec2(120, 0))
-
-    ui.offsetCursorY(5)
-    ui.separator()
-    ui.offsetCursorY(10)
-    
-    -- Trace visibility toggles
     ui.text("Display Traces")
     ui.offsetCursorY(5)
-    
+
     M.checkbox("Throttle", "throttle")
     ui.sameLine(120)
     M.checkbox("Brake", "brake")
     ui.sameLine(200)
     M.checkbox("Steering", "steering")
-    
+
     M.checkbox("Clutch", "clutch")
     ui.sameLine(120)
     M.checkbox("Speed", "speed")
     ui.offsetCursorY(10)
-    
+
     ui.separator()
     ui.offsetCursorY(10)
 
-    if state.hasBestLap() then
-        local bestTime = state.getBestLapTime()
-        if bestTime then
-            local mins = math.floor(bestTime / 60)
-            local secs = bestTime - mins * 60
-            ui.text(string.format("Best: %d:%06.3f", mins, secs))
-        end
-        ui.sameLine(130)
-        if ui.button("Reset##ghost", vec2(80, 0)) then
-            state.resetBestLap()
-        end
-    else
-        ui.textColored("No best lap recorded", rgbm(1, 1, 1, 0.5))
-    end
-
-    -- Ghost import section
+    -- Reference lap section (compact)
+    ui.text("Reference Lap")
     ui.offsetCursorY(5)
-    
-    if ui.button("Load Ghost...", vec2(100, 0)) then
-        showGhostPicker = not showGhostPicker
-        if showGhostPicker then
-            ghostFiles = nil
-        end
-    end
-    
-    if showGhostPicker then
-        ui.offsetCursorY(5)
-        local files = scanGhostFiles()
-        
-        if #files == 0 then
-            ui.textColored("No CSV files in tracks/", rgbm(1, 1, 1, 0.5))
-        else
-            ui.textColored("Select CSV to load:", rgbm(1, 1, 1, 0.7))
-            for _, filename in ipairs(files) do
-                if ui.button(filename, vec2(220, 0)) and not isLoadingGhost then
-                    isLoadingGhost = true
-                    showGhostPicker = false
-                    
-                    -- Check cache first
-                    local lapData = ghostCache[filename]
-                    
-                    if lapData then
-                        -- Cache hit
-                        state.setBestLap(lapData)
-                        ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples (cached)")
-                    else
-                        -- Cache miss - parse CSV using lap module
-                        local filePath = __dirname .. "/tracks/" .. filename
-                        lapData = lap.fromCSV(filePath, state.track, state.car)
-                        
-                        if lapData then
-                            ghostCache[filename] = lapData
-                            state.setBestLap(lapData)
-                            ac.setMessage("Ghost Loaded", "Loaded " .. lapData:length() .. " samples from " .. filename)
-                        else
-                            ac.setMessage("Load Error", "Failed to load " .. filename)
-                        end
-                    end
-                    
-                    isLoadingGhost = false
-                end
-            end
-        end
-        
-        ui.offsetCursorY(3)
-        if ui.button("Cancel##ghost", vec2(60, 0)) then
-            showGhostPicker = false
-        end
-    end
+    reference_lap.drawCompact()
+
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+
+    -- Hotkeys section
+    ui.text("Hotkeys")
+    ui.offsetCursorY(5)
+
+    ui.text("Reset Hotkey:")
+    ui.sameLine(130)
+    resetButton:control(vec2(120, 0))
 
     ui.offsetCursorY(10)
     ui.separator()

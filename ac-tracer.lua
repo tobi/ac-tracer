@@ -8,6 +8,7 @@ local corner = require('corner')
 local corner_analysis = require('corner_analysis')
 local lap_telemetry = require('lap_telemetry')
 local extended_brake = require('extended-brake')
+local reference_lap = require('reference_lap')
 
 -- Local aliases with fallbacks
 local colors = settings.colors or {
@@ -556,10 +557,11 @@ function script.windowMain(dt)
     -- Toggle window buttons (left side, vertically stacked)
     -- Use window-local coordinates for ui.setCursor
     local btnLocalX = pad
-    local btnLocalY = pad + h / 2 - buttonSize.y * 1.5 - 4
+    local btnLocalY = pad + h / 2 - buttonSize.y * 2 - 6
     drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
     drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + 4), "📊", "Lap Telemetry", "telemetry")
     drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + 4) * 2), "Δ", "Delta Bar", "delta")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + 4) * 3), "◎", "Reference Lap", "referencelap")
 end
 
 function script.windowSettings(dt)
@@ -573,6 +575,10 @@ end
 
 function script.windowTelemetry(dt)
     lap_telemetry.draw(dt)
+end
+
+function script.windowReferenceLap(dt)
+    reference_lap.draw(dt)
 end
 
 --------------------------------------------------------------------------------
