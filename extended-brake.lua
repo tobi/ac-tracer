@@ -36,6 +36,8 @@ local function init()
     if initAttempted then return end
     initAttempted = true
 
+    ac.log("Extended Brake: Attempting to connect to cphys_data memory-mapped file...")
+
     -- Try to read the memory-mapped file
     local success, result = pcall(function()
         return ac.readMemoryMappedFile("cphys_data", CPHYS_STRUCT, false)
@@ -44,12 +46,17 @@ local function init()
     if success and result then
         cphysData = result
         cphysAvailable = true
-        ac.log("Extended Brake: cphys_data connected - brake pressure available")
+        ac.log("Extended Brake: SUCCESS - cphys_data connected, brake pressure telemetry enabled")
+        ac.log("Extended Brake: Source: cphys DLL (dwrite.dll) - using actual brake pressure in PSI")
     else
         cphysAvailable = false
-        ac.log("Extended Brake: cphys_data not available - using fallback brake position")
+        ac.log("Extended Brake: cphys_data not available - falling back to brake pedal position")
+        ac.log("Extended Brake: To enable pressure telemetry, place dwrite.dll in AC root folder")
     end
 end
+
+-- Initialize on module load so status is logged at startup
+init()
 
 --- Check if extended brake pressure is available
 ---@return boolean True if cphys DLL data is available
