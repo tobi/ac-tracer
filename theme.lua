@@ -171,7 +171,8 @@ theme.style = {
     cornerRadius = 4,
     padding = 10,
     lineHeight = 18,
-    traceThickness = 1.5,
+    traceThickness = 2,       -- Current lap traces
+    ghostThickness = 2,       -- Reference lap traces (was thinner, now same)
 }
 
 --------------------------------------------------------------------------------

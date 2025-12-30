@@ -37,7 +37,7 @@ local config = ac.storage({
     -- Trace settings
     timeWindow = 12,
     sampleRate = 15,
-    thickness = 1.5,
+    thickness = 2,
     steeringCapDeg = 180,
 }, "ac_tracer/")
 

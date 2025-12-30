@@ -93,19 +93,21 @@ function script.update(dt)
 end
 
 -- Drawing helpers
-local function drawTrace(origin, x, y, w, h, data, color)
+local function drawTrace(origin, x, y, w, h, data, color, thickness)
     if #data < 2 then return end
+    thickness = thickness or theme.style.traceThickness
     local step = w / (maxPoints - 1)
     local start = maxPoints - #data
     ui.pathClear()
     for i = 1, #data do
         ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - data[i] * h))
     end
-    ui.pathStroke(color, false, settings.thickness)
+    ui.pathStroke(color, false, thickness)
 end
 
-local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed)
+local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickness)
     if #data < 2 then return end
+    thickness = thickness or theme.style.traceThickness
     local step = w / (maxPoints - 1)
     local start = maxPoints - #data
     ui.pathClear()
@@ -113,7 +115,7 @@ local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed)
         local normalized = math.clamp(data[i] / maxSpeed, 0, 1)
         ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - normalized * h))
     end
-    ui.pathStroke(color, false, settings.thickness)
+    ui.pathStroke(color, false, thickness)
 end
 
 local function drawGrid(origin, x, y, w, h, positions, trackLength)
@@ -306,6 +308,58 @@ local function posToX(pos, positions, x, w)
     return nil
 end
 
+-- Layout calculation - separated from rendering for clarity
+local function calculateLayout(windowSize)
+    local layout = {}
+    
+    -- Padding and margins
+    layout.pad = 15
+    layout.btnAreaW = 32  -- Space for toggle buttons on left
+    layout.gap = 5        -- Gap between elements
+    
+    -- Content area (excluding padding and button area)
+    layout.contentX = layout.pad + layout.btnAreaW
+    layout.contentY = layout.pad
+    layout.contentW = windowSize.x - layout.pad * 2 - layout.btnAreaW
+    layout.contentH = windowSize.y - layout.pad * 2
+    
+    -- Proportional sizing based on content height
+    local h = layout.contentH
+    local w = layout.contentW
+    
+    -- Right side: wheel and bars (sized proportionally to height)
+    layout.wheelR = h * 0.48
+    layout.barW = math.max(12, h * 0.08)
+    layout.barGap = 5
+    layout.elementGap = h * 0.1
+    
+    -- Calculate positions from right to left
+    local cursor = w
+    cursor = cursor - layout.wheelR - 2
+    layout.wheelCX = cursor
+    layout.wheelCY = h * 0.42
+    cursor = cursor - layout.wheelR - layout.elementGap
+    
+    cursor = cursor - layout.barW
+    layout.throttleX = cursor
+    cursor = cursor - layout.barGap - layout.barW
+    layout.brakeX = cursor
+    cursor = cursor - layout.elementGap
+    
+    -- Left side: traces (remaining space)
+    layout.traceW = math.max(0, cursor)
+    layout.traceH = h
+    layout.tracePad = 3
+    
+    -- Inner trace area (with padding)
+    layout.innerX = layout.tracePad
+    layout.innerY = layout.tracePad
+    layout.innerW = layout.traceW - layout.tracePad * 2
+    layout.innerH = h - layout.tracePad * 2
+    
+    return layout
+end
+
 function script.windowMain(dt)
     if not currentCar then
         ui.text("No car data")
@@ -314,132 +368,137 @@ function script.windowMain(dt)
     local car = currentCar
 
     local windowSize = ui.availableSpace()
-    
-    -- Use local coordinates (0,0 = top-left of window content)
-    local windowOrigin = vec2(0, 0)
-    
-    ui.drawRectFilled(windowOrigin, windowOrigin + windowSize, theme.bg.window, 16)
+    ui.drawRectFilled(vec2(0, 0), windowSize, theme.bg.window, 16)
 
-    local pad = 15
-    local btnAreaW = 32  -- Space for toggle buttons on left
-    local origin = vec2(pad + btnAreaW, pad)
-    local w = windowSize.x - pad * 2 - btnAreaW
-    local h = windowSize.y - pad * 2
+    -- Calculate layout
+    local L = calculateLayout(windowSize)
     
-    -- Debug: show dimensions if too small
-    if h < 20 or w < 100 then
+    -- Check minimum size
+    if L.contentH < 20 or L.contentW < 100 then
         ui.setCursor(vec2(5, 5))
         ui.text(string.format("Window too small: %.0fx%.0f", windowSize.x, windowSize.y))
         return
     end
 
-    local wheelR = h * 0.48
-    local wheelW = wheelR * 2
-    local barW = h * 0.08
-    local barGap = 5
-    local gap = h * 0.1
-
-    local cursor = w
-    cursor = cursor - wheelR - 2
-    local wheelCX = cursor
-    local wheelCY = h * 0.42
-    cursor = cursor - wheelR - gap
-
-    local barH = h 
-    local barY = 0
-    cursor = cursor - barW
-    local throttleX = cursor
-    cursor = cursor - barGap - barW
-    local brakeX = cursor
-    cursor = cursor - gap
-
-    local traceW = math.max(0, cursor)
-    local tracePad = 3  -- Padding inside trace background
-    
+    local origin = vec2(L.contentX, L.contentY)
     local traceOrigin = origin
-
     local trackLength = ac.getSim().trackLengthM
-    if traceW > 10 then
+    
+    if L.traceW > 10 then
         -- Dark background behind trace lines
-        ui.drawRectFilled(traceOrigin, traceOrigin + vec2(traceW, h), rgbm(0.05, 0.05, 0.05, 0.95), 4)
+        ui.drawRectFilled(traceOrigin, traceOrigin + vec2(L.traceW, L.traceH), theme.bg.graph, 4)
         
-        -- Inner dimensions for traces (with padding)
-        local innerX = tracePad
-        local innerY = tracePad
-        local innerW = traceW - tracePad * 2
-        local innerH = h - tracePad * 2
+        -- Use layout for inner dimensions
+        local innerX, innerY, innerW, innerH = L.innerX, L.innerY, L.innerW, L.innerH
         
         drawGrid(traceOrigin, innerX, innerY, innerW, innerH, history.pos, trackLength)
 
-        -- Draw corner zones (very faint, with partial corner support)
+        -- Draw corner zones (faint gray with white borders, labels scroll with zone)
         local corners = state.trackCorners
         local currentPos = car.splinePosition
         
-        if corners and #corners > 0 then
-            -- Get position range from history
-            local minPos, maxPos = nil, nil
-            if history.pos and #history.pos > 1 then
-                minPos = history.pos[1]
-                maxPos = history.pos[#history.pos]
-            end
+        if corners and #corners > 0 and history.pos and #history.pos > 1 then
+            local minPos = history.pos[1]
+            local maxPos = history.pos[#history.pos]
+            
+            -- Handle wrap-around: if maxPos < minPos, we've crossed start/finish
+            local wrapsAround = maxPos < minPos
             
             for _, c in ipairs(corners) do
                 if c.startPos and c.endPos then
-                    -- Try to get X positions (may be nil if outside visible range)
+                    -- Determine if corner is visible (even partially)
+                    local cornerVisible = false
+                    local drawStartX, drawEndX = nil, nil
+                    
+                    -- Get actual X positions
                     local cStartX = posToX(c.startPos, history.pos, innerX, innerW)
                     local cEndX = posToX(c.endPos, history.pos, innerX, innerW)
                     
-                    -- Handle partial corners (clamp to visible area)
-                    local drawStartX = cStartX
-                    local drawEndX = cEndX
-                    
-                    if minPos and maxPos then
-                        -- If start is before visible range, clamp to left edge
-                        if not cStartX and c.startPos < minPos then
-                            drawStartX = innerX
-                        end
-                        -- If end is after visible range, clamp to right edge
-                        if not cEndX and c.endPos > maxPos then
-                            drawEndX = innerX + innerW
-                        end
-                    end
-                    
-                    -- Check if we're in this corner
-                    local inCorner = false
-                    if c.endPos >= c.startPos then
-                        inCorner = currentPos >= c.startPos and currentPos <= c.endPos
+                    -- Check visibility and compute draw bounds
+                    if cStartX and cEndX then
+                        -- Both edges visible
+                        drawStartX, drawEndX = cStartX, cEndX
+                        cornerVisible = true
+                    elseif cStartX and not cEndX then
+                        -- Start visible, end off-screen (corner extends past right edge)
+                        drawStartX = cStartX
+                        drawEndX = innerX + innerW
+                        cornerVisible = true
+                    elseif not cStartX and cEndX then
+                        -- End visible, start off-screen (corner started before left edge)
+                        drawStartX = innerX
+                        drawEndX = cEndX
+                        cornerVisible = true
                     else
-                        inCorner = currentPos >= c.startPos or currentPos <= c.endPos
+                        -- Neither edge visible - check if corner spans entire view
+                        local cornerSpansView = false
+                        if not wrapsAround then
+                            -- Normal case: corner wraps around or spans view
+                            if c.endPos < c.startPos then
+                                -- Corner wraps around start/finish
+                                cornerSpansView = (minPos <= c.endPos) or (maxPos >= c.startPos)
+                            else
+                                -- Normal corner: check if it contains our view range
+                                cornerSpansView = (c.startPos <= minPos and c.endPos >= maxPos)
+                            end
+                        end
+                        if cornerSpansView then
+                            drawStartX = innerX
+                            drawEndX = innerX + innerW
+                            cornerVisible = true
+                        end
                     end
                     
-                    -- Draw if we have at least one valid edge
-                    if drawStartX and drawEndX then
-                        if inCorner then
-                            -- Active corner: slightly brighter with border
-                            ui.drawRectFilled(
-                                traceOrigin + vec2(drawStartX, innerY), 
-                                traceOrigin + vec2(drawEndX, innerY + innerH), 
-                                rgbm(0.3, 0.3, 0.4, 0.06), 0)
-                            ui.drawRect(
-                                traceOrigin + vec2(drawStartX, innerY), 
-                                traceOrigin + vec2(drawEndX, innerY + innerH), 
-                                rgbm(1, 1, 1, 0.15), 1)
+                    if cornerVisible and drawStartX and drawEndX and drawEndX > drawStartX then
+                        -- Check if we're in this corner
+                        local inCorner = false
+                        if c.endPos >= c.startPos then
+                            inCorner = currentPos >= c.startPos and currentPos <= c.endPos
                         else
-                            -- Inactive corner: very faint dark fill
-                            ui.drawRectFilled(
-                                traceOrigin + vec2(drawStartX, innerY), 
-                                traceOrigin + vec2(drawEndX, innerY + innerH), 
-                                rgbm(0.15, 0.15, 0.2, 0.01), 0)
+                            inCorner = currentPos >= c.startPos or currentPos <= c.endPos
                         end
                         
-                        -- Corner name in top left (for all visible corners)
+                        local zoneTop = traceOrigin + vec2(drawStartX, innerY)
+                        local zoneBottom = traceOrigin + vec2(drawEndX, innerY + innerH)
+                        
+                        -- Draw zone fill - faint gray (0.05 alpha)
+                        ui.drawRectFilled(zoneTop, zoneBottom, rgbm(0.5, 0.5, 0.5, 0.05), 0)
+                        
+                        -- Draw zone border - white (slightly more visible when active)
+                        local borderAlpha = inCorner and 0.2 or 0.08
+                        ui.drawRect(zoneTop, zoneBottom, rgbm(1, 1, 1, borderAlpha), 0, 1)
+                        
+                        -- Corner name - clips to zone, scrolls with it
                         if c.name then
-                            ui.pushFont(ui.Font.Small)
-                            ui.setCursor(traceOrigin + vec2(drawStartX + 3, innerY + 2))
-                            ui.pushStyleColor(ui.StyleColor.Text, inCorner and rgbm(1, 1, 1, 0.7) or rgbm(1, 1, 1, 0.25))
-                            ui.text(c.name)
-                            ui.popStyleColor()
-                            ui.popFont()
+                            local labelPadX = 4
+                            local labelPadY = 2
+                            local zoneWidth = drawEndX - drawStartX
+                            
+                            -- Only draw label if zone is wide enough (at least 20px)
+                            if zoneWidth > 20 then
+                                -- Calculate label position relative to corner start
+                                -- If corner start is off-screen left, offset the label
+                                local labelOffsetX = 0
+                                if not cStartX then
+                                    -- Corner starts before view - calculate how much is clipped
+                                    -- Label should appear at left edge initially, then scroll left
+                                    labelOffsetX = 0  -- Start at left edge of visible zone
+                                end
+                                
+                                local labelX = drawStartX + labelPadX + labelOffsetX
+                                local labelY = innerY + labelPadY
+                                
+                                -- Use clipping to keep label inside zone
+                                ui.pushClipRect(zoneTop, zoneBottom, true)
+                                ui.pushFont(ui.Font.Small)
+                                ui.setCursor(traceOrigin + vec2(labelX, labelY))
+                                local textAlpha = inCorner and 0.6 or 0.25
+                                ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, textAlpha))
+                                ui.text(c.name)
+                                ui.popStyleColor()
+                                ui.popFont()
+                                ui.popClipRect()
+                            end
                         end
                     end
                 end
@@ -481,39 +540,40 @@ function script.windowMain(dt)
 
         local ghostTraces = state.getGhostTraces(history.pos)
         local maxSpeed = getMaxSpeed(ghostTraces)
+        local ghostThickness = theme.style.ghostThickness
+        local traceThickness = theme.style.traceThickness
         
-        -- Ghost traces (reference) - use inner dimensions with padding
+        -- Ghost traces (reference) - drawn first so current traces render on top
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed) end
-            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering) end
-            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch) end
-            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle) end
-            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake) end
+            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness) end
+            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness) end
+            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness) end
+            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness) end
+            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness) end
         end
 
-        -- Current traces - use inner dimensions with padding
-        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed) end
-        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering) end
-        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch) end
-        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle) end
-        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake) end
+        -- Current traces - drawn on top of ghost traces
+        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness) end
+        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness) end
+        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch, traceThickness) end
+        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle, traceThickness) end
+        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake, traceThickness) end
     end
 
     -- Use extended brake pressure for the brake bar
-    drawBar(origin, brakeX, barY, barW, barH, extended_brake.getNormalizedBrake(car), theme.trace.brake)
-    drawBar(origin, throttleX, barY, barW, barH, car.gas, theme.trace.throttle)
+    drawBar(origin, L.brakeX, 0, L.barW, L.contentH, extended_brake.getNormalizedBrake(car), theme.trace.brake)
+    drawBar(origin, L.throttleX, 0, L.barW, L.contentH, car.gas, theme.trace.throttle)
 
-    drawWheel(origin, wheelCX, wheelCY, wheelR, car.steer, state.getGhostSteering())
-    drawGear(origin, wheelCX, wheelCY, wheelR, car.gear)
-    drawSpeed(origin, wheelCX, wheelCY + wheelR + 2, wheelW, car)
+    drawWheel(origin, L.wheelCX, L.wheelCY, L.wheelR, car.steer, state.getGhostSteering())
+    drawGear(origin, L.wheelCX, L.wheelCY, L.wheelR, car.gear)
+    drawSpeed(origin, L.wheelCX, L.wheelCY + L.wheelR + 2, L.wheelR * 2, car)
 
     -- Toggle window buttons (left side, vertically stacked next to trace area)
-    -- Position buttons to fit within the trace area height
     local numButtons = 4
     local btnSpacing = 4
     local totalBtnHeight = numButtons * buttonSize.y + (numButtons - 1) * btnSpacing
-    local btnLocalX = (pad + btnAreaW - buttonSize.x) / 2  -- Center in button area
-    local btnLocalY = pad + (h - totalBtnHeight) / 2  -- Vertically center relative to trace area
+    local btnLocalX = (L.pad + L.btnAreaW - buttonSize.x) / 2  -- Center in button area
+    local btnLocalY = L.pad + (L.contentH - totalBtnHeight) / 2  -- Vertically center
 
     drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
     drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + btnSpacing), "📊", "Lap Telemetry", "telemetry")
