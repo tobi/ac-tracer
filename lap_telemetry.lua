@@ -1302,7 +1302,7 @@ function lap_telemetry.draw(dt)
     -- Lap picker popover (drawn last to be on top)
     if showRefPicker then
         local dialogW = 340
-        local dialogH = 420
+        local dialogH = math.min(windowSize.y - 50, 600)  -- Scale with window, max 600
         -- Position dialog below the Load Lap button, right-aligned to button
         local buttonW = 90
         local dialogX = math.max(10, loadLapButtonPos.x + buttonW - dialogW)

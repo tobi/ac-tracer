@@ -237,9 +237,9 @@ function lap_picker.drawPopover(x, y, width, height, options)
     options = options or {}
     local showCurrent = options.showCurrent ~= false
     local showReference = options.showReference ~= false
-    local maxSessionLaps = options.maxSessionLaps or 5
-    local maxPrevLaps = options.maxPrevLaps or 4
-    local maxCSVFiles = options.maxCSVFiles or 8
+    local maxSessionLaps = options.maxSessionLaps or 20
+    local maxPrevLaps = options.maxPrevLaps or 20
+    local maxCSVFiles = options.maxCSVFiles or 20
 
     -- Dialog background
     ui.drawRectFilled(vec2(x, y), vec2(x + width, y + height), theme.bg.overlay, 4)
