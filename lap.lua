@@ -240,7 +240,7 @@ function lap:addSample(car)
     table.insert(self.gear, car.gear)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
-    -- Fuel is recorded as a sparse channel to avoid huge arrays
+    -- Fuel is recorded as a sparse channel (low-frequency changes)
     self:addSparseSample('fuel', car.splinePosition, car.fuel or 0)
 
     -- G-forces (non-sparse, full resolution)
@@ -353,13 +353,14 @@ function lap:isEmpty()
 end
 
 --- Get maximum brake pressure in bar for this lap
+--- Get maximum brake pressure in the lap (minimum 80 bar for chart scaling)
 --- Caches result in _maxBrakeBar for completed laps
----@return number Maximum brake pressure in bar
+---@return number Maximum brake pressure in bar (minimum 80)
 function lap:maxBrakeBars()
     -- Return cached value if available
     if self._maxBrakeBar then return self._maxBrakeBar end
     
-    if self:isEmpty() or not self.brake then return 0 end
+    if self:isEmpty() or not self.brake then return 80 end
     
     local maxBar = 0
     for i = 1, #self.brake do
@@ -367,6 +368,9 @@ function lap:maxBrakeBars()
             maxBar = self.brake[i]
         end
     end
+    
+    -- Minimum of 80 bar for sensible chart scaling (race cars use 80-120+ bar)
+    maxBar = math.max(maxBar, 80)
     
     -- Cache only for completed laps (still recording laps may get higher values)
     if self.completed then
@@ -612,7 +616,7 @@ function lap:timeAt(pos) return self:getTimeAtPos(pos) end
 
 --- Get traces for display, matched to specified positions
 ---@param positions table Array of spline positions to match
----@return table|nil traces { throttle={}, brake={}, clutch={}, steering={}, speed={} }
+---@return table|nil traces { throttle={}, brake={}, clutch={}, steering={}, speed={}, gear={} }
 function lap:getTracesAt(positions)
     if not positions or #positions < 1 then return nil end
     
@@ -621,7 +625,8 @@ function lap:getTracesAt(positions)
         brake = {},
         clutch = {},
         steering = {},
-        speed = {}
+        speed = {},
+        gear = {}
     }
     
     for i = 1, #positions do
@@ -631,6 +636,7 @@ function lap:getTracesAt(positions)
         table.insert(traces.clutch, self:clutchAt(pos) or 0)
         table.insert(traces.steering, self:steeringAt(pos) or 0.5)
         table.insert(traces.speed, self:speedAt(pos) or 0)
+        table.insert(traces.gear, self:gearAt(pos) or 0)
     end
     
     return traces
@@ -1159,7 +1165,7 @@ function lap:serialize()
         clutch = self.clutch,
         steering = self.steering,
         speed = self.speed,
-        gear = self.gear,        -- Gear number
+        gear = self.gear,
         pos = self.pos,
         times = self.times,  -- Actual elapsed time at each sample
         fuel = self.fuel,    -- Fuel remaining in liters (may be empty if sparse)
@@ -1181,16 +1187,10 @@ function lap.deserialize(data)
         return type(data) == 'string' and stringify.parse(data) or data
     end)
     
-    if not ok or not parsed then return nil end
+    if not ok or not parsed or type(parsed) ~= 'table' then return nil end
     local l = setmetatable(parsed, lap)
     if not l.gforce then l.gforce = {} end
     ensureSparseTable(l)
-    if l.fuel and #l.fuel > 0 and (not l.sparse or not l.sparse.fuel or #l.sparse.fuel == 0) then
-        l:populateSparseFromDense('fuel')
-        if l.sparse and l.sparse.fuel and #l.sparse.fuel > 0 then
-            l.fuel = {}
-        end
-    end
     return l
 end
 
@@ -1250,6 +1250,7 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l.steering = data.steering
     l.speed = data.speed
     l.fuel = data.fuel or {}
+    l.gear = data.gear or {}
     l.gforce = {}
     l.time = parsed.time
     l.completed = parsed.completed

@@ -355,6 +355,7 @@ local function isSteeringCentered(steeringNorm)
 end
 
 --- Auto-detect corners from a lap's telemetry
+--- Detects both braking zones AND lift-off corners with lateral G
 ---@param lapData table Lap instance
 ---@return table Array of corner definitions
 local function autoDetectCorners(lapData)
@@ -365,17 +366,80 @@ local function autoDetectCorners(lapData)
     local BRAKE_THRESHOLD = settings.brakeThreshold()
     local THROTTLE_ON_THRESHOLD = settings.throttleThreshold()
     local LEAD_DISTANCE = 50
-    local EXIT_TIME = 2.0
-    local EXIT_TIME_THROTTLE_ONLY = 5.0
+    local EXIT_TIME = 0.3           -- Short exit - detect more corners
+    local EXIT_TIME_THROTTLE_ONLY = 0.8  -- Short throttle-only exit
+    
+    -- Lift-off corner detection parameters
+    local LIFT_THROTTLE_THRESHOLD = 0.7  -- Throttle below this = lifting
+    local LIFT_LAT_G_THRESHOLD = 0.5     -- Minimum lateral G to qualify as corner (lowered from 0.8)
+    local LIFT_DURATION_MIN = 0.2        -- Minimum lift duration in seconds (lowered from 0.3)
 
     local trackLength = ac.getSim().trackLengthM or 5000
     local leadSpline = LEAD_DISTANCE / trackLength
 
     local corners = {}
     local i = 1
-    local cornerNum = 0
     local numSamples = lapData:length()
+    
+    -- Helper to check if position is inside any existing corner
+    local function isInsideCorner(pos)
+        for _, c in ipairs(corners) do
+            if c.startPos <= c.endPos then
+                if pos >= c.startPos and pos <= c.endPos then return true end
+            else
+                -- Handle wrap-around
+                if pos >= c.startPos or pos <= c.endPos then return true end
+            end
+        end
+        return false
+    end
+    
+    -- Helper to find exit point from a given index
+    local function findExitIdx(startIdx, apexIdx)
+        local exitIdx = apexIdx
+        local exitConditionStart = nil
+        local throttleOnlyStart = nil
+        local apexTime = (apexIdx - 1) / lap.SAMPLE_RATE
 
+        for m = apexIdx, numSamples do
+            local sTime = (m - 1) / lap.SAMPLE_RATE
+            local sThrottle = lapData.throttle[m]
+            local sSteering = lapData.steering[m]
+
+            if isSteeringCentered(sSteering) and sThrottle >= THROTTLE_ON_THRESHOLD then
+                if not exitConditionStart then exitConditionStart = sTime end
+                if (sTime - exitConditionStart) >= EXIT_TIME then
+                    return m
+                end
+            else
+                exitConditionStart = nil
+            end
+
+            if sThrottle >= THROTTLE_ON_THRESHOLD then
+                if not throttleOnlyStart then throttleOnlyStart = sTime end
+                if (sTime - throttleOnlyStart) >= EXIT_TIME_THROTTLE_ONLY then
+                    return m
+                end
+            else
+                throttleOnlyStart = nil
+            end
+
+            if (sTime - apexTime) > 15 then
+                return m
+            end
+        end
+        return exitIdx
+    end
+    
+    -- Helper to get lateral G at index
+    local function getLatG(idx)
+        if lapData.gforce and lapData.gforce[idx] then
+            return math.abs(lapData.gforce[idx].x)
+        end
+        return 0
+    end
+
+    -- Pass 1: Detect braking zones
     while i < numSamples do
         local brake = lapData.brake[i]
         local pos = lapData.pos[i]
@@ -417,88 +481,15 @@ local function autoDetectCorners(lapData)
             -- Check if qualifies as corner
             local speedDrop = (maxSpeedBeforeBrake - apexSpeed) / maxSpeedBeforeBrake
             if speedDrop >= SPEED_DROP_THRESHOLD and maxSpeedBeforeBrake > 50 then
-                -- Find exit
-                local exitIdx = apexIdx
-                local exitConditionStart = nil
-                local throttleOnlyStart = nil
-                local apexTime = (apexIdx - 1) / lap.SAMPLE_RATE
+                local exitIdx = findExitIdx(entryIdx, apexIdx)
 
-                for m = apexIdx, numSamples do
-                    local sTime = (m - 1) / lap.SAMPLE_RATE
-                    local sThrottle = lapData.throttle[m]
-                    local sSteering = lapData.steering[m]
-
-                    if isSteeringCentered(sSteering) and sThrottle >= THROTTLE_ON_THRESHOLD then
-                        if not exitConditionStart then exitConditionStart = sTime end
-                        if (sTime - exitConditionStart) >= EXIT_TIME then
-                            exitIdx = m
-                            break
-                        end
-                    else
-                        exitConditionStart = nil
-                    end
-
-                    if sThrottle >= THROTTLE_ON_THRESHOLD then
-                        if not throttleOnlyStart then throttleOnlyStart = sTime end
-                        if (sTime - throttleOnlyStart) >= EXIT_TIME_THROTTLE_ONLY then
-                            exitIdx = m
-                            break
-                        end
-                    else
-                        throttleOnlyStart = nil
-                    end
-
-                    if (sTime - apexTime) > 15 then
-                        exitIdx = m
-                        break
-                    end
-                end
-
-                -- Smart merge check
-                local shouldMerge = false
-                if #corners > 0 then
-                    local prevCorner = corners[#corners]
-                    local hadStraight = false
-                    for idx = prevCorner.endIdx or 1, entryIdx do
-                        if idx <= numSamples then
-                            local steering = lapData.steering[idx]
-                            local throttle = lapData.throttle[idx]
-                            if isSteeringCentered(steering) and throttle >= THROTTLE_ON_THRESHOLD then
-                                hadStraight = true
-                                break
-                            end
-                        end
-                    end
-                    if not hadStraight then
-                        shouldMerge = true
-                        prevCorner.endIdx = exitIdx
-                        prevCorner.endPos = lapData.pos[exitIdx]
-                        -- Track apex speed for corner detection quality (not stored in final corner)
-                        if apexSpeed < (prevCorner.apexSpeed or 999) then
-                            prevCorner.apexSpeed = apexSpeed
-                        end
-                    end
-                end
-
-                if not shouldMerge then
-                    cornerNum = cornerNum + 1
-                    local name = "Corner " .. cornerNum
-                    if ac.getTrackSectorName then
-                        local sectorName = ac.getTrackSectorName(lapData.pos[apexIdx])
-                        if sectorName and sectorName ~= "" and not sectorName:match("^Sector %d+$") then
-                            name = sectorName
-                        end
-                    end
-
-                    table.insert(corners, {
-                        number = cornerNum,
-                        startPos = lapData.pos[entryIdx],
-                        endPos = lapData.pos[exitIdx],
-                        name = name,
-                        endIdx = exitIdx,
-                        apexSpeed = apexSpeed
-                    })
-                end
+                table.insert(corners, {
+                    startPos = lapData.pos[entryIdx],
+                    endPos = lapData.pos[exitIdx],
+                    endIdx = exitIdx,
+                    apexSpeed = apexSpeed,
+                    type = "brake"
+                })
 
                 i = exitIdx + 1
             else
@@ -507,6 +498,117 @@ local function autoDetectCorners(lapData)
         else
             i = i + 1
         end
+    end
+
+    -- Pass 2: Detect lift-off corners (throttle lift + lateral G)
+    -- Only if we have g-force data
+    if lapData.gforce and #lapData.gforce > 0 then
+        i = 1
+        while i < numSamples do
+            local throttle = lapData.throttle[i]
+            local latG = getLatG(i)
+            local pos = lapData.pos[i]
+            
+            -- Check for lift with significant lateral G, not already in a corner
+            if throttle < LIFT_THROTTLE_THRESHOLD and latG >= LIFT_LAT_G_THRESHOLD and not isInsideCorner(pos) then
+                local liftStartIdx = i
+                local liftStartTime = (i - 1) / lap.SAMPLE_RATE
+                
+                -- Find apex (minimum speed during lift)
+                local apexIdx = i
+                local apexSpeed = lapData.speed[i]
+                local maxLatG = latG
+                local liftEndIdx = i
+                
+                -- Scan forward while lifting or turning
+                local k = i + 1
+                while k <= numSamples do
+                    local kThrottle = lapData.throttle[k]
+                    local kLatG = getLatG(k)
+                    local kTime = (k - 1) / lap.SAMPLE_RATE
+                    
+                    -- Still in corner if throttle < threshold OR significant lateral G
+                    if kThrottle < LIFT_THROTTLE_THRESHOLD or kLatG >= LIFT_LAT_G_THRESHOLD * 0.5 then
+                        if lapData.speed[k] < apexSpeed then
+                            apexSpeed = lapData.speed[k]
+                            apexIdx = k
+                        end
+                        if kLatG > maxLatG then
+                            maxLatG = kLatG
+                        end
+                        liftEndIdx = k
+                        k = k + 1
+                    else
+                        break
+                    end
+                end
+                
+                local liftDuration = (liftEndIdx - liftStartIdx) / lap.SAMPLE_RATE
+                
+                -- Qualify if sustained lift with good lateral G
+                if liftDuration >= LIFT_DURATION_MIN and maxLatG >= LIFT_LAT_G_THRESHOLD then
+                    -- Look back for entry point
+                    local entryIdx = liftStartIdx
+                    local maxSpeedBefore = lapData.speed[liftStartIdx]
+                    local j = liftStartIdx - 1
+                    while j >= 1 do
+                        if lapData.speed[j] > maxSpeedBefore then
+                            maxSpeedBefore = lapData.speed[j]
+                        end
+                        local posDiff = lapData.pos[liftStartIdx] - lapData.pos[j]
+                        if posDiff < 0 then posDiff = posDiff + 1 end
+                        if posDiff >= leadSpline then
+                            entryIdx = j
+                            break
+                        end
+                        j = j - 1
+                    end
+                    
+                    local exitIdx = findExitIdx(entryIdx, apexIdx)
+                    
+                    -- Only add if not overlapping with existing corners
+                    local startPos = lapData.pos[entryIdx]
+                    local endPos = lapData.pos[exitIdx]
+                    if not isInsideCorner(startPos) and not isInsideCorner(endPos) then
+                        table.insert(corners, {
+                            startPos = startPos,
+                            endPos = endPos,
+                            endIdx = exitIdx,
+                            apexSpeed = apexSpeed,
+                            type = "lift"
+                        })
+                    end
+                    
+                    i = liftEndIdx + 1
+                else
+                    i = i + 1
+                end
+            else
+                i = i + 1
+            end
+        end
+    end
+    
+    -- Sort corners by start position
+    table.sort(corners, function(a, b) return a.startPos < b.startPos end)
+    
+    -- Assign corner numbers and names
+    for idx, c in ipairs(corners) do
+        c.number = idx
+        local name = "Corner " .. idx
+        if ac.getTrackSectorName then
+            -- Find apex position for sector name lookup
+            local apexPos = (c.startPos + c.endPos) / 2
+            if c.endPos < c.startPos then
+                apexPos = c.startPos + (c.endPos + 1 - c.startPos) / 2
+                if apexPos > 1 then apexPos = apexPos - 1 end
+            end
+            local sectorName = ac.getTrackSectorName(apexPos)
+            if sectorName and sectorName ~= "" and not sectorName:match("^Sector %d+$") then
+                name = sectorName
+            end
+        end
+        c.name = name
     end
 
     -- Clean up internal fields
@@ -818,7 +920,7 @@ function state.update(dt, car)
     prevLapTimeMs = car.lapTimeMs
     prevResetCounter = car.resetCounter or 0
     
-    -- Sample at 60 Hz
+    -- Sample at configured rate (default 30 Hz)
     sampleTimer = sampleTimer + dt
     if sampleTimer >= 1 / SAMPLE_RATE then
         sampleTimer = sampleTimer - 1 / SAMPLE_RATE

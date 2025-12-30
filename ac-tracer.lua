@@ -136,6 +136,20 @@ local function getMaxSpeed(ghostTraces)
     return maxS
 end
 
+-- Calculate max gear from current history and ghost for normalization
+local function getMaxGear(ghostTraces)
+    local maxG = 6  -- Minimum sensible max gear
+    for i = 1, #history.gear do
+        if history.gear[i] > maxG then maxG = history.gear[i] end
+    end
+    if ghostTraces and ghostTraces.gear then
+        for i = 1, #ghostTraces.gear do
+            if ghostTraces.gear[i] > maxG then maxG = ghostTraces.gear[i] end
+        end
+    end
+    return maxG
+end
+
 function script.update(dt)
     currentCar = ac.getCar(0)
     if not currentCar then return end
@@ -189,6 +203,42 @@ local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickne
         ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - normalized * h))
     end
     ui.pathStroke(color, false, thickness)
+end
+
+-- Draw gear trace as stepped line (gear is discrete, not continuous)
+-- Normalizes gear to 0-1 where 0=neutral/reverse, maxGear=1.0
+local function drawGearTrace(origin, x, y, w, h, data, color, maxGear, thickness, maxPts)
+    if #data < 2 then return end
+    thickness = thickness or theme.style.traceThickness
+    maxGear = maxGear or 8
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
+    
+    -- Draw as horizontal segments (stepped) since gear is discrete
+    local prevGear = nil
+    local prevX = nil
+    for i = 1, #data do
+        local gear = data[i]
+        -- Normalize: 0 and negative (neutral/reverse) = 0, positive gears scale to maxGear
+        local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
+        local px = x + (start + i - 1) * step
+        local py = y + h - normalized * h
+        
+        if prevGear ~= nil then
+            local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
+            local prevY = y + h - prevNorm * h
+            
+            -- Horizontal line at previous gear level to current x
+            ui.drawLine(origin + vec2(prevX, prevY), origin + vec2(px, prevY), color, thickness)
+            -- Vertical line to new gear level (if changed)
+            if gear ~= prevGear then
+                ui.drawLine(origin + vec2(px, prevY), origin + vec2(px, py), color, thickness)
+            end
+        end
+        
+        prevGear = gear
+        prevX = px
+    end
 end
 
 -- Draw flag markers as background highlights
@@ -612,6 +662,7 @@ function script.windowMain(dt)
 
         local ghostTraces = state.getGhostTraces(history.pos)
         local maxSpeed = getMaxSpeed(ghostTraces)
+        local maxGear = getMaxGear(ghostTraces)
         local ghostThickness = theme.style.ghostThickness
         local traceThickness = theme.style.traceThickness
         local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
@@ -622,22 +673,20 @@ function script.windowMain(dt)
         -- Ghost traces (reference) - drawn first so current traces render on top
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
             if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints) end
+            if settings.displayGear() and ghostTraces.gear then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.gear, theme.ghost.gear, maxGear, ghostThickness, maxPoints) end
             if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints) end
             if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints) end
             if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints) end
             if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints) end
-            -- TODO: Add ghost gear trace when gear display is implemented
         end
 
         -- Current traces - drawn on top of ghost traces
         if settings.displaySpeed() then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness, maxPoints) end
+        if settings.displayGear() then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, history.gear, theme.trace.gear, maxGear, traceThickness, maxPoints) end
         if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness, maxPoints) end
         if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch, traceThickness, maxPoints) end
         if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle, traceThickness, maxPoints) end
         if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake, traceThickness, maxPoints) end
-        -- TODO: Implement gear trace display
-        -- Gear is discrete (0-8+), needs different rendering than 0-1 normalized traces
-        -- if settings.displayGear() then drawGearTrace(...) end
     end
 
     -- Use extended brake pressure for the brake bar

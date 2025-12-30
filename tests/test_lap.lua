@@ -551,9 +551,9 @@ test("maxBrakeBars returns max brake pressure", function()
     assert_equal(l:maxBrakeBars(), 80)
 end)
 
-test("maxBrakeBars returns 0 for empty lap", function()
+test("maxBrakeBars returns 80 minimum for empty lap", function()
     local l = lap.new("track", "car")
-    assert_equal(l:maxBrakeBars(), 0)
+    assert_equal(l:maxBrakeBars(), 80)
 end)
 
 test("maxBrakeBars caches value for completed laps", function()
@@ -726,9 +726,177 @@ test("road car braking profile (lower pressure)", function()
     local brakePos = l:findBrakePoint(0.10, 0.20, 5)
     assert_equal(brakePos, 0.16, "Brake point should be at 0.16 (first > 5 bar)")
     
-    -- Max brake
-    assert_equal(l:maxBrakeBars(), 40, "Max brake should be 40 bar")
+    -- Max brake returns 80 minimum (for chart scaling), even though actual max is 40
+    assert_equal(l:maxBrakeBars(), 80, "Max brake returns 80 minimum for chart scaling")
     
     -- With road car scale (50 bar), 40 bar = 80%
     assert_equal(l:brakePercentAt(0.18, 50), 0.8)
+end)
+
+
+suite("lap.serialize/deserialize roundtrip")
+
+test("roundtrip preserves all fields", function()
+    -- Create a lap with all fields populated
+    local original = lap.new("test_track", "test_car", "session_abc")
+    original.completed = true
+    original.valid = true
+    original.time = 92345
+    original.fuelLeftAtStart = 48.5
+    original.lapNumberInSession = 3
+    
+    -- Dense arrays (10 samples)
+    original.pos = { 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 }
+    original.times = { 0, 10, 20, 30, 40, 50, 60, 70, 80, 90 }
+    original.throttle = { 1.0, 0.9, 0.5, 0.0, 0.0, 0.0, 0.3, 0.7, 0.9, 1.0 }
+    original.brake = { 0, 0, 20, 80, 100, 90, 50, 10, 0, 0 }
+    original.brake_r = { 0, 0, 18, 75, 95, 85, 45, 8, 0, 0 }
+    original.clutch = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+    original.steering = { 0.5, 0.5, 0.45, 0.35, 0.3, 0.32, 0.4, 0.48, 0.5, 0.5 }
+    original.speed = { 280, 270, 240, 180, 120, 100, 110, 150, 200, 250 }
+    original.gear = { 6, 6, 5, 4, 3, 3, 4, 4, 5, 5 }
+    
+    -- Flags (bitmask per sample)
+    original.flags = { 0, 0, 0, lap.FLAGS.TC_ACTIVE, lap.FLAGS.LOCKUP_FL, 0, 0, 0, 0, 0 }
+    
+    -- Sparse fields
+    original.sparse = {
+        fuel = { {0.0, 48.5}, {0.5, 47.2}, {0.9, 46.1} },
+        brake_balance = { {0.0, 0.58} },
+        tc_slip = { {0.0, 3} },
+        tc_gain = { {0.0, 7} },
+    }
+    
+    -- G-force vectors
+    original.gforce = {}
+    for i = 1, 10 do
+        original.gforce[i] = vec3((i-5) * 0.2, 0, (i > 5) and -0.5 or 0.3)
+    end
+    
+    -- CSV source metadata (simulating imported lap)
+    original.csvSource = {
+        throttle = "Throttle Pos",
+        brake = "Brake Pressure F",
+        speed = "Ground Speed",
+        gear = "gear_pos",
+    }
+    
+    -- Serialize and deserialize
+    local serialized = original:serialize()
+    assert_type(serialized, "string", "Serialized data should be string")
+    assert_true(#serialized > 100, "Serialized data should have content")
+    
+    local restored = lap.deserialize(serialized)
+    assert_not_nil(restored, "Deserialize should return lap")
+    
+    -- Check metadata
+    assert_equal(restored.track, original.track, "track mismatch")
+    assert_equal(restored.car, original.car, "car mismatch")
+    assert_equal(restored.sessionId, original.sessionId, "sessionId mismatch")
+    assert_equal(restored.completed, original.completed, "completed mismatch")
+    assert_equal(restored.valid, original.valid, "valid mismatch")
+    assert_equal(restored.time, original.time, "time mismatch")
+    assert_equal(restored.fuelLeftAtStart, original.fuelLeftAtStart, "fuelLeftAtStart mismatch")
+    assert_equal(restored.lapNumberInSession, original.lapNumberInSession, "lapNumberInSession mismatch")
+    
+    -- Check dense arrays
+    assert_equal(#restored.pos, #original.pos, "pos length mismatch")
+    assert_equal(#restored.times, #original.times, "times length mismatch")
+    assert_equal(#restored.throttle, #original.throttle, "throttle length mismatch")
+    assert_equal(#restored.brake, #original.brake, "brake length mismatch")
+    assert_equal(#restored.brake_r, #original.brake_r, "brake_r length mismatch")
+    assert_equal(#restored.clutch, #original.clutch, "clutch length mismatch")
+    assert_equal(#restored.steering, #original.steering, "steering length mismatch")
+    assert_equal(#restored.speed, #original.speed, "speed length mismatch")
+    assert_equal(#restored.gear, #original.gear, "gear length mismatch")
+    assert_equal(#restored.flags, #original.flags, "flags length mismatch")
+    
+    for i = 1, #original.pos do
+        assert_near(restored.pos[i], original.pos[i], 0.0001, "pos[" .. i .. "] mismatch")
+        assert_near(restored.times[i], original.times[i], 0.0001, "times[" .. i .. "] mismatch")
+        assert_near(restored.throttle[i], original.throttle[i], 0.0001, "throttle[" .. i .. "] mismatch")
+        assert_near(restored.brake[i], original.brake[i], 0.0001, "brake[" .. i .. "] mismatch")
+        assert_near(restored.brake_r[i], original.brake_r[i], 0.0001, "brake_r[" .. i .. "] mismatch")
+        assert_near(restored.clutch[i], original.clutch[i], 0.0001, "clutch[" .. i .. "] mismatch")
+        assert_near(restored.steering[i], original.steering[i], 0.0001, "steering[" .. i .. "] mismatch")
+        assert_near(restored.speed[i], original.speed[i], 0.0001, "speed[" .. i .. "] mismatch")
+        assert_equal(restored.gear[i], original.gear[i], "gear[" .. i .. "] mismatch")
+        assert_equal(restored.flags[i], original.flags[i], "flags[" .. i .. "] mismatch")
+    end
+    
+    -- Check sparse fields
+    assert_not_nil(restored.sparse, "sparse table should exist")
+    assert_not_nil(restored.sparse.fuel, "sparse.fuel should exist")
+    assert_not_nil(restored.sparse.brake_balance, "sparse.brake_balance should exist")
+    assert_not_nil(restored.sparse.tc_slip, "sparse.tc_slip should exist")
+    assert_not_nil(restored.sparse.tc_gain, "sparse.tc_gain should exist")
+    
+    assert_equal(#restored.sparse.fuel, #original.sparse.fuel, "sparse.fuel length mismatch")
+    
+    for i = 1, #original.sparse.fuel do
+        assert_near(restored.sparse.fuel[i][1], original.sparse.fuel[i][1], 0.0001, "sparse.fuel[" .. i .. "].pos mismatch")
+        assert_near(restored.sparse.fuel[i][2], original.sparse.fuel[i][2], 0.0001, "sparse.fuel[" .. i .. "].value mismatch")
+    end
+    
+    -- Check accessor functions work on restored lap
+    assert_near(restored:throttleAt(0.25), 0.25, 0.1, "throttleAt interpolation should work")
+    assert_near(restored:brakeAt(0.4), 100, 5, "brakeAt interpolation should work")
+    assert_near(restored:gearAt(0.35), 4, 1, "gearAt interpolation should work")
+    assert_near(restored:fuelAt(0.6), 47.2, 0.5, "fuelAt sparse lookup should work")
+    
+    -- Check csvSource preserved
+    assert_not_nil(restored.csvSource, "csvSource should exist")
+    assert_equal(restored.csvSource.throttle, original.csvSource.throttle, "csvSource.throttle mismatch")
+    assert_equal(restored.csvSource.gear, original.csvSource.gear, "csvSource.gear mismatch")
+end)
+
+test("deserialize handles empty/nil data", function()
+    assert_nil(lap.deserialize(nil), "nil should return nil")
+    assert_nil(lap.deserialize(""), "empty string should return nil")
+    assert_nil(lap.deserialize("invalid json"), "invalid data should return nil")
+end)
+
+test("serialize produces compact output for sparse fuel", function()
+    local l = lap.new("track", "car")
+    
+    -- Add 100 samples
+    l.pos = {}
+    l.times = {}
+    l.throttle = {}
+    l.brake = {}
+    l.brake_r = {}
+    l.clutch = {}
+    l.steering = {}
+    l.speed = {}
+    l.gear = {}
+    
+    for i = 1, 100 do
+        table.insert(l.pos, i / 100)
+        table.insert(l.times, i)
+        table.insert(l.throttle, 0.5)
+        table.insert(l.brake, 0)
+        table.insert(l.brake_r, 0)
+        table.insert(l.clutch, 0)
+        table.insert(l.steering, 0.5)
+        table.insert(l.speed, 150)
+        table.insert(l.gear, 4)
+    end
+    
+    -- Add sparse fuel (only 3 changes for 100 samples)
+    l.sparse = {
+        fuel = { {0.0, 50}, {0.5, 48}, {1.0, 46} },
+        brake_balance = {},
+        tc_slip = {},
+        tc_gain = {},
+    }
+    
+    local serialized = l:serialize()
+    
+    -- Verify serialized data is reasonably sized
+    assert_true(#serialized < 10000, "Serialized data should be reasonably compact")
+    
+    -- Verify we can still access fuel at any position
+    local restored = lap.deserialize(serialized)
+    assert_near(restored:fuelAt(0.25), 50, 0.1, "fuel at 0.25 should be ~50")
+    assert_near(restored:fuelAt(0.75), 48, 0.1, "fuel at 0.75 should be ~48")
 end)

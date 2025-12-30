@@ -190,20 +190,64 @@ ac.storage = setmetatable({}, {
 -- Mock stringify (JSON-like serialization)
 stringify = stringify or {}
 
+-- Simple table serializer for testing (produces Lua table literals)
+local function serializeValue(v, seen)
+    local t = type(v)
+    if t == "nil" then
+        return "nil"
+    elseif t == "boolean" then
+        return v and "true" or "false"
+    elseif t == "number" then
+        return tostring(v)
+    elseif t == "string" then
+        return string.format("%q", v)
+    elseif t == "table" then
+        if seen[v] then return "nil" end  -- Avoid cycles
+        seen[v] = true
+        local parts = {}
+        local isArray = true
+        local maxIdx = 0
+        for k, _ in pairs(v) do
+            if type(k) ~= "number" or k < 1 or k ~= math.floor(k) then
+                isArray = false
+            else
+                maxIdx = math.max(maxIdx, k)
+            end
+        end
+        if isArray and maxIdx == #v then
+            -- Array-like
+            for i = 1, #v do
+                table.insert(parts, serializeValue(v[i], seen))
+            end
+        else
+            -- Dictionary-like
+            for k, val in pairs(v) do
+                local keyStr
+                if type(k) == "string" and k:match("^[%a_][%w_]*$") then
+                    keyStr = k
+                else
+                    keyStr = "[" .. serializeValue(k, seen) .. "]"
+                end
+                table.insert(parts, keyStr .. "=" .. serializeValue(val, seen))
+            end
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    else
+        return "nil"  -- functions, userdata, etc.
+    end
+end
+
 stringify.binary = function(data)
-    -- Simple JSON-like serialization for testing
-    return "MOCK_BINARY:" .. tostring(data)
+    return serializeValue(data, {})
 end
 
 stringify.parse = function(str)
-    -- For testing, just return nil (real impl would parse)
-    if str:match("^MOCK_BINARY:") then
-        return nil
-    end
+    if not str or str == "" then return nil end
     -- Try to evaluate as Lua table literal (unsafe but ok for tests)
     local fn, err = load("return " .. str)
     if fn then
-        return fn()
+        local ok, result = pcall(fn)
+        if ok then return result end
     end
     return nil
 end
@@ -216,8 +260,7 @@ end
 -- Allow stringify(data) as shorthand
 setmetatable(stringify, {
     __call = function(t, data)
-        -- Return a Lua table literal string for testing
-        return serpent and serpent.dump(data) or tostring(data)
+        return serializeValue(data, {})
     end
 })
 

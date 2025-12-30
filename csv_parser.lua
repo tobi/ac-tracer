@@ -37,6 +37,9 @@ local COLUMN_MAPPINGS = {
     -- Fuel
     fuel = { "fuel remaining", "fuel level", "fuel" },
 
+    -- Gear
+    gear = { "gear_pos", "gear", "gearposdisplay" },
+
     -- G-forces
     g_lat = { "g force lat", "lat g", "g lat", "lateral g", "lat accel", "lateral accel" },
     g_long = { "g force long", "long g", "g long", "longitudinal g", "long accel", "longitudinal accel" },
@@ -209,6 +212,31 @@ local function lerp(a, b, t)
     return a + (b - a) * t
 end
 
+--- Find step-wise value at target time (last value before or at targetTime)
+--- Used for discrete values like gear that shouldn't be interpolated
+---@param times table Array of time values
+---@param values table Array of values
+---@param targetTime number Target time
+---@return number Step value (last value <= targetTime)
+local function stepAtTime(times, values, targetTime)
+    if #times == 0 then return 0 end
+    if #times == 1 then return values[1] end
+    if targetTime <= times[1] then return values[1] end
+    if targetTime >= times[#times] then return values[#times] end
+
+    -- Binary search for last sample <= targetTime
+    local lo, hi = 1, #times
+    while hi - lo > 1 do
+        local mid = math.floor((lo + hi) / 2)
+        if times[mid] <= targetTime then
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+    return values[lo]
+end
+
 --- Find interpolated value at target time from a time-indexed array
 ---@param times table Array of time values
 ---@param values table Array of values
@@ -305,6 +333,7 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             clutch = {},
             steering = {},
             speed = {},
+            gear = {},
             pos = {},
             fuel = {},
             g_lat = {},
@@ -319,6 +348,7 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             table.insert(trimmedData.clutch, rawData.clutch[i])
             table.insert(trimmedData.steering, rawData.steering[i])
             table.insert(trimmedData.speed, rawData.speed[i])
+            table.insert(trimmedData.gear, rawData.gear[i])
             table.insert(trimmedData.pos, rawData.pos[i])
             table.insert(trimmedData.fuel, rawData.fuel[i])
             if rawData.g_lat and #rawData.g_lat > 0 then
@@ -344,6 +374,7 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
         clutch = {},
         steering = {},
         speed = {},
+        gear = {},
         pos = {},
         times = {},
         fuel = {},
@@ -363,6 +394,8 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             table.insert(normalized.clutch, interpolateAtTime(times, rawData.clutch, t))
             table.insert(normalized.steering, interpolateAtTime(times, rawData.steering, t))
             table.insert(normalized.speed, interpolateAtTime(times, rawData.speed, t))
+            -- Gear uses step-wise lookup (discrete value, no interpolation)
+            table.insert(normalized.gear, stepAtTime(times, rawData.gear, t))
             table.insert(normalized.pos, interpolateAtTime(times, rawData.pos, t))
             table.insert(normalized.fuel, interpolateAtTime(times, rawData.fuel, t))
             if rawData.g_lat and #rawData.g_lat > 0 then
@@ -398,6 +431,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
         clutch = {},
         steering = {},
         speed = {},
+        gear = {},
         pos = {},
         times = {},
         fuel = {},
@@ -527,6 +561,15 @@ local function parseSingleLap(lines, startIdx, indices, config)
                             end
                         end
 
+                        -- Gear (if available)
+                        local gear = nil
+                        if indices.gear then
+                            gear = tonumber(fields.gear)
+                            if gear then
+                                gear = math.floor(gear)  -- Ensure integer
+                            end
+                        end
+
                         -- G-forces (if available)
                         local gLat = nil
                         local gLong = nil
@@ -552,6 +595,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         table.insert(data.clutch, 1 - clutch)
                         table.insert(data.steering, steerNorm)
                         table.insert(data.speed, speed)
+                        table.insert(data.gear, gear or 0)
                         table.insert(data.fuel, fuel or 0)
                         if indices.g_lat then
                             table.insert(data.g_lat, gLat or 0)
@@ -659,6 +703,9 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
     end
     if indices.g_long then
         ac.log("csv_parser: Using g long: " .. headers[indices.g_long])
+    end
+    if indices.gear then
+        ac.log("csv_parser: Using gear: " .. headers[indices.gear])
     end
 
     -- Check for position/distance data
@@ -841,6 +888,7 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
         speed = indices.speed and headers[indices.speed] or nil,
         steering = indices.steering and headers[indices.steering] or nil,
         clutch = indices.clutch and headers[indices.clutch] or nil,
+        gear = indices.gear and headers[indices.gear] or nil,
         position = useDistance and (indices.distance and headers[indices.distance])
             or (indices.pos and headers[indices.pos] or nil),
         time = indices.time and headers[indices.time] or nil,

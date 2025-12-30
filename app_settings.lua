@@ -27,7 +27,7 @@ local config = ac.storage({
     displayClutch = false,
     displaySteering = false,
     displaySpeed = false,
-    displayGear = false,  -- TODO: implement gear trace rendering
+    displayGear = false,  -- Stepped gear trace (discrete values)
 
     -- Units
     useKMH = true,

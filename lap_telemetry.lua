@@ -23,6 +23,7 @@ local draggingCursor = false
 local panningView = false
 local panStartMouseX = 0
 local panStartTime = 0
+local refPosOffset = 0   -- Position offset for reference lap alignment (-0.05 to +0.05)
 
 -- Reference lap loading UI
 local showRefPicker = false
@@ -277,20 +278,22 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
          end
 
          -- Get reference value at SAME POSITION (not same time) for proper alignment
-         if refLapObj and pos then
-             local refVal = accessor(refLapObj, pos)
-             if refVal ~= nil then
-                 table.insert(refValues, refVal)
-                 if not minVal or not maxVal then
-                     actualMin = math.min(actualMin, refVal)
-                     actualMax = math.max(actualMax, refVal)
-                 end
-             else
-                 table.insert(refValues, 0)
-             end
-         elseif refLapObj then
-             table.insert(refValues, 0)
-         end
+         -- Apply position offset for lap alignment adjustment
+          if refLapObj and pos then
+              local offsetPos = (pos + refPosOffset) % 1.0  -- Wrap around 0-1
+              local refVal = accessor(refLapObj, offsetPos)
+              if refVal ~= nil then
+                  table.insert(refValues, refVal)
+                  if not minVal or not maxVal then
+                      actualMin = math.min(actualMin, refVal)
+                      actualMax = math.max(actualMax, refVal)
+                  end
+              else
+                  table.insert(refValues, 0)
+              end
+          elseif refLapObj then
+              table.insert(refValues, 0)
+          end
      end
 
     if #values < 2 then return end
@@ -525,8 +528,10 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
         local pos = getValueAtTime(selectedLap, t, "pos")
         if pos then
             -- Get time at this position for both laps
+            -- Apply position offset for lap alignment adjustment
             local selectedTime = selectedLap:getTimeAtPos(pos)
-            local refTime = refLapObj:getTimeAtPos(pos)
+            local offsetPos = (pos + refPosOffset) % 1.0  -- Wrap around 0-1
+            local refTime = refLapObj:getTimeAtPos(offsetPos)
 
             if selectedTime and refTime then
                 local delta = selectedTime - refTime
@@ -607,10 +612,13 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                     ui.popStyleColor()
 
                     -- Calculate corner delta (delta at exit - delta at entry)
+                    -- Apply position offset for lap alignment adjustment
                     local entryDelta = selectedLap:getTimeAtPos(corner.startPos)
                     local exitDelta = selectedLap:getTimeAtPos(corner.endPos)
-                    local refEntryTime = refLapObj:getTimeAtPos(corner.startPos)
-                    local refExitTime = refLapObj:getTimeAtPos(corner.endPos)
+                    local refStartPos = (corner.startPos + refPosOffset) % 1.0
+                    local refEndPos = (corner.endPos + refPosOffset) % 1.0
+                    local refEntryTime = refLapObj:getTimeAtPos(refStartPos)
+                    local refExitTime = refLapObj:getTimeAtPos(refEndPos)
 
                     if entryDelta and exitDelta and refEntryTime and refExitTime then
                         local currentCornerTime = exitDelta - entryDelta
@@ -838,16 +846,18 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     cursorValues.tc_gain = getValueAtTime(selectedLap, cursorTime, "tc_gain")
 
      if referenceLap and cursorValues.pos then
-         cursorValues.refThrottle = referenceLap:throttleAt(cursorValues.pos)
-         cursorValues.refBrake = referenceLap:brakeAt(cursorValues.pos)
-         cursorValues.refBrake_r = referenceLap:brakeRearAt(cursorValues.pos)
-         cursorValues.refSpeed = referenceLap:speedAt(cursorValues.pos)
-         cursorValues.refSteering = referenceLap:steeringAt(cursorValues.pos)
-         cursorValues.refFuel = referenceLap:fuelAt(cursorValues.pos)
-         cursorValues.refLatG = getGForceAtPos(referenceLap, cursorValues.pos, "x")
-         cursorValues.refBrakeBalance = referenceLap:brakeBalanceAt(cursorValues.pos)
-         cursorValues.refTcSlip = referenceLap:tcSlipAt(cursorValues.pos)
-         cursorValues.refTcGain = referenceLap:tcGainAt(cursorValues.pos)
+         -- Apply position offset for lap alignment adjustment
+         local offsetPos = (cursorValues.pos + refPosOffset) % 1.0
+         cursorValues.refThrottle = referenceLap:throttleAt(offsetPos)
+         cursorValues.refBrake = referenceLap:brakeAt(offsetPos)
+         cursorValues.refBrake_r = referenceLap:brakeRearAt(offsetPos)
+         cursorValues.refSpeed = referenceLap:speedAt(offsetPos)
+         cursorValues.refSteering = referenceLap:steeringAt(offsetPos)
+         cursorValues.refFuel = referenceLap:fuelAt(offsetPos)
+         cursorValues.refLatG = getGForceAtPos(referenceLap, offsetPos, "x")
+         cursorValues.refBrakeBalance = referenceLap:brakeBalanceAt(offsetPos)
+         cursorValues.refTcSlip = referenceLap:tcSlipAt(offsetPos)
+         cursorValues.refTcGain = referenceLap:tcGainAt(offsetPos)
      end
 
     if not cursorValues.throttle then return end
@@ -1340,8 +1350,43 @@ function lap_telemetry.draw(dt, context)
 
     ui.popFont()
 
+    -- Second controls row: Position offset slider (only when reference lap exists)
+    local controls2Y = controlsY + controlsH + 2
+    local controls2H = 0
+    if referenceLap then
+        controls2H = 22
+        ui.setCursor(vec2(padding, controls2Y))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        ui.text("Ref Offset:")
+        ui.popStyleColor()
+        
+        ui.sameLine(80)
+        ui.pushItemWidth(150)
+        local newOffset = ui.slider("##refOffset", refPosOffset * 1000, -50, 50, "%.1f m")
+        if newOffset then
+            refPosOffset = newOffset / 1000  -- Convert back to position (0-1 scale)
+        end
+        ui.popItemWidth()
+        
+        ui.sameLine()
+        if ui.button("Reset", vec2(50, 0)) then
+            refPosOffset = 0
+        end
+        
+        -- Show current offset in meters
+        ui.sameLine()
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        local trackLength = ui_utils.getTrackLength()
+        local offsetMeters = refPosOffset * trackLength
+        ui.text(string.format("(%.1f m / %.3f pos)", offsetMeters, refPosOffset))
+        ui.popStyleColor()
+        
+        ui.popFont()
+    end
+
     -- Content area
-    local contentY = headerH + controlsH + 5
+    local contentY = headerH + controlsH + controls2H + 8
     local contentH = windowSize.y - contentY - 30
     if contentH < 100 then return end
 
@@ -1365,8 +1410,12 @@ function lap_telemetry.draw(dt, context)
         local localMouseX = mousePos.x - windowPos.x
         local localMouseY = mousePos.y - windowPos.y
 
-        if localMouseX >= graphX and localMouseX <= graphX + graphW and
-           localMouseY >= contentY and localMouseY <= contentY + contentH then
+        -- Add invisible button to capture mouse in graph area (prevents window dragging)
+        ui.setCursor(vec2(graphX, contentY))
+        ui.invisibleButton("##graphArea", vec2(graphW, contentH))
+        local graphHovered = ui.itemHovered()
+
+        if graphHovered then
 
             local mouseX = localMouseX - graphX
             cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
