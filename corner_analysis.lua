@@ -960,53 +960,88 @@ function corner_analysis.draw(dt, useKmh)
             ui.popFont()
         end
 
-        -- Stats panel
-        ui.pushFont(ui.Font.Main)
+        -- Stats panel (styled like "At Cursor" in lap_telemetry)
+        local panelPadding = 8
+        local panelInnerX = panelX + panelPadding
+        local panelW = windowSize.x - panelX - padding
+        local valueX = panelX + 55
 
-        -- SPEED section
-        statsY = statsY + ui_utils.sectionLabel("SPEED", panelX)
-        statsY = ui_utils.deltaRow(panelX, statsY, "Entry", displayData.entrySpeedDelta, speedUnit, labelW, lineH)
-        statsY = ui_utils.deltaRow(panelX, statsY, "Apex", displayData.apexSpeedDelta, speedUnit, labelW, lineH)
-        statsY = ui_utils.deltaRow(panelX, statsY, "Exit", displayData.exitSpeedDelta, speedUnit, labelW, lineH)
-        statsY = statsY + 4
+        -- Helper to draw a stat row
+        local function drawStatRow(label, value, valueColor)
+            ui.setCursor(vec2(panelInnerX, statsY))
+            ui.pushFont(ui.Font.Small)
+            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+            ui.text(label)
+            ui.popStyleColor()
+            ui.sameLine(valueX)
+            ui.pushStyleColor(ui.StyleColor.Text, valueColor or theme.text.primary)
+            ui.text(value)
+            ui.popStyleColor()
+            ui.popFont()
+            statsY = statsY + lineH
+        end
 
-        -- POSITION section
-        statsY = statsY + ui_utils.sectionLabel("POSITION", panelX)
+        -- Helper to get delta color for speed (positive = faster = good)
+        local function getSpeedDeltaColor(delta)
+            if not delta then return theme.text.muted end
+            if math.abs(delta) < 1 then return theme.text.primary end
+            return delta > 0 and theme.delta.positive or theme.delta.negative
+        end
+
+        -- Helper to get delta color for position (positive = later = good for brake/lift)
+        local function getPositionDeltaColor(meters)
+            if not meters then return theme.text.muted end
+            if math.abs(meters) < 3 then return theme.text.primary end
+            return meters > 0 and theme.delta.positive or theme.delta.negative
+        end
+
+        -- SPEED section header
+        ui.setCursor(vec2(panelInnerX, statsY))
+        ui_utils.textFont("Speed", ui.Font.Main, theme.text.primary)
+        statsY = statsY + 20
+        ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
+        statsY = statsY + 6
+
+        -- Speed deltas
+        local entryDelta = displayData.entrySpeedDelta
+        local apexDelta = displayData.apexSpeedDelta
+        local exitDelta = displayData.exitSpeedDelta
+
+        drawStatRow("Entry", entryDelta and string.format("%+.0f %s", entryDelta, speedUnit) or "—", getSpeedDeltaColor(entryDelta))
+        drawStatRow("Apex", apexDelta and string.format("%+.0f %s", apexDelta, speedUnit) or "—", getSpeedDeltaColor(apexDelta))
+        drawStatRow("Exit", exitDelta and string.format("%+.0f %s", exitDelta, speedUnit) or "—", getSpeedDeltaColor(exitDelta))
+
+        statsY = statsY + 8
+
+        -- POSITION section header
+        ui.setCursor(vec2(panelInnerX, statsY))
+        ui_utils.textFont("Position", ui.Font.Main, theme.text.primary)
+        statsY = statsY + 20
+        ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
+        statsY = statsY + 6
+
+        -- Position deltas
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        statsY = ui_utils.positionRow(panelX, statsY, "Brake", brakeMeters, labelW, lineH)
-        statsY = ui_utils.positionRow(panelX, statsY, "Lift", liftOffMeters, labelW, lineH)
+
+        if brakeMeters then
+            local dir = brakeMeters >= 0 and "later" or "earlier"
+            drawStatRow("Brake", string.format("%.0fm %s", math.abs(brakeMeters), dir), getPositionDeltaColor(brakeMeters))
+        end
+        if liftOffMeters then
+            local dir = liftOffMeters >= 0 and "later" or "earlier"
+            drawStatRow("Lift", string.format("%.0fm %s", math.abs(liftOffMeters), dir), getPositionDeltaColor(liftOffMeters))
+        end
         if displayData.currentApexPos and displayData.refApexPos then
-            statsY = ui_utils.positionRow(panelX, statsY, "Apex", (displayData.currentApexPos - displayData.refApexPos) * 1000, labelW, lineH)
+            local apexMeters = (displayData.currentApexPos - displayData.refApexPos) * (ac.getSim().trackLengthM or 5000)
+            local dir = apexMeters >= 0 and "later" or "earlier"
+            drawStatRow("Apex", string.format("%.0fm %s", math.abs(apexMeters), dir), theme.text.primary)
         end
 
-        -- Coast distance (lift to brake) - only show if > 10m
-        -- Coasting is neutral - not inherently good or bad
-        local currentCoast, refCoast, coastDelta = scoring.getCoastDistances(displayData)
-        if currentCoast and currentCoast > 10 and coastDelta then
-            local rounded = math.floor(math.abs(coastDelta) + 0.5)
-            if rounded > 5 then
-                statsY = statsY + 4
-                local direction = coastDelta >= 0 and "more" or "less"
-                ui.setCursor(vec2(panelX, statsY))
-                ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-                ui.text("Coast:")
-                ui.popStyleColor()
-                ui.sameLine(panelX + labelW)
-                ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-                ui.text(string.format("%dm %s", rounded, direction))
-                ui.popStyleColor()
-                statsY = statsY + lineH
-            end
+        -- Steering (only if significant)
+        if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 5 then
+            local dir = displayData.steeringDelta > 0 and "more" or "less"
+            drawStatRow("Steer", string.format("%.0f° %s", math.abs(displayData.steeringDelta), dir), theme.text.primary)
         end
-
-        -- Steering delta (only show if > 10 degrees difference)
-        -- Steering is neutral - more or less isn't inherently good or bad
-        if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 10 then
-            statsY = statsY + 4
-            statsY = ui_utils.neutralDeltaRow(panelX, statsY, "Steer", displayData.steeringDelta, "°", labelW, lineH)
-        end
-
-        ui.popFont()
 
         -- Draw pedal traces at bottom (same width as speed graph above)
         local pedalY = graphY + graphHeight + meterLabelHeight + pedalTracePadding
