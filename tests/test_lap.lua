@@ -131,6 +131,46 @@ test("interpolates time at position", function()
 end)
 
 
+suite("lap.sparse")
+
+test("addSparseSample skips unchanged values", function()
+    local l = lap.new("track", "car")
+    l:addSparseSample("brake_balance", 0.1, 0.5)
+    l:addSparseSample("brake_balance", 0.2, 0.5)
+
+    assert_table_length(l.sparse.brake_balance, 1, "Should store only one sample for unchanged values")
+    assert_equal(l.sparse.brake_balance[1][2], 0.5)
+end)
+
+test("addSparseSample updates same-position value", function()
+    local l = lap.new("track", "car")
+    l:addSparseSample("brake_balance", 0.1, 0.5)
+    l:addSparseSample("brake_balance", 0.1000001, 0.6)
+
+    assert_table_length(l.sparse.brake_balance, 1, "Same-position samples should collapse to one")
+    assert_equal(l.sparse.brake_balance[1][2], 0.6)
+end)
+
+test("getSparseAtPos returns last value before position", function()
+    local l = lap.new("track", "car")
+    l:addSparseSample("brake_balance", 0.1, 0.4)
+    l:addSparseSample("brake_balance", 0.3, 0.6)
+
+    assert_equal(l:getSparseAtPos("brake_balance", 0.1), 0.4)
+    assert_equal(l:getSparseAtPos("brake_balance", 0.2), 0.4)
+    assert_equal(l:getSparseAtPos("brake_balance", 0.35), 0.6)
+end)
+
+test("getValueAtPos falls back to sparse for sparse fields", function()
+    local l = lap.new("track", "car")
+    l:addSparseSample("brake_balance", 0.1, 0.4)
+    l:addSparseSample("brake_balance", 0.3, 0.6)
+
+    assert_equal(l:getValueAtPos("brake_balance", 0.2), 0.4)
+    assert_equal(l:getValueAtPos("brake_balance", 0.35), 0.6)
+end)
+
+
 suite("lap.getDeltaVs")
 
 test("calculates time delta vs reference", function()

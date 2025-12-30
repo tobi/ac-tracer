@@ -35,6 +35,10 @@ local COLUMN_MAPPINGS = {
 
     -- Fuel
     fuel = { "fuel remaining", "fuel level", "fuel" },
+
+    -- G-forces
+    g_lat = { "g force lat", "lat g", "g lat", "lateral g", "lat accel", "lateral accel" },
+    g_long = { "g force long", "long g", "g long", "longitudinal g", "long accel", "longitudinal accel" },
 }
 
 -- Unit conversions based on CSV unit row
@@ -59,6 +63,10 @@ local UNIT_CONVERSIONS = {
         ["kg"] = 1.0,       -- kg (approximate, depends on fuel density)
         ["gal"] = 3.78541,  -- US gallons to liters
         ["%"] = 1.0,        -- percentage (kept as-is)
+    },
+    g = {
+        ["g"] = 1.0,
+        ["G"] = 1.0,
     },
 }
 
@@ -283,6 +291,8 @@ local function normalizeToSampleRate(rawData, lapTime)
             speed = {},
             pos = {},
             fuel = {},
+            g_lat = {},
+            g_long = {},
         }
         local timeOffset = times[startIdx]
         for i = startIdx, #times do
@@ -295,6 +305,12 @@ local function normalizeToSampleRate(rawData, lapTime)
             table.insert(trimmedData.speed, rawData.speed[i])
             table.insert(trimmedData.pos, rawData.pos[i])
             table.insert(trimmedData.fuel, rawData.fuel[i])
+            if rawData.g_lat and #rawData.g_lat > 0 then
+                table.insert(trimmedData.g_lat, rawData.g_lat[i])
+            end
+            if rawData.g_long and #rawData.g_long > 0 then
+                table.insert(trimmedData.g_long, rawData.g_long[i])
+            end
         end
         times = trimmedTimes
         rawData = trimmedData
@@ -315,6 +331,8 @@ local function normalizeToSampleRate(rawData, lapTime)
         pos = {},
         times = {},
         fuel = {},
+        g_lat = {},
+        g_long = {},
     }
 
     for i = 1, numSamples do
@@ -331,6 +349,12 @@ local function normalizeToSampleRate(rawData, lapTime)
             table.insert(normalized.speed, interpolateAtTime(times, rawData.speed, t))
             table.insert(normalized.pos, interpolateAtTime(times, rawData.pos, t))
             table.insert(normalized.fuel, interpolateAtTime(times, rawData.fuel, t))
+            if rawData.g_lat and #rawData.g_lat > 0 then
+                table.insert(normalized.g_lat, interpolateAtTime(times, rawData.g_lat, t))
+            end
+            if rawData.g_long and #rawData.g_long > 0 then
+                table.insert(normalized.g_long, interpolateAtTime(times, rawData.g_long, t))
+            end
         end
     end
 
@@ -361,6 +385,8 @@ local function parseSingleLap(lines, startIdx, indices, config)
         pos = {},
         times = {},
         fuel = {},
+        g_lat = {},
+        g_long = {},
     }
     local fuelLeftAtStart = 0
 
@@ -474,6 +500,22 @@ local function parseSingleLap(lines, startIdx, indices, config)
                             end
                         end
 
+                        -- G-forces (if available)
+                        local gLat = nil
+                        local gLong = nil
+                        if indices.g_lat then
+                            gLat = tonumber(fields.g_lat)
+                            if gLat then
+                                gLat = gLat * (config.gLatFactor or 1.0)
+                            end
+                        end
+                        if indices.g_long then
+                            gLong = tonumber(fields.g_long)
+                            if gLong then
+                                gLong = gLong * (config.gLongFactor or 1.0)
+                            end
+                        end
+
                         local sampleTime = time - firstTime
                         table.insert(data.times, sampleTime)
                         table.insert(data.pos, pos)
@@ -484,6 +526,12 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         table.insert(data.steering, steerNorm)
                         table.insert(data.speed, speed)
                         table.insert(data.fuel, fuel or 0)
+                        if indices.g_lat then
+                            table.insert(data.g_lat, gLat or 0)
+                        end
+                        if indices.g_long then
+                            table.insert(data.g_long, gLong or 0)
+                        end
                     end
                 end
             end
@@ -578,6 +626,12 @@ function csv_parser.parseFile(filePath, trackLength)
     if indices.fuel then
         ac.log("csv_parser: Using fuel: " .. headers[indices.fuel])
     end
+    if indices.g_lat then
+        ac.log("csv_parser: Using g lat: " .. headers[indices.g_lat])
+    end
+    if indices.g_long then
+        ac.log("csv_parser: Using g long: " .. headers[indices.g_long])
+    end
 
     -- Check for position/distance data
     local useDistance = false
@@ -660,6 +714,18 @@ function csv_parser.parseFile(filePath, trackLength)
     end
     local fuelFactor = fuelUnit and UNIT_CONVERSIONS.fuel[fuelUnit] or 1.0
 
+    -- G-force conversion
+    local gLatUnit = nil
+    local gLongUnit = nil
+    if indices.g_lat and units then
+        gLatUnit = units[headers[indices.g_lat]]
+    end
+    if indices.g_long and units then
+        gLongUnit = units[headers[indices.g_long]]
+    end
+    local gLatFactor = gLatUnit and UNIT_CONVERSIONS.g[gLatUnit] or 1.0
+    local gLongFactor = gLongUnit and UNIT_CONVERSIONS.g[gLongUnit] or 1.0
+
     -- Detect if position is in percentage format (0-100) by scanning first ~100 data rows
     -- If any value > 1, the entire file uses percentage format
     local posIsPercentage = false
@@ -689,6 +755,8 @@ function csv_parser.parseFile(filePath, trackLength)
         useBrakePressureR = useBrakePressureR,
         brakePressureMax = brakePressureMax,
         fuelFactor = fuelFactor,
+        gLatFactor = gLatFactor,
+        gLongFactor = gLongFactor,
         posIsPercentage = posIsPercentage,
     }
 
@@ -750,6 +818,8 @@ function csv_parser.parseFile(filePath, trackLength)
             or (indices.pos and headers[indices.pos] or nil),
         time = indices.time and headers[indices.time] or nil,
         fuel = indices.fuel and headers[indices.fuel] or nil,
+        g_lat = indices.g_lat and headers[indices.g_lat] or nil,
+        g_long = indices.g_long and headers[indices.g_long] or nil,
     }
 
     -- Log warnings

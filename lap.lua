@@ -12,6 +12,7 @@ local csv_parser = require('csv_parser')
 lap.SAMPLE_RATE = 60  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
 local SPARSE_EPS = 1e-4
+local SPARSE_POS_EPS = 1e-6
 
 -- Sparse channels (position -> value) for low-frequency settings
 lap.SPARSE_FIELDS = {
@@ -123,8 +124,18 @@ local function sparseAppend(list, pos, value)
         return
     end
     local last = list[n]
-    if last and math.abs((last[2] or 0) - value) <= SPARSE_EPS then
-        return
+    if last then
+        local lastPos = last[1] or 0
+        local lastVal = last[2] or 0
+        -- If position is effectively the same, keep the latest value only
+        if math.abs(lastPos - pos) <= SPARSE_POS_EPS then
+            last[2] = value
+            return
+        end
+        -- If value hasn't changed, previous sample covers this range
+        if math.abs(lastVal - value) <= SPARSE_EPS then
+            return
+        end
     end
     table.insert(list, { pos, value })
 end
@@ -1138,6 +1149,16 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l:populateSparseFromDense('fuel')
     if l.sparse and l.sparse.fuel and #l.sparse.fuel > 0 then
         l.fuel = {}
+    end
+
+    -- Build g-force vectors from CSV (if available)
+    if (data.g_lat and #data.g_lat > 0) or (data.g_long and #data.g_long > 0) then
+        local count = #l.pos
+        for i = 1, count do
+            local gx = data.g_lat and data.g_lat[i] or 0
+            local gz = data.g_long and data.g_long[i] or 0
+            l.gforce[i] = vec3(gx or 0, 0, gz or 0)
+        end
     end
 
     ac.log(string.format("lap.fromCSV: Loaded lap with %d samples, time: %.3fs",
