@@ -838,14 +838,16 @@ function corner_analysis.draw(dt, useKmh)
     local graphHeight = windowSize.y - padding - graphY - meterLabelHeight - pedalTraceHeight - pedalTracePadding
     
     -- Fixed layout constants
+    local topSectionH = 100  -- First 100px for delta time and score
     local gaugeRadius = 25
-    local gaugeCenterX = windowSize.x - gaugeRadius - 15
-    local gaugeCenterY = 35
-    local statsStartY = gaugeCenterY + gaugeRadius + 26
     local lineH = 18
-    local labelW = 45
     local speedUnit = useKmh and "km/h" or "mph"
-    
+
+    -- Right panel dimensions
+    local panelW = windowSize.x - panelX - padding
+    local panelTopY = graphY  -- Start at same Y as graph for clean look
+    local panelH = windowSize.y - panelTopY - padding
+
     -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, theme.bg.window, 4)
 
@@ -858,8 +860,32 @@ function corner_analysis.draw(dt, useKmh)
             4
         )
 
-        -- Score gauge (only when we have data)
-        drawScoreGauge(gaugeCenterX, gaugeCenterY, gaugeRadius, displayScore)
+        -- Right panel background and border (draw first so content appears on top)
+        ui.drawRectFilled(vec2(panelX, panelTopY), vec2(panelX + panelW, panelTopY + panelH), theme.bg.panel, 4)
+        ui.drawRect(vec2(panelX, panelTopY), vec2(panelX + panelW, panelTopY + panelH), theme.grid.major, 4, 1)
+
+        -- Top section: Delta time and Score gauge, evenly spaced and centered
+        local topCenterY = panelTopY + topSectionH / 2
+        local quarterW = panelW / 4
+
+        -- Delta time (centered in left half of right panel)
+        if displayData.timeDelta then
+            local deltaCenterX = panelX + quarterW
+            local sign = displayData.timeDelta >= 0 and "+" or ""
+            local deltaColor = displayData.timeDelta >= 0 and theme.delta.negative or theme.delta.positive
+            local deltaText = string.format("%s%.2fs", sign, displayData.timeDelta)
+            ui.pushFont(ui.Font.Title)
+            local textSize = ui.measureText(deltaText)
+            ui.setCursor(vec2(deltaCenterX - textSize.x / 2, topCenterY - textSize.y / 2))
+            ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
+            ui.text(deltaText)
+            ui.popStyleColor()
+            ui.popFont()
+        end
+
+        -- Score gauge (centered in right half of right panel)
+        local gaugeCenterX = panelX + quarterW * 3
+        drawScoreGauge(gaugeCenterX, topCenterY, gaugeRadius, displayScore)
 
         -- Header text
         ui.setCursor(vec2(padding, 4))
@@ -874,7 +900,7 @@ function corner_analysis.draw(dt, useKmh)
         ui.popStyleColor()
         ui.popFont()
 
-        local statsY = statsStartY
+        local statsY = panelTopY + topSectionH + 10
         -- Graph outline (blue for frozen, green for live)
         local outlineColor = frozenCorner.active
             and theme.corner.focusedBorder
@@ -946,24 +972,9 @@ function corner_analysis.draw(dt, useKmh)
             ui.popFont()
         end
         
-        -- Time delta (left of gauge, vertically centered)
-        if displayData.timeDelta then
-            local sign = displayData.timeDelta >= 0 and "+" or ""
-            local deltaColor = displayData.timeDelta >= 0 and theme.delta.negative or theme.delta.positive
-            local deltaText = string.format("%s%.2fs", sign, displayData.timeDelta)
-            ui.pushFont(ui.Font.Title)
-            local textSize = ui.measureText(deltaText)
-            ui.setCursor(vec2(gaugeCenterX - gaugeRadius - textSize.x - 15, gaugeCenterY - textSize.y / 2))
-            ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
-            ui.text(deltaText)
-            ui.popStyleColor()
-            ui.popFont()
-        end
-
         -- Stats panel (styled like "At Cursor" in lap_telemetry)
         local panelPadding = 8
         local panelInnerX = panelX + panelPadding
-        local panelW = windowSize.x - panelX - padding
         local valueX = panelX + 55
 
         -- Helper to draw a stat row
@@ -976,6 +987,17 @@ function corner_analysis.draw(dt, useKmh)
             ui.sameLine(valueX)
             ui.pushStyleColor(ui.StyleColor.Text, valueColor or theme.text.primary)
             ui.text(value)
+            ui.popStyleColor()
+            ui.popFont()
+            statsY = statsY + lineH
+        end
+
+        -- Helper to draw a note sentence (full width, wrapping if needed)
+        local function drawNote(sentence)
+            ui.setCursor(vec2(panelInnerX, statsY))
+            ui.pushFont(ui.Font.Small)
+            ui.pushStyleColor(ui.StyleColor.Text, theme.warning)
+            ui.text(sentence)
             ui.popStyleColor()
             ui.popFont()
             statsY = statsY + lineH
@@ -1037,10 +1059,51 @@ function corner_analysis.draw(dt, useKmh)
             drawStatRow("Apex", string.format("%.0fm %s", math.abs(apexMeters), dir), theme.text.primary)
         end
 
-        -- Steering (only if significant)
+        -- NOTES section (only shown if there are significant observations)
+        local notes = {}
+        local trackLen = ac.getSim().trackLengthM or 5000
+
+        -- Steering difference (if > 5°)
         if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 5 then
             local dir = displayData.steeringDelta > 0 and "more" or "less"
-            drawStatRow("Steer", string.format("%.0f° %s", math.abs(displayData.steeringDelta), dir), theme.text.primary)
+            table.insert(notes, string.format("%.0f° %s steering", math.abs(displayData.steeringDelta), dir))
+        end
+
+        -- Gear difference
+        if displayData.gearDelta and displayData.gearDelta ~= 0 then
+            local diff = math.abs(displayData.gearDelta)
+            local dir = displayData.gearDelta > 0 and "higher" or "lower"
+            table.insert(notes, string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir))
+        end
+
+        -- Coasting (distance between lift and brake)
+        if displayData.currentLiftOffPos and displayData.currentBrakePos then
+            local coastM = (displayData.currentBrakePos - displayData.currentLiftOffPos) * trackLen
+            if coastM < 0 then coastM = coastM + trackLen end  -- Handle wrap
+            if coastM > 10 then  -- Only show if coasting > 10m
+                table.insert(notes, string.format("%.0fm coasting", coastM))
+            end
+        end
+
+        -- Overlap/trail braking time
+        if displayData.currentOverlapTime and displayData.currentOverlapTime > 0.1 then
+            table.insert(notes, string.format("%.1fs overlap", displayData.currentOverlapTime))
+        end
+
+        -- Draw notes section if we have any
+        if #notes > 0 then
+            statsY = statsY + 8
+
+            -- NOTES section header
+            ui.setCursor(vec2(panelInnerX, statsY))
+            ui_utils.textFont("Notes", ui.Font.Main, theme.text.primary)
+            statsY = statsY + 20
+            ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
+            statsY = statsY + 6
+
+            for _, note in ipairs(notes) do
+                drawNote(note)
+            end
         end
 
         -- Draw pedal traces at bottom (same width as speed graph above)
