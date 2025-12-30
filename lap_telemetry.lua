@@ -1343,7 +1343,7 @@ function lap_telemetry.draw(dt)
 
         -- Background
         ui.drawRectFilled(vec2(dropX, dropY), vec2(dropX + dropW, dropY + dropH), theme.bg.panel, 4)
-        ui.drawRect(vec2(dropX, dropY), vec2(dropX + dropW, dropY + dropH), theme.border.panel, 4, 1)
+        ui.drawRect(vec2(dropX, dropY), vec2(dropX + dropW, dropY + dropH), theme.grid.major, 4, 1)
 
         ui.setCursor(vec2(dropX + 10, dropY + 8))
         ui.pushFont(ui.Font.Small)
