@@ -98,29 +98,29 @@ end
 
 --- Compare steering wheel inputs between current and reference
 ---@param data table Corner comparison data
----@return string|nil Note about steering difference, or nil if not significant
+---@return table|nil Note {text, severity} about steering difference, or nil if not significant
 local function analyzeSteeringInput(data)
     if not data.steeringDelta then return nil end
     if math.abs(data.steeringDelta) <= 5 then return nil end
 
     local dir = data.steeringDelta > 0 and "more" or "less"
-    return string.format("%.0f° %s steering", math.abs(data.steeringDelta), dir)
+    return { text = string.format("%.0f° %s steering", math.abs(data.steeringDelta), dir), severity = "info" }
 end
 
 --- Compare gear usage between current and reference
 ---@param data table Corner comparison data
----@return string|nil Note about gear difference, or nil if same gear
+---@return table|nil Note {text, severity} about gear difference, or nil if same gear
 local function analyzeGearUsage(data)
     if not data.gearDelta or data.gearDelta == 0 then return nil end
 
     local diff = math.abs(data.gearDelta)
     local dir = data.gearDelta > 0 and "higher" or "lower"
-    return string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir)
+    return { text = string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir), severity = "info" }
 end
 
 --- Analyze coasting distance (throttle lift to brake application)
 ---@param data table Corner comparison data
----@return string|nil Note about coasting, or nil if minimal/none
+---@return table|nil Note {text, severity} about coasting, or nil if minimal/none
 local function analyzeCoasting(data)
     if not data.currentLiftOffPos or not data.currentBrakePos then return nil end
 
@@ -129,34 +129,270 @@ local function analyzeCoasting(data)
     if coastM < 0 then coastM = coastM + trackLen end  -- Handle wrap
 
     if coastM <= 10 then return nil end  -- Only report if > 10m
-    return string.format("%.0fm coasting", coastM)
+    return { text = string.format("%.0fm coasting", coastM), severity = "info" }
 end
 
 --- Analyze pedal overlap (trail braking / left-foot braking)
 ---@param data table Corner comparison data
----@return string|nil Note about overlap time, or nil if minimal
+---@return table|nil Note {text, severity} about overlap time, or nil if minimal
 local function analyzeOverlap(data)
     if not data.currentOverlapTime or data.currentOverlapTime <= 0.1 then return nil end
-    return string.format("%.1fs overlap", data.currentOverlapTime)
+    return { text = string.format("%.1fs trail braking", data.currentOverlapTime), severity = "info" }
+end
+
+--- Analyze bad throttle during heavy braking (not just gear blips)
+--- This detects throttle input during the brake zone that isn't heel-toe
+---@param currentLap table Current lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about bad overlap, or nil if clean
+local function analyzeBadBrakeZoneThrottle(currentLap, data)
+    if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
+    if not data.currentBrakePos then return nil end  -- No brake point recorded
+
+    local HEAVY_BRAKE_THRESHOLD = 0.5  -- 50% brake = heavy braking
+    local THROTTLE_THRESHOLD = 0.3     -- 30% throttle = not just a blip
+    local BLIP_DURATION = 0.15         -- 150ms = typical heel-toe blip
+
+    local badOverlapSamples = 0
+    local consecutiveBadSamples = 0
+    local maxConsecutive = 0
+
+    -- Look from corner start to brake point (the brake zone)
+    local brakeZoneEnd = data.currentBrakePos
+    -- Extend a bit past brake point to catch the main braking zone
+    local searchEnd = math.min(data.refEndPos, brakeZoneEnd + 0.02)
+
+    for i = 1, #currentLap.pos do
+        local pos = currentLap.pos[i]
+        if pos >= data.refStartPos and pos <= searchEnd then
+            local brake = currentLap.brake[i] or 0
+            local throttle = currentLap.throttle[i] or 0
+
+            if brake >= HEAVY_BRAKE_THRESHOLD and throttle >= THROTTLE_THRESHOLD then
+                consecutiveBadSamples = consecutiveBadSamples + 1
+                badOverlapSamples = badOverlapSamples + 1
+                if consecutiveBadSamples > maxConsecutive then
+                    maxConsecutive = consecutiveBadSamples
+                end
+            else
+                consecutiveBadSamples = 0
+            end
+        end
+    end
+
+    -- Convert max consecutive to duration (60 Hz)
+    local maxDuration = maxConsecutive / 60
+
+    -- If the longest throttle period during heavy braking exceeds blip duration, it's bad
+    if maxDuration > BLIP_DURATION then
+        return {
+            text = string.format("throttle while braking (%.1fs)", maxDuration),
+            severity = "error"
+        }
+    end
+
+    return nil
+end
+
+--- Analyze wheel lockups in corner
+---@param currentLap table Current lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about lockups, or nil if none
+local function analyzeLockups(currentLap, data)
+    if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
+
+    local hasLockup, wheels = currentLap:hasLockupInRange(data.refStartPos, data.refEndPos)
+    if not hasLockup then return nil end
+
+    -- Build description of which wheels locked
+    local locked = {}
+    if wheels.fl then table.insert(locked, "FL") end
+    if wheels.fr then table.insert(locked, "FR") end
+    if wheels.rl then table.insert(locked, "RL") end
+    if wheels.rr then table.insert(locked, "RR") end
+
+    if #locked == 0 then return nil end
+
+    -- Simplify output for common patterns
+    local text
+    if wheels.fl and wheels.fr and not wheels.rl and not wheels.rr then
+        text = "front lockup"
+    elseif wheels.rl and wheels.rr and not wheels.fl and not wheels.fr then
+        text = "rear lockup"
+    elseif #locked == 4 then
+        text = "all wheels locked"
+    else
+        text = table.concat(locked, "+") .. " lockup"
+    end
+    return { text = text, severity = "error" }
+end
+
+--- Analyze traction control interventions
+---@param currentLap table Current lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about TC, or nil if none
+local function analyzeTractionControl(currentLap, data)
+    if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
+
+    local tcCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.TC_ACTIVE)
+    if tcCount == 0 then return nil end
+
+    -- Convert samples to approximate duration (60 Hz sampling)
+    local tcDuration = tcCount / 60
+    if tcDuration < 0.1 then return nil end  -- Ignore brief interventions
+
+    return { text = string.format("TC active %.1fs", tcDuration), severity = "info" }
+end
+
+--- Analyze rev limiter hits
+---@param currentLap table Current lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about limiter, or nil if none
+local function analyzeLimiter(currentLap, data)
+    if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
+
+    local limiterCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.LIMITER_HIT)
+    if limiterCount == 0 then return nil end
+
+    -- Convert samples to approximate duration (60 Hz sampling)
+    local limiterDuration = limiterCount / 60
+    if limiterDuration < 0.05 then return nil end  -- Ignore very brief hits
+
+    return { text = "hit rev limiter", severity = "info" }
+end
+
+--- Analyze throttle application timing vs reference
+---@param currentLap table Current lap data
+---@param refLap table Reference lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about throttle timing, or nil if similar
+local function analyzeThrottleTiming(currentLap, refLap, data)
+    if not currentLap or not refLap then return nil end
+    if not data.refStartPos or not data.refEndPos then return nil end
+
+    local THROTTLE_THRESHOLD = 0.9  -- Consider "on throttle" at 90%
+
+    -- Find throttle application point in current lap (after apex)
+    local apexPos = data.currentApexPos or ((data.refStartPos + data.refEndPos) / 2)
+    local currentThrottlePos = nil
+    local refThrottlePos = nil
+
+    -- Search from apex to corner end for throttle application
+    for i = 1, #currentLap.pos do
+        local pos = currentLap.pos[i]
+        if pos >= apexPos and pos <= data.refEndPos then
+            if currentLap.throttle[i] and currentLap.throttle[i] >= THROTTLE_THRESHOLD then
+                currentThrottlePos = pos
+                break
+            end
+        end
+    end
+
+    for i = 1, #refLap.pos do
+        local pos = refLap.pos[i]
+        if pos >= apexPos and pos <= data.refEndPos then
+            if refLap.throttle[i] and refLap.throttle[i] >= THROTTLE_THRESHOLD then
+                refThrottlePos = pos
+                break
+            end
+        end
+    end
+
+    if not currentThrottlePos or not refThrottlePos then return nil end
+
+    local trackLen = ac.getSim().trackLengthM or 5000
+    local diffM = (currentThrottlePos - refThrottlePos) * trackLen
+    if math.abs(diffM) < 5 then return nil end  -- Ignore < 5m difference
+
+    local dir = diffM < 0 and "earlier" or "later"
+    return { text = string.format("throttle %.0fm %s", math.abs(diffM), dir), severity = "info" }
+end
+
+--- Analyze brake pressure difference
+---@param currentLap table Current lap data
+---@param refLap table Reference lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about brake pressure, or nil if similar
+local function analyzeBrakePressure(currentLap, refLap, data)
+    if not currentLap or not refLap then return nil end
+    if not data.refStartPos or not data.refEndPos then return nil end
+
+    -- Find max brake pressure in corner for both laps
+    local currentMaxBrake = 0
+    local refMaxBrake = 0
+
+    for i = 1, #currentLap.pos do
+        local pos = currentLap.pos[i]
+        if pos >= data.refStartPos and pos <= data.refEndPos then
+            local brake = currentLap.brake[i] or 0
+            if brake > currentMaxBrake then currentMaxBrake = brake end
+        end
+    end
+
+    for i = 1, #refLap.pos do
+        local pos = refLap.pos[i]
+        if pos >= data.refStartPos and pos <= data.refEndPos then
+            local brake = refLap.brake[i] or 0
+            if brake > refMaxBrake then refMaxBrake = brake end
+        end
+    end
+
+    -- Only report if significant difference (> 10%)
+    local diff = currentMaxBrake - refMaxBrake
+    if math.abs(diff) < 0.10 then return nil end
+
+    local dir = diff < 0 and "lighter" or "harder"
+    return { text = string.format("%s braking (%.0f%% vs %.0f%%)", dir, currentMaxBrake * 100, refMaxBrake * 100), severity = "info" }
+end
+
+--- Analyze entry speed warning (significantly different from reference)
+---@param data table Corner comparison data
+---@param speedUnit string "km/h" or "mph"
+---@return table|nil Note {text, severity} about entry speed, or nil if similar
+local function analyzeEntrySpeed(data, speedUnit)
+    if not data.entrySpeedDelta then return nil end
+
+    -- Only warn if > 10 km/h difference
+    if math.abs(data.entrySpeedDelta) < 10 then return nil end
+
+    local dir = data.entrySpeedDelta > 0 and "faster" or "slower"
+    return { text = string.format("entry %.0f %s %s", math.abs(data.entrySpeedDelta), speedUnit, dir), severity = "info" }
 end
 
 --- Collect all corner notes by running analysis functions
 ---@param data table Corner comparison data
----@return table Array of note strings (may be empty)
-local function collectCornerNotes(data)
+---@param currentLap table Current lap data (optional, for flag-based analysis)
+---@param refLap table Reference lap data (optional, for comparisons)
+---@param speedUnit string Speed unit string ("km/h" or "mph")
+---@return table Array of note tables {text, severity} (may be empty)
+local function collectCornerNotes(data, currentLap, refLap, speedUnit)
     local notes = {}
 
-    local steeringNote = analyzeSteeringInput(data)
-    if steeringNote then table.insert(notes, steeringNote) end
+    -- Helper to add note if not nil
+    local function addNote(note)
+        if note then table.insert(notes, note) end
+    end
 
-    local gearNote = analyzeGearUsage(data)
-    if gearNote then table.insert(notes, gearNote) end
+    -- Basic comparisons (data only)
+    addNote(analyzeSteeringInput(data))
+    addNote(analyzeGearUsage(data))
+    addNote(analyzeCoasting(data))
+    addNote(analyzeOverlap(data))
+    addNote(analyzeEntrySpeed(data, speedUnit))
 
-    local coastingNote = analyzeCoasting(data)
-    if coastingNote then table.insert(notes, coastingNote) end
+    -- Lap-based analysis (flags, pressure, timing)
+    if currentLap then
+        addNote(analyzeLockups(currentLap, data))
+        addNote(analyzeTractionControl(currentLap, data))
+        addNote(analyzeLimiter(currentLap, data))
+        addNote(analyzeBadBrakeZoneThrottle(currentLap, data))
+    end
 
-    local overlapNote = analyzeOverlap(data)
-    if overlapNote then table.insert(notes, overlapNote) end
+    -- Comparison analysis (needs both laps)
+    if currentLap and refLap then
+        addNote(analyzeThrottleTiming(currentLap, refLap, data))
+        addNote(analyzeBrakePressure(currentLap, refLap, data))
+    end
 
     return notes
 end
@@ -1062,12 +1298,17 @@ function corner_analysis.draw(dt, useKmh)
             statsY = statsY + lineH
         end
 
-        -- Helper to draw a note sentence (full width, wrapping if needed)
-        local function drawNote(sentence)
+        -- Helper to draw a note sentence with severity-based color
+        local function drawNote(note)
+            local color = theme.warning  -- Default: info/warning (orange)
+            if note.severity == "error" then
+                color = theme.delta.negative  -- Error: red
+            end
+
             ui.setCursor(vec2(panelInnerX, statsY))
             ui.pushFont(ui.Font.Small)
-            ui.pushStyleColor(ui.StyleColor.Text, theme.warning)
-            ui.text(sentence)
+            ui.pushStyleColor(ui.StyleColor.Text, color)
+            ui.text(note.text)
             ui.popStyleColor()
             ui.popFont()
             statsY = statsY + lineH
@@ -1129,8 +1370,18 @@ function corner_analysis.draw(dt, useKmh)
             drawStatRow("Apex", string.format("%.0fm %s", math.abs(apexMeters), dir), theme.text.primary)
         end
 
+        -- Get lap data (use frozen lap data if viewing from telemetry)
+        local currentLap, refLap
+        if frozenCorner.active then
+            currentLap = frozenCorner.currentLap
+            refLap = frozenCorner.referenceLap
+        else
+            currentLap = state.currentLap
+            refLap = state.bestLap
+        end
+
         -- NOTES section (only shown if there are significant observations)
-        local notes = collectCornerNotes(displayData)
+        local notes = collectCornerNotes(displayData, currentLap, refLap, speedUnit)
 
         -- Draw notes section if we have any
         if #notes > 0 then
@@ -1150,16 +1401,6 @@ function corner_analysis.draw(dt, useKmh)
 
         -- Draw pedal traces at bottom (same width as speed graph above)
         local pedalY = graphY + graphHeight + meterLabelHeight + pedalTracePadding
-
-        -- Get lap data for pedal traces (use frozen lap data if viewing from telemetry)
-        local currentLap, refLap
-        if frozenCorner.active then
-            currentLap = frozenCorner.currentLap
-            refLap = frozenCorner.referenceLap
-        else
-            currentLap = state.currentLap
-            refLap = state.bestLap
-        end
 
         if displayData.refStartPos and displayData.refEndPos then
             drawPedalTraces(padding, pedalY, graphWidth, pedalTraceHeight,
