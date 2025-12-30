@@ -318,7 +318,7 @@ package.loaded['app_settings'] = {
 package.loaded['theme'] = {
     bg = { window = rgbm(0.1, 0.1, 0.1, 1), graph = rgbm(0.15, 0.15, 0.15, 1), panel = rgbm(0.12, 0.12, 0.12, 1) },
     text = { primary = rgbm(1, 1, 1, 1), muted = rgbm(0.6, 0.6, 0.6, 1) },
-    delta = { positive = rgbm(0, 1, 0, 1), negative = rgbm(1, 0, 0, 1) },
+    delta = { positive = rgbm(0, 1, 0, 1), negative = rgbm(1, 0, 0, 1), neutral = rgbm(1, 1, 1, 1) },
     corner = { faster = rgbm(0, 0.8, 0, 0.6), slower = rgbm(0.8, 0, 0, 0.6), onSpeed = rgbm(0.5, 0.5, 0.5, 0.4), focusedBorder = rgbm(0.3, 0.5, 1, 1) },
     marker = { brake = rgbm(1, 0, 0, 1), brakeRef = rgbm(1, 0.3, 0.3, 0.6), apex = rgbm(1, 1, 0, 1), apexRef = rgbm(1, 1, 0.3, 0.6), lift = rgbm(0, 1, 0, 1), liftRef = rgbm(0.3, 1, 0.3, 0.6) },
     score = { bg = rgbm(0.3, 0.3, 0.3, 1), fill = rgbm(0, 0.8, 0.4, 1) },
@@ -328,10 +328,7 @@ package.loaded['theme'] = {
     withAlpha = function(color, alpha) return rgbm(color.r, color.g, color.b, alpha) end,
 }
 
--- Mock ui_utils module
-package.loaded['ui_utils'] = {
-    textFont = function() end,
-    drawDashedLine = function() end,
-}
+-- NOTE: ui_utils is NOT mocked here - it loads the real module
+-- This allows test_ui_utils.lua to test the actual implementation
 
 return mock

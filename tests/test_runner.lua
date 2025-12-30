@@ -101,6 +101,15 @@ function tests.assertTableLength(tbl, expected_len, message)
     end
 end
 
+function tests.assertNotEqual(actual, expected, message)
+    if actual == expected then
+        local msg = string.format("%s\n    Values should not be equal: %s",
+            message or "Values are equal but should differ",
+            tostring(actual))
+        error(msg, 2)
+    end
+end
+
 function tests.summary()
     print("\n" .. string.rep("=", 50))
     print(string.format("Results: %d passed, %d failed", tests.passed, tests.failed))
@@ -121,6 +130,7 @@ _G.suite = tests.suite
 _G.test = tests.test
 _G.assert_true = tests.assert
 _G.assert_equal = tests.assertEqual
+_G.assert_not_equal = tests.assertNotEqual
 _G.assert_near = tests.assertNear
 _G.assert_nil = tests.assertNil
 _G.assert_not_nil = tests.assertNotNil
