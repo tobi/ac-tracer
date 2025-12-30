@@ -58,6 +58,13 @@ local REWIND_GRACE_PERIOD = 1.0  -- Seconds to consider a jump as rewind-related
 local preRewindLapCount = 0    -- Lap count before entering rewind
 local preRewindPosition = 0    -- Spline position before entering rewind
 
+-- Global time tracking (for rewind-aware timing)
+local sessionTime = 0          -- Accumulated session time (affected by rewind)
+local lastRawDt = 0            -- Last raw dt received
+local timeOffset = 0           -- Accumulated offset from rewinds
+local lastUpdateClock = 0      -- os.preciseClock() at last update
+local timeFrozen = false       -- True when time is frozen (car stopped, engine off)
+
 --------------------------------------------------------------------------------
 -- Storage Keys
 --------------------------------------------------------------------------------
@@ -586,6 +593,15 @@ function state.init(car)
                 state.currentLap.completed = false  -- No longer completed
                 local pruned = state.currentLap:pruneToPosition(carPos)
 
+                -- Estimate time offset based on pruned samples (60Hz sample rate)
+                -- Also account for the time from the restored lap that was removed
+                local estimatedTimeOffset = pruned / lap.SAMPLE_RATE
+                if restoredLap.time and restoredLap.time > 0 then
+                    -- Add the full lap time that was "un-completed"
+                    estimatedTimeOffset = estimatedTimeOffset + (restoredLap.time / 1000)
+                end
+                state.applyTimeOffset(estimatedTimeOffset)
+
                 -- Update lap count to match
                 state.lapNumber = carLapCount
 
@@ -595,6 +611,10 @@ function state.init(car)
                 -- Normal rewind within the lap
                 local pruned = state.currentLap:pruneToPosition(carPos)
                 if pruned > 0 then
+                    -- Estimate and apply time offset based on pruned samples
+                    local estimatedTimeOffset = pruned / lap.SAMPLE_RATE
+                    state.applyTimeOffset(estimatedTimeOffset)
+
                     ac.log(string.format("AC Tracer: Rewind detected, pruned %d samples to pos %.3f",
                         pruned, carPos))
                 end
@@ -655,7 +675,22 @@ function state.update(dt, car)
         preRewindPosition = car.splinePosition
         return
     end
-    
+
+    -- Update global time tracking
+    lastRawDt = dt
+
+    -- Optionally freeze time when car is stationary with engine off
+    local shouldFreezeTime = car.speedKmh < 1 and not car.isEngineRunning
+    if shouldFreezeTime then
+        timeFrozen = true
+        -- Don't increment sessionTime when frozen
+    else
+        timeFrozen = false
+        sessionTime = sessionTime + dt
+    end
+
+    lastUpdateClock = os.preciseClock()
+
     -- Detect state for teleport/pit checks
     local inPit = car.isInPitlane or car.isInPit
     local resetDetected = (car.resetCounter or 0) > prevResetCounter
@@ -886,6 +921,48 @@ end
 function state.getGhostApexInRange(startPos, endPos)
     if not state.bestLap then return nil, nil end
     return state.bestLap:findApex(startPos, endPos)
+end
+
+--------------------------------------------------------------------------------
+-- Time Management (rewind-aware)
+--------------------------------------------------------------------------------
+
+--- Get the current session time (affected by rewinds)
+--- This time is continuous and doesn't jump backwards on rewind
+---@return number Session time in seconds
+function state.time()
+    return sessionTime
+end
+
+--- Get the last dt value (adjusted for any time corrections)
+---@return number Delta time in seconds
+function state.dt()
+    return lastRawDt
+end
+
+--- Check if time is currently frozen
+---@return boolean
+function state.isTimeFrozen()
+    return timeFrozen
+end
+
+--- Apply a time offset (used when rewind is detected)
+--- This adjusts the session time backwards
+---@param offset number Time to subtract (positive = rewind)
+function state.applyTimeOffset(offset)
+    timeOffset = timeOffset + offset
+    sessionTime = math.max(0, sessionTime - offset)
+    ac.log(string.format("AC Tracer: Applied time offset %.3fs, new sessionTime: %.3fs", offset, sessionTime))
+end
+
+--- Reset time tracking (called on session change or major reset)
+function state.resetTime()
+    sessionTime = 0
+    lastRawDt = 0
+    timeOffset = 0
+    lastUpdateClock = os.preciseClock()
+    timeFrozen = false
+    ac.log("AC Tracer: Time tracking reset")
 end
 
 --------------------------------------------------------------------------------

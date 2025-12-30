@@ -554,25 +554,30 @@ function lap:findEntrySpeed(startPos, endPos)
     return maxSpeed > 0 and maxSpeed or nil
 end
 
---- Find exit speed (max speed in second half of corner or after min speed point)
+--- Find exit speed (max speed in last 1/3 of corner)
 ---@param startPos number Start of corner
 ---@param endPos number End of corner
 ---@return number|nil exitSpeed Max speed in exit phase
 function lap:findExitSpeed(startPos, endPos)
     if self:isEmpty() then return nil end
-    -- First find the apex (min speed position)
-    local apexPos, _ = self:findApex(startPos, endPos)
-    if not apexPos then return self:getValueAtPos('speed', endPos) end
 
-    -- Find max speed from apex to end
+    -- Calculate the last 1/3 of the corner
+    local cornerLength = endPos - startPos
+    if cornerLength < 0 then cornerLength = cornerLength + 1 end  -- Handle wrap-around
+
+    local lastThirdStart = endPos - cornerLength / 3
+    if lastThirdStart < 0 then lastThirdStart = lastThirdStart + 1 end
+
+    -- Find max speed in the last 1/3 of the corner
     local maxSpeed = 0
     for i = 1, #self.pos do
         local pos = self.pos[i]
         local inRange
-        if apexPos <= endPos then
-            inRange = pos >= apexPos and pos <= endPos
+        if lastThirdStart <= endPos then
+            inRange = pos >= lastThirdStart and pos <= endPos
         else
-            inRange = pos >= apexPos or pos <= endPos
+            -- Handle wrap-around
+            inRange = pos >= lastThirdStart or pos <= endPos
         end
 
         if inRange then

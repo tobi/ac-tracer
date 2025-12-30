@@ -487,6 +487,86 @@ end
 -- Window Management
 --------------------------------------------------------------------------------
 
+-- Auto-hide state tracking
+local autoHideState = {
+    hiddenWindows = {},      -- { windowId = true } for windows we auto-hid
+    timeBelowThreshold = 0,  -- Seconds spent below speed threshold
+    wasAboveThreshold = false, -- Were we above threshold last frame?
+}
+local AUTO_HIDE_RESHOW_DELAY = 4.0  -- Seconds below threshold before re-showing
+
+--- Update auto-hide for speed-based window management
+--- Call this from script.update() with dt and current speed
+---@param dt number Delta time
+---@param speed number Current speed (km/h)
+---@param speedThreshold number Speed threshold for hiding
+---@param windowIds table Array of window IDs to manage (e.g., {"main", "telemetry"})
+function ui_utils.updateAutoHide(dt, speed, speedThreshold, windowIds)
+    local isAboveThreshold = speed > speedThreshold
+
+    if isAboveThreshold then
+        -- Above threshold - hide windows that are visible
+        autoHideState.timeBelowThreshold = 0
+        autoHideState.wasAboveThreshold = true
+
+        for _, windowId in ipairs(windowIds) do
+            if ui_utils.isWindowVisible(windowId) and not autoHideState.hiddenWindows[windowId] then
+                -- Window is visible and we haven't already hidden it - hide it now
+                ui_utils.setWindowVisible(windowId, false)
+                autoHideState.hiddenWindows[windowId] = true
+            end
+        end
+    else
+        -- Below threshold
+        if autoHideState.wasAboveThreshold then
+            -- Just dropped below threshold - start timer
+            autoHideState.timeBelowThreshold = 0
+        end
+
+        autoHideState.timeBelowThreshold = autoHideState.timeBelowThreshold + dt
+
+        -- Re-show after delay
+        if autoHideState.timeBelowThreshold >= AUTO_HIDE_RESHOW_DELAY then
+            for windowId, wasAutoHidden in pairs(autoHideState.hiddenWindows) do
+                if wasAutoHidden then
+                    ui_utils.setWindowVisible(windowId, true)
+                end
+            end
+            autoHideState.hiddenWindows = {}
+        end
+
+        autoHideState.wasAboveThreshold = false
+    end
+end
+
+--- Check if a window is currently auto-hidden
+---@param windowId string Window ID
+---@return boolean
+function ui_utils.isAutoHidden(windowId)
+    return autoHideState.hiddenWindows[windowId] == true
+end
+
+--- Reset auto-hide state (e.g., on session change)
+function ui_utils.resetAutoHide()
+    autoHideState.hiddenWindows = {}
+    autoHideState.timeBelowThreshold = 0
+    autoHideState.wasAboveThreshold = false
+end
+
+--- Set window visibility directly
+---@param windowId string Window ID
+---@param visible boolean
+---@param appName string|nil App name (default "AC Tracer")
+function ui_utils.setWindowVisible(windowId, visible, appName)
+    appName = appName or "AC Tracer"
+    local windowName = "IMGUI_LUA_" .. appName .. "_" .. windowId
+    local acc = ac.accessAppWindow(windowName)
+
+    if acc and acc:valid() then
+        acc:setVisible(visible)
+    end
+end
+
 --- Open a window, bringing it to foreground if already visible (no alert)
 ---@param windowId string Window ID (e.g., "corners", "telemetry")
 ---@param appName string|nil App name (default "AC Tracer")

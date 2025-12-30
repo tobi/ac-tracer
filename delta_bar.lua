@@ -21,7 +21,12 @@ local config = {
 local smoothedBarWidth = 0
 local smoothedDelta = 0
 local displayDelta = 0
-local smoothedDeltaRate = 0  -- Rate of change of delta (negative = gaining, positive = losing)
+
+-- Speed difference tracking (2-second window)
+local speedDiffHistory = {}  -- {time, speedDiff} pairs
+local SPEED_WINDOW = 2.0     -- 2-second window for speed comparison
+local avgSpeedDiff = 0       -- Average speed diff over window (positive = faster than ghost)
+local SPEED_NEUTRAL_THRESHOLD = 2.0  -- km/h difference considered neutral (white)
 
 -- Lap completion display
 local lastLapCount = 0
@@ -29,11 +34,10 @@ local lastLapTime = 0       -- The completed lap time in ms
 local lastLapDelta = 0      -- Delta at lap completion
 local lapCompleteTimer = 0  -- Seconds since lap completed
 
--- Update throttling (2 Hz)
+-- Update throttling (2 Hz for delta, but speed updates every frame)
 local updateInterval = 1 / 2
 local updateTimer = 0
 local lastDelta = 0
-local prevDelta = 0         -- Previous delta for rate calculation
 
 --------------------------------------------------------------------------------
 -- Drawing
@@ -51,14 +55,42 @@ function delta_bar.draw(dt)
     local padding = 10
 
     -- Skip updates during replay/rewind (keep showing last known values)
+    local now = state.time()  -- Use session time (rewind-aware)
     if not sim.isReplayActive and not sim.isPaused then
-        -- Throttle updates to 2 Hz
+        -- Track speed difference vs ghost every frame
+        local currentPos = car.splinePosition
+        local currentSpeed = car.speedKmh
+        local ghostSpeed = state.getGhostValueAt('speed', currentPos)
+
+        if ghostSpeed and ghostSpeed > 0 then
+            local speedDiff = currentSpeed - ghostSpeed  -- positive = faster than ghost
+            table.insert(speedDiffHistory, { time = now, diff = speedDiff })
+        end
+
+        -- Remove entries older than 2 seconds (or entries from "future" after rewind)
+        while #speedDiffHistory > 0 and (now - speedDiffHistory[1].time) > SPEED_WINDOW do
+            table.remove(speedDiffHistory, 1)
+        end
+        -- Also remove any entries with time > now (happens after rewind)
+        while #speedDiffHistory > 0 and speedDiffHistory[#speedDiffHistory].time > now do
+            table.remove(speedDiffHistory)
+        end
+
+        -- Calculate average speed difference over the window
+        if #speedDiffHistory > 0 then
+            local sum = 0
+            for _, entry in ipairs(speedDiffHistory) do
+                sum = sum + entry.diff
+            end
+            avgSpeedDiff = sum / #speedDiffHistory
+        else
+            avgSpeedDiff = 0
+        end
+
+        -- Throttle delta updates to 2 Hz
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
-
-            -- Store previous delta before updating
-            prevDelta = lastDelta
             lastDelta = state.getDelta()  -- positive = behind/slower
         end
     end
@@ -67,11 +99,6 @@ function delta_bar.draw(dt)
     smoothedDelta = smoothedDelta + (lastDelta - smoothedDelta) * config.textSmoothing
     displayDelta = math.floor(smoothedDelta * 100 + 0.5) / 100  -- 2 decimal places
 
-    -- Calculate delta rate of change (how fast delta is changing)
-    -- Negative = gaining time (good), Positive = losing time (bad)
-    local deltaRate = lastDelta - prevDelta
-    smoothedDeltaRate = smoothedDeltaRate + (deltaRate - smoothedDeltaRate) * 0.2
-
     -- Calculate bar width
     local barWidth = windowSize.x - padding * 2
     local maxBarHalf = barWidth / 2 - 2
@@ -79,30 +106,25 @@ function delta_bar.draw(dt)
     local targetFillWidth = normalizedDelta * maxBarHalf
     smoothedBarWidth = smoothedBarWidth + (targetFillWidth - smoothedBarWidth) * config.barSmoothing
 
-    -- Bar color based on delta rate of change (like iRacing)
-    -- Negative rate = delta decreasing = gaining time = GREEN
-    -- Positive rate = delta increasing = losing time = RED
-    local rateThreshold = 0.005  -- Threshold to consider as gaining/losing
-    local barColor
-    if smoothedDeltaRate < -rateThreshold then
-        -- Delta decreasing = gaining time - GREEN
-        barColor = theme.delta.positive
-    elseif smoothedDeltaRate > rateThreshold then
-        -- Delta increasing = losing time - RED
-        barColor = theme.delta.negative
-    else
-        -- Neutral - use overall delta for color
-        barColor = smoothedDelta < 0 and theme.delta.positive or theme.delta.negative
-    end
-
-    local textColor
+    -- Color based on 2-second average speed difference vs ghost
+    -- Positive avgSpeedDiff = faster than ghost = GREEN
+    -- Negative avgSpeedDiff = slower than ghost = RED
+    -- Near zero = WHITE (neutral)
+    local barColor, textColor
     if not state.hasBestLap() then
+        barColor = theme.text.muted
         textColor = theme.text.muted
-    elseif displayDelta < -0.01 then
+    elseif avgSpeedDiff > SPEED_NEUTRAL_THRESHOLD then
+        -- Faster than ghost - GREEN
+        barColor = theme.delta.positive
         textColor = theme.delta.positive
-    elseif displayDelta > 0.01 then
+    elseif avgSpeedDiff < -SPEED_NEUTRAL_THRESHOLD then
+        -- Slower than ghost - RED
+        barColor = theme.delta.negative
         textColor = theme.delta.negative
     else
+        -- Neutral - WHITE
+        barColor = theme.text.primary
         textColor = theme.text.primary
     end
 
@@ -245,10 +267,10 @@ function delta_bar.reset()
     smoothedBarWidth = 0
     smoothedDelta = 0
     displayDelta = 0
-    smoothedDeltaRate = 0
+    speedDiffHistory = {}
+    avgSpeedDiff = 0
     updateTimer = 0
     lastDelta = 0
-    prevDelta = 0
 end
 
 return delta_bar

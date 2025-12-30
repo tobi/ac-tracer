@@ -922,19 +922,6 @@ end
 function lap_telemetry.draw(dt)
     local car = ac.getCar(0)
 
-    -- Auto-hide when traveling above speed threshold
-    if settings.telemetryAutoHide and car and car.speedKmh > settings.telemetryAutoHideSpeed then
-        -- Draw minimal collapsed indicator
-        ui.drawRectFilled(vec2(0, 0), vec2(100, 22), theme.bg.collapsed, 4)
-        ui.setCursor(vec2(8, 3))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.accent)
-        ui.text("Telemetry")
-        ui.popStyleColor()
-        ui.popFont()
-        return
-    end
-
     local windowSize = ui.availableSpace()
     if windowSize.x <= 0 or windowSize.y <= 0 then return end
 
