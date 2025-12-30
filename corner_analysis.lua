@@ -752,7 +752,7 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     
     local currentPos = car.splinePosition
     local currentSpeed = car.speedKmh
-    local isBraking = extended_brake.getNormalizedBrake(car) >= BRAKE_THRESHOLD
+     local isBraking = extended_brake.getBrakePressureBar(car) >= BRAKE_THRESHOLD
     local isFullThrottle = car.gas >= THROTTLE_ON_THRESHOLD
     
     local normalizedSteering = lap.normalizeSteer(car.steer)

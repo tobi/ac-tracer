@@ -905,16 +905,16 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     drawRow("Throttle", ui_utils.formatPercent(cursorValues.throttle or 0, 1), theme.trace.throttle,
         cursorValues.refThrottle and string.format("(%.1f%%)", cursorValues.refThrottle * 100))
 
-    -- Brake Front (brake = front)
-    drawRow("Brake F", ui_utils.formatPercent(cursorValues.brake or 0, 1), theme.trace.brake,
-        cursorValues.refBrake and string.format("(%.1f%%)", cursorValues.refBrake * 100))
+     -- Brake Front (brake = front, in bar)
+     drawRow("Brake F", string.format("%.0f bar", cursorValues.brake or 0), theme.trace.brake,
+         cursorValues.refBrake and string.format("(%.0f)", cursorValues.refBrake))
 
-    -- Brake Rear (show if data exists)
-    local hasBrakeR = selectedLap.brake_r and #selectedLap.brake_r > 0
-    if hasBrakeR then
-        drawRow("Brake R", ui_utils.formatPercent(cursorValues.brake_r or 0, 1), theme.trace.brake,
-            cursorValues.refBrake_r and string.format("(%.1f%%)", cursorValues.refBrake_r * 100))
-    end
+     -- Brake Rear (show if data exists, in bar)
+     local hasBrakeR = selectedLap.brake_r and #selectedLap.brake_r > 0
+     if hasBrakeR then
+         drawRow("Brake R", string.format("%.0f bar", cursorValues.brake_r or 0), theme.trace.brake,
+             cursorValues.refBrake_r and string.format("(%.0f)", cursorValues.refBrake_r))
+     end
 
     -- Speed
     drawRow("Speed", string.format("%.1f", cursorValues.speed or 0), theme.trace.speed,
@@ -1492,8 +1492,9 @@ function lap_telemetry.draw(dt, context)
 
         y = y + traceH + tracePadding
 
-         -- Brake
-         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:brakeAt(p) end, theme.trace.brake, theme.ghost.brake, 0, 1, "Brake", "")
+         -- Brake (scale to brakeScaleBar from state)
+         local brakeScale = ctx and ctx.brakeScaleBar or 100
+         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:brakeAt(p) end, theme.trace.brake, theme.ghost.brake, 0, brakeScale, "Brake", " bar")
         y = y + traceH + tracePadding
 
         -- Speed
