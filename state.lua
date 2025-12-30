@@ -988,7 +988,8 @@ end
 ---@return table|nil Traces { throttle={}, brake={}, ... }
 function state.getGhostTraces(positions)
     if not state.bestLap then return nil end
-    return state.bestLap:getTracesAt(positions)
+    -- Use 100 bar normalization to match extended_brake.getNormalizedBrake()
+    return state.bestLap:getTracesAt(positions, 100)
 end
 
 --- Check if we have a best lap

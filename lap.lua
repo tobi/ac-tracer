@@ -690,10 +690,13 @@ function lap:timeAt(pos) return self:getTimeAtPos(pos) end
 
 --- Get traces for display, matched to specified positions
 ---@param positions table Array of spline positions to match
+---@param maxBar number? Max brake pressure for normalization (default 100)
 ---@return table|nil traces { throttle={}, brake={}, clutch={}, steering={}, speed={}, gear={} }
-function lap:getTracesAt(positions)
+function lap:getTracesAt(positions, maxBar)
     if not positions or #positions < 1 then return nil end
-    
+
+    maxBar = maxBar or 100  -- Default to 100 bar for normalization
+
     local traces = {
         throttle = {},
         brake = {},
@@ -702,17 +705,17 @@ function lap:getTracesAt(positions)
         speed = {},
         gear = {}
     }
-    
+
     for i = 1, #positions do
         local pos = positions[i]
         table.insert(traces.throttle, self:throttleAt(pos) or 0)
-        table.insert(traces.brake, self:brakeAt(pos) or 0)
+        table.insert(traces.brake, self:brakePercentAt(pos, maxBar) or 0)
         table.insert(traces.clutch, self:clutchAt(pos) or 0)
         table.insert(traces.steering, self:steeringAt(pos) or 0.5)
         table.insert(traces.speed, self:speedAt(pos) or 0)
         table.insert(traces.gear, self:gearAt(pos) or 0)
     end
-    
+
     return traces
 end
 

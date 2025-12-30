@@ -345,10 +345,36 @@ test("getTracesAt returns all fields", function()
     assert_not_nil(barcelonaLap, "Lap should be loaded")
     local positions = {0.1, 0.2, 0.3, 0.4, 0.5}
     local traces = barcelonaLap:getTracesAt(positions)
-    
+
     assert_not_nil(traces, "Should return traces")
     assert_equal(#traces.throttle, 5, "Should have 5 throttle values")
     assert_equal(#traces.brake, 5, "Should have 5 brake values")
     assert_equal(#traces.speed, 5, "Should have 5 speed values")
     assert_equal(#traces.steering, 5, "Should have 5 steering values")
+end)
+
+test("getTracesAt returns normalized brake values (0-1)", function()
+    assert_not_nil(barcelonaLap, "Lap should be loaded")
+    local positions = {0.1, 0.2, 0.3, 0.4, 0.5}
+    local traces = barcelonaLap:getTracesAt(positions)
+
+    assert_not_nil(traces, "Should return traces")
+    for i, brake in ipairs(traces.brake) do
+        assert_true(brake >= 0, "Brake should be >= 0 at position " .. i)
+        assert_true(brake <= 1, "Brake should be <= 1 (normalized) at position " .. i)
+    end
+end)
+
+test("getTracesAt brake normalization matches brakePercentAt", function()
+    assert_not_nil(barcelonaLap, "Lap should be loaded")
+    local positions = {0.1, 0.3, 0.5, 0.7, 0.9}
+    local maxBar = 100  -- Default normalization
+
+    local traces = barcelonaLap:getTracesAt(positions, maxBar)
+
+    for i, pos in ipairs(positions) do
+        local expected = barcelonaLap:brakePercentAt(pos, maxBar) or 0
+        assert_near(traces.brake[i], expected, 0.001,
+            string.format("Brake at pos %.1f should match brakePercentAt", pos))
+    end
 end)

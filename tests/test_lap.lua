@@ -677,21 +677,90 @@ test("steeringDegAt converts to degrees", function()
     assert_true(l:steeringDegAt(1.0) < 0, "0.75 norm = negative degrees (right)")
 end)
 
-test("getTracesAt returns brake in bar", function()
+test("getTracesAt returns normalized brake (0-1) by default", function()
     local l = lap.new("track", "car")
-    
+
     l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
-    l.brake = { 0, 30, 90, 60, 0 }
+    l.brake = { 0, 30, 100, 60, 0 }  -- bar values
     l.throttle = { 1, 0.5, 0, 0.5, 1 }
     l.clutch = { 0, 0, 0, 0, 0 }
     l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
     l.speed = { 200, 150, 100, 130, 180 }
-    
+    l.gear = { 5, 4, 3, 4, 5 }
+
+    -- Default maxBar is 100, so values should be normalized to 0-1
     local traces = l:getTracesAt({ 0.25, 0.5, 0.75 })
-    
-    assert_equal(traces.brake[1], 30, "Brake at 0.25 should be 30 bar")
-    assert_equal(traces.brake[2], 90, "Brake at 0.5 should be 90 bar")
-    assert_equal(traces.brake[3], 60, "Brake at 0.75 should be 60 bar")
+
+    assert_equal(traces.brake[1], 0.3, "30 bar / 100 = 0.3")
+    assert_equal(traces.brake[2], 1.0, "100 bar / 100 = 1.0")
+    assert_equal(traces.brake[3], 0.6, "60 bar / 100 = 0.6")
+end)
+
+test("getTracesAt normalizes brake using custom maxBar", function()
+    local l = lap.new("track", "car")
+
+    l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
+    l.brake = { 0, 25, 50, 75, 100 }  -- bar values
+    l.throttle = { 1, 0.5, 0, 0.5, 1 }
+    l.clutch = { 0, 0, 0, 0, 0 }
+    l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
+    l.speed = { 200, 150, 100, 130, 180 }
+    l.gear = { 5, 4, 3, 4, 5 }
+
+    -- Use maxBar = 50 for normalization
+    local traces = l:getTracesAt({ 0.25, 0.5, 0.75, 1.0 }, 50)
+
+    assert_equal(traces.brake[1], 0.5, "25 bar / 50 = 0.5")
+    assert_equal(traces.brake[2], 1.0, "50 bar / 50 = 1.0 (clamped)")
+    assert_equal(traces.brake[3], 1.0, "75 bar / 50 = 1.0 (clamped to 1)")
+    assert_equal(traces.brake[4], 1.0, "100 bar / 50 = 1.0 (clamped to 1)")
+end)
+
+test("getTracesAt returns all trace fields", function()
+    local l = lap.new("track", "car")
+
+    l.pos = { 0.0, 0.5, 1.0 }
+    l.brake = { 0, 50, 0 }
+    l.throttle = { 1, 0, 1 }
+    l.clutch = { 0.1, 0.5, 0 }
+    l.steering = { 0.5, 0.3, 0.7 }
+    l.speed = { 200, 100, 200 }
+    l.gear = { 5, 3, 5 }
+
+    local traces = l:getTracesAt({ 0.5 })
+
+    assert_type(traces.throttle, "table")
+    assert_type(traces.brake, "table")
+    assert_type(traces.clutch, "table")
+    assert_type(traces.steering, "table")
+    assert_type(traces.speed, "table")
+    assert_type(traces.gear, "table")
+
+    assert_equal(#traces.throttle, 1)
+    assert_equal(traces.throttle[1], 0)
+    assert_equal(traces.brake[1], 0.5)  -- 50 bar / 100 = 0.5
+    assert_equal(traces.clutch[1], 0.5)
+    assert_near(traces.steering[1], 0.3, 0.01)
+    assert_equal(traces.speed[1], 100)
+    assert_equal(traces.gear[1], 3)
+end)
+
+test("getTracesAt handles empty positions", function()
+    local l = lap.new("track", "car")
+    l.pos = { 0.0, 1.0 }
+    l.brake = { 0, 100 }
+
+    local traces = l:getTracesAt({})
+    assert_nil(traces)
+end)
+
+test("getTracesAt handles nil positions", function()
+    local l = lap.new("track", "car")
+    l.pos = { 0.0, 1.0 }
+    l.brake = { 0, 100 }
+
+    local traces = l:getTracesAt(nil)
+    assert_nil(traces)
 end)
 
 test("realistic race car braking profile", function()

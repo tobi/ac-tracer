@@ -168,9 +168,15 @@ end
 
 --- Helper to sample pedal traces from a lap in a position range
 --- (Defined early so it can be used by setViewedCorner)
-local function samplePedalTraces(lapData, startPos, endPos, numSamples)
+---@param lapData table Lap instance
+---@param startPos number Start position
+---@param endPos number End position
+---@param numSamples number Number of samples
+---@param maxBar number? Max brake pressure for normalization (default 100)
+local function samplePedalTraces(lapData, startPos, endPos, numSamples, maxBar)
     if not lapData or lapData:length() == 0 then return nil end
 
+    maxBar = maxBar or 100
     local traces = { throttle = {}, brake = {} }
     local posRange = endPos - startPos
     if posRange <= 0 then posRange = posRange + 1 end
@@ -179,7 +185,7 @@ local function samplePedalTraces(lapData, startPos, endPos, numSamples)
         local pos = startPos + (i / numSamples) * posRange
         if pos > 1 then pos = pos - 1 end
         local throttle = lapData:throttleAt(pos) or 0
-        local brake = lapData:brakeAt(pos) or 0
+        local brake = lapData:brakePercentAt(pos, maxBar) or 0
         table.insert(traces.throttle, throttle)
         table.insert(traces.brake, brake)
     end
@@ -397,15 +403,15 @@ local function analyzeBrakePressure(currentLap, refLap, data)
     if not currentLap or not refLap then return nil end
     if not data.refStartPos or not data.refEndPos then return nil end
 
-    -- Find max brake pressure in corner for both laps
-    local currentMaxBrake = 0
-    local refMaxBrake = 0
+    -- Find max brake pressure in corner for both laps (values are in bar)
+    local currentMaxBrakeBar = 0
+    local refMaxBrakeBar = 0
 
     for i = 1, #currentLap.pos do
         local pos = currentLap.pos[i]
         if pos >= data.refStartPos and pos <= data.refEndPos then
             local brake = currentLap.brake[i] or 0
-            if brake > currentMaxBrake then currentMaxBrake = brake end
+            if brake > currentMaxBrakeBar then currentMaxBrakeBar = brake end
         end
     end
 
@@ -413,16 +419,21 @@ local function analyzeBrakePressure(currentLap, refLap, data)
         local pos = refLap.pos[i]
         if pos >= data.refStartPos and pos <= data.refEndPos then
             local brake = refLap.brake[i] or 0
-            if brake > refMaxBrake then refMaxBrake = brake end
+            if brake > refMaxBrakeBar then refMaxBrakeBar = brake end
         end
     end
 
-    -- Only report if significant difference (> 15%)
-    local diff = currentMaxBrake - refMaxBrake
-    if math.abs(diff) < 0.15 then return nil end
+    -- Normalize using max of both laps for consistent comparison
+    local maxBar = math.max(currentMaxBrakeBar, refMaxBrakeBar, 1)  -- Avoid division by zero
+    local currentPct = (currentMaxBrakeBar / maxBar) * 100
+    local refPct = (refMaxBrakeBar / maxBar) * 100
 
-    local dir = diff < 0 and "lighter" or "harder"
-    return { text = string.format("%s braking (%.0f%% vs %.0f%%)", dir, currentMaxBrake * 100, refMaxBrake * 100), severity = "info" }
+    -- Only report if significant difference (> 15% of max)
+    local diffPct = currentPct - refPct
+    if math.abs(diffPct) < 15 then return nil end
+
+    local dir = diffPct < 0 and "lighter" or "harder"
+    return { text = string.format("%s braking (%.0f%% vs %.0f%%)", dir, currentPct, refPct), severity = "info" }
 end
 
 --- Analyze entry speed warning (significantly different from reference)
@@ -504,8 +515,8 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         entrySpeed = entrySpeed,
         apexSpeed = apexSpeed,
         exitSpeed = exitSpeed,
-        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold),
-        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold),
+        brakePos = lapData:findBrakePoint(cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold()),
+        liftOffPos = lapData:findLiftPoint(cornerDef.startPos, cornerDef.endPos, settings.throttleThreshold()),
         maxSteeringDeg = lapData:findMaxSteering(cornerDef.startPos, cornerDef.endPos),
         minGear = lapData:findMinGear(cornerDef.startPos, cornerDef.endPos),
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
@@ -607,10 +618,15 @@ function corner_analysis.compare(cornerDef, currentLap, referenceLap, opts)
     local currentSpeeds = opts and opts.currentSpeeds or sampleSpeedTrace(currentLap, cornerDef.startPos, cornerDef.endPos, numSpeedSamples)
     local refSpeeds = opts and opts.refSpeeds or captureRefSpeeds(referenceLap, currentSpeeds)
 
+    -- Calculate maxBar from both laps for consistent brake scaling
+    local currentMaxBar = currentLap and currentLap:maxBrakeBars() or 100
+    local refMaxBar = referenceLap and referenceLap:maxBrakeBars() or 100
+    local maxBar = math.max(currentMaxBar, refMaxBar, 80) * 1.1  -- 10% headroom, minimum 80
+
     data.currentSpeeds = currentSpeeds
     data.refSpeeds = refSpeeds
-    data.currentPedals = samplePedalTraces(currentLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples)
-    data.refPedals = samplePedalTraces(referenceLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples)
+    data.currentPedals = samplePedalTraces(currentLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples, maxBar)
+    data.refPedals = samplePedalTraces(referenceLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples, maxBar)
 
     if opts and opts.timeDeltaOverride ~= nil then
         data.timeDelta = opts.timeDeltaOverride
