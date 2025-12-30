@@ -1,3 +1,8 @@
+---
+name: csp-lua
+description: CSP (Custom Shaders Patch) Lua API reference for Assetto Corsa modding. Use when working with ac.*, ui.*, render.*, physics.* APIs or any CSP Lua code.
+---
+
 # CSP Lua API Reference Skill
 
 Use this skill when working with CSP (Custom Shaders Patch) Lua code for Assetto Corsa.

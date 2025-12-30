@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "LuaJIT",
+  "workspace.library": [
+    ".claude/skills/csp-lua/reference",
+    ".claude/skills/csp-lua/reference/sdk",
+    ".claude/skills/csp-lua/reference/sdk/common"
+  ],
+  "diagnostics.globals": [
+    "ac",
+    "ui",
+    "render",
+    "physics",
+    "script",
+    "web",
+    "display",
+    "vec2",
+    "vec3",
+    "vec4",
+    "rgb",
+    "rgbm",
+    "hsv",
+    "quat",
+    "mat3x3",
+    "mat4x4",
+    "refbool",
+    "refnumber"
+  ],
+  "diagnostics.disable": [
+    "lowercase-global"
+  ]
+}
