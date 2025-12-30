@@ -352,6 +352,9 @@ function corner_analysis.update(car)
     if car.lapCount ~= lastLapCount then
         lastLapCount = car.lapCount
         resetLiveCorner()
+        -- Clear displayed corner data from previous lap
+        displayData = nil
+        displayScore = 0
     end
     
     currentLapTime = car.lapTimeMs / 1000
