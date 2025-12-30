@@ -1383,19 +1383,30 @@ function corner_analysis.draw(dt, useKmh)
         -- NOTES section (only shown if there are significant observations)
         local notes = collectCornerNotes(displayData, currentLap, refLap, speedUnit)
 
-        -- Draw notes section if we have any
-        if #notes > 0 then
-            statsY = statsY + 8
-
-            -- NOTES section header
-            ui.setCursor(vec2(panelInnerX, statsY))
-            ui_utils.textFont("Notes", ui.Font.Main, theme.text.primary)
-            statsY = statsY + 20
-            ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
-            statsY = statsY + 6
-
+        -- Draw notes section if we have any valid notes
+        if notes and #notes > 0 then
+            -- Count valid notes (those with actual text)
+            local validNotes = {}
             for _, note in ipairs(notes) do
-                drawNote(note)
+                if note and note.text and note.text ~= "" then
+                    table.insert(validNotes, note)
+                end
+            end
+
+            -- Only draw section if there are valid notes
+            if #validNotes > 0 then
+                statsY = statsY + 8
+
+                -- NOTES section header
+                ui.setCursor(vec2(panelInnerX, statsY))
+                ui_utils.textFont("Notes", ui.Font.Main, theme.text.primary)
+                statsY = statsY + 20
+                ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
+                statsY = statsY + 6
+
+                for _, note in ipairs(validNotes) do
+                    drawNote(note)
+                end
             end
         end
 
