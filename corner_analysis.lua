@@ -432,25 +432,24 @@ end
 
 --- Analyze entry speed warning (significantly different from reference)
 ---@param data table Corner comparison data
----@param speedUnit string "km/h" or "mph"
 ---@return table|nil Note {text, severity} about entry speed, or nil if similar
-local function analyzeEntrySpeed(data, speedUnit)
+local function analyzeEntrySpeed(data)
     if not data.entrySpeedDelta then return nil end
 
     -- Only warn if > 10 km/h difference
     if math.abs(data.entrySpeedDelta) < 10 then return nil end
 
     local dir = data.entrySpeedDelta > 0 and "faster" or "slower"
-    return { text = string.format("entry %.0f %s %s", math.abs(data.entrySpeedDelta), speedUnit, dir), severity = "info" }
+    local displayDelta = ui_utils.speed(math.abs(data.entrySpeedDelta))
+    return { text = string.format("entry %.0f %s %s", displayDelta, ui_utils.speedUnit(), dir), severity = "info" }
 end
 
 --- Collect all corner notes by running analysis functions
 ---@param data table Corner comparison data
 ---@param currentLap table Current lap data (optional, for flag-based analysis)
 ---@param refLap table Reference lap data (optional, for comparisons)
----@param speedUnit string Speed unit string ("km/h" or "mph")
 ---@return table Array of note tables {text, severity} (may be empty)
-local function collectCornerNotes(data, currentLap, refLap, speedUnit)
+local function collectCornerNotes(data, currentLap, refLap)
     local notes = {}
 
     -- Helper to add note if not nil
@@ -463,7 +462,7 @@ local function collectCornerNotes(data, currentLap, refLap, speedUnit)
     addNote(analyzeSteeringInput(data))
     addNote(analyzeGearUsage(data))
     addNote(analyzeCoasting(data))
-    addNote(analyzeEntrySpeed(data, speedUnit))
+    addNote(analyzeEntrySpeed(data))
 
     -- Lap-based analysis (flags, pressure, timing)
     if currentLap then
@@ -1191,7 +1190,7 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
 end
 
 --- Main window rendering
-function corner_analysis.draw(dt, useKmh, currentLap, referenceLap, corners)
+function corner_analysis.draw(dt, currentLap, referenceLap, corners)
     local windowSize = ui.availableSpace()
     local padding = 8
     local panelX = windowSize.x * 0.68
@@ -1206,7 +1205,6 @@ function corner_analysis.draw(dt, useKmh, currentLap, referenceLap, corners)
     local topSectionH = 100  -- First 100px for delta time and score
     local gaugeRadius = 25
     local lineH = 18
-    local speedUnit = useKmh and "km/h" or "mph"
 
     -- Right panel dimensions
     local panelW = windowSize.x - panelX - padding
@@ -1399,9 +1397,9 @@ function corner_analysis.draw(dt, useKmh, currentLap, referenceLap, corners)
         local apexDelta = displayData.apexSpeedDelta
         local exitDelta = displayData.exitSpeedDelta
 
-        drawStatRow("Entry", entryDelta and string.format("%+.0f %s", entryDelta, speedUnit) or "—", getSpeedDeltaColor(entryDelta))
-        drawStatRow("Apex", apexDelta and string.format("%+.0f %s", apexDelta, speedUnit) or "—", getSpeedDeltaColor(apexDelta))
-        drawStatRow("Exit", exitDelta and string.format("%+.0f %s", exitDelta, speedUnit) or "—", getSpeedDeltaColor(exitDelta))
+        drawStatRow("Entry", entryDelta and ui_utils.speedDeltaDisplay(entryDelta, true) or "—", getSpeedDeltaColor(entryDelta))
+        drawStatRow("Apex", apexDelta and ui_utils.speedDeltaDisplay(apexDelta, true) or "—", getSpeedDeltaColor(apexDelta))
+        drawStatRow("Exit", exitDelta and ui_utils.speedDeltaDisplay(exitDelta, true) or "—", getSpeedDeltaColor(exitDelta))
 
         statsY = statsY + 8
 
@@ -1442,7 +1440,7 @@ function corner_analysis.draw(dt, useKmh, currentLap, referenceLap, corners)
         end
 
         -- NOTES section (only shown if there are significant observations)
-        local notes = collectCornerNotes(displayData, liveLap, refLap, speedUnit)
+        local notes = collectCornerNotes(displayData, liveLap, refLap)
 
         -- Draw notes section if we have any valid notes
         if notes and #notes > 0 then

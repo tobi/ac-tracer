@@ -2,8 +2,63 @@
 -- Common drawing helpers used across multiple windows
 
 local theme = require('theme')
+local settings = require('app_settings')
 
 local ui_utils = {}
+
+--------------------------------------------------------------------------------
+-- Speed Display (handles km/h vs mph conversion based on settings)
+--------------------------------------------------------------------------------
+
+local KMH_TO_MPH = 0.621371
+
+--- Convert speed from km/h to display units (km/h or mph based on settings)
+---@param kmh number Speed in km/h
+---@return number Speed in display units
+function ui_utils.speed(kmh)
+    if not kmh then return 0 end
+    if settings.useKMH then
+        return kmh
+    else
+        return kmh * KMH_TO_MPH
+    end
+end
+
+--- Get the current speed unit string
+---@return string "km/h" or "mph"
+function ui_utils.speedUnit()
+    return settings.useKMH and "km/h" or "mph"
+end
+
+--- Format speed for display (converts and adds unit)
+---@param kmh number Speed in km/h
+---@param includeUnit boolean|nil Include unit suffix (default true)
+---@return string Formatted speed (e.g., "150 km/h" or "93 mph")
+function ui_utils.speedDisplay(kmh, includeUnit)
+    if not kmh then return "--" end
+    if includeUnit == nil then includeUnit = true end
+    local displaySpeed = ui_utils.speed(kmh)
+    if includeUnit then
+        return string.format("%.0f %s", displaySpeed, ui_utils.speedUnit())
+    else
+        return string.format("%.0f", displaySpeed)
+    end
+end
+
+--- Format speed delta for display (converts to display units)
+---@param deltaKmh number Speed delta in km/h
+---@param includeUnit boolean|nil Include unit suffix (default false)
+---@return string Formatted delta (e.g., "+5" or "+5 km/h")
+function ui_utils.speedDeltaDisplay(deltaKmh, includeUnit)
+    if not deltaKmh then return "--" end
+    local displayDelta = ui_utils.speed(deltaKmh)
+    local sign = displayDelta >= 0 and "+" or ""
+    if includeUnit then
+        return string.format("%s%.0f %s", sign, displayDelta, ui_utils.speedUnit())
+    else
+        return string.format("%s%.0f", sign, displayDelta)
+    end
+end
 
 --------------------------------------------------------------------------------
 -- Line Drawing
@@ -86,20 +141,20 @@ function ui_utils.getDeltaColor(delta, invert)
 end
 
 --------------------------------------------------------------------------------
--- Speed Formatting
+-- Speed Formatting (legacy - prefer speedDisplay/speedDeltaDisplay above)
 --------------------------------------------------------------------------------
 
---- Format speed value
+--- Format speed value (legacy - use speedDisplay instead)
 ---@param speed number Speed in km/h
----@param unit string|nil Unit to append (default "km/h")
+---@param unit string|nil Unit to append (default uses settings)
 ---@return string Formatted speed
 function ui_utils.formatSpeed(speed, unit)
     if not speed then return "--" end
-    unit = unit or "km/h"
+    unit = unit or ui_utils.speedUnit()
     return string.format("%.0f %s", speed, unit)
 end
 
---- Format speed delta with sign
+--- Format speed delta with sign (legacy - use speedDeltaDisplay instead)
 ---@param delta number Speed delta in km/h
 ---@return string Formatted delta (e.g., "+5", "-12")
 function ui_utils.formatSpeedDelta(delta)

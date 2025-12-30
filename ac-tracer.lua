@@ -237,11 +237,9 @@ local function drawGear(origin, cx, cy, r, gear)
 end
 
 local function drawSpeed(origin, cx, y, w, car)
-    local speed = settings.useKMH and car.speedKmh or car.speedMph
-    local unit = settings.useKMH and " km/h" or " mph"
     ui.pushFont(ui.Font.Main)
     ui.setCursor(origin + vec2(cx - w/2, y))
-    ui.textAligned(string.format("%.0f%s", speed, unit), vec2(0.5, 0.5), vec2(w, 20))
+    ui.textAligned(ui_utils.speedDisplay(car.speedKmh), vec2(0.5, 0.5), vec2(w, 20))
     ui.popFont()
 end
 
@@ -529,7 +527,7 @@ end
 
 function script.windowCorners(dt)
     -- corner_analysis.update() handles corner tracking internally
-    corner_analysis.draw(dt, settings.useKMH, state.currentLap, state.bestLap, state.trackCorners)
+    corner_analysis.draw(dt, state.currentLap, state.bestLap, state.trackCorners)
 end
 
 function script.windowTelemetry(dt)

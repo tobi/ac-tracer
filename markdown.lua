@@ -5,6 +5,7 @@ local state = require('state')
 local lap = require('lap')
 local scoring = require('scoring')
 local corner_analysis = require('corner_analysis')
+local ui_utils = require('ui_utils')
 
 local markdown = {}
 
@@ -25,13 +26,9 @@ local function formatTimeSeconds(timeS)
     return string.format("%d:%05.2f", mins, secs)
 end
 
-local function formatSpeed(speed, useKmh)
+local function formatSpeed(speed)
     if not speed then return "N/A" end
-    if useKmh then
-        return string.format("%.0f km/h", speed)
-    else
-        return string.format("%.0f mph", speed * 0.621371)
-    end
+    return ui_utils.speedDisplay(speed)
 end
 
 local function formatDelta(delta, unit)
@@ -270,9 +267,8 @@ end
 --- Generate markdown export for coaching
 ---@param currentLap table The lap to analyze (your lap)
 ---@param referenceLap table|nil Optional reference lap for comparison
----@param useKmh boolean Use km/h (true) or mph (false)
 ---@return string Markdown text
-function markdown.generate(currentLap, referenceLap, useKmh)
+function markdown.generate(currentLap, referenceLap)
     if not currentLap then return "No lap data available." end
 
     local lines = {}
@@ -363,9 +359,9 @@ function markdown.generate(currentLap, referenceLap, useKmh)
     local startSpeed = currentLap:getValueAtPos('speed', 0.001) or currentLap.speed[1]
     if referenceLap then
         local refStartSpeed = referenceLap:getValueAtPos('speed', 0.001) or referenceLap.speed[1]
-        add(string.format("**Start:** You %s, Ref %s", formatSpeed(startSpeed, useKmh), formatSpeed(refStartSpeed, useKmh)))
+        add(string.format("**Start:** You %s, Ref %s", formatSpeed(startSpeed), formatSpeed(refStartSpeed)))
     else
-        add(string.format("**Start:** %s", formatSpeed(startSpeed, useKmh)))
+        add(string.format("**Start:** %s", formatSpeed(startSpeed)))
     end
     addBlank()
 
@@ -389,14 +385,14 @@ function markdown.generate(currentLap, referenceLap, useKmh)
 
             -- Reference lap summary (compact, at top of corner)
             if refAnalysis then
-                local refSummary = string.format("**Ref:** Entry %s", formatSpeed(refAnalysis.entrySpeed, useKmh))
+                local refSummary = string.format("**Ref:** Entry %s", formatSpeed(refAnalysis.entrySpeed))
                 if refAnalysis.brakePos then
                     refSummary = refSummary .. string.format(", brake %dm", math.floor(refAnalysis.brakePos * trackLength))
                 end
                 if refAnalysis.apexPos then
-                    refSummary = refSummary .. string.format(", apex %s", formatSpeed(refAnalysis.apexSpeed, useKmh))
+                    refSummary = refSummary .. string.format(", apex %s", formatSpeed(refAnalysis.apexSpeed))
                 end
-                refSummary = refSummary .. string.format(", exit %s", formatSpeed(refAnalysis.exitSpeed, useKmh))
+                refSummary = refSummary .. string.format(", exit %s", formatSpeed(refAnalysis.exitSpeed))
                 if refAnalysis.minGear then
                     refSummary = refSummary .. string.format(", G%d", refAnalysis.minGear)
                 end
@@ -406,9 +402,9 @@ function markdown.generate(currentLap, referenceLap, useKmh)
 
             -- Entry
             local entryLine = string.format("- **Entry** at %dm, %s, time %.2fs",
-                startM, formatSpeed(currentAnalysis.entrySpeed, useKmh), currentAnalysis.entryTime or 0)
+                startM, formatSpeed(currentAnalysis.entrySpeed), currentAnalysis.entryTime or 0)
             if comparison and comparison.entrySpeedDelta then
-                entryLine = entryLine .. string.format(" (%s vs ref)", formatDelta(comparison.entrySpeedDelta, "km/h"))
+                entryLine = entryLine .. string.format(" (%s vs ref)", ui_utils.speedDeltaDisplay(comparison.entrySpeedDelta, true))
             end
             add(entryLine)
 
@@ -437,18 +433,18 @@ function markdown.generate(currentLap, referenceLap, useKmh)
             -- Apex
             if currentAnalysis.apexPos then
                 local apexM = math.floor(currentAnalysis.apexPos * trackLength)
-                local apexLine = string.format("- **Apex** at %dm, %s", apexM, formatSpeed(currentAnalysis.apexSpeed, useKmh))
+                local apexLine = string.format("- **Apex** at %dm, %s", apexM, formatSpeed(currentAnalysis.apexSpeed))
                 if comparison and comparison.apexSpeedDelta then
-                    apexLine = apexLine .. string.format(" (%s)", formatDelta(comparison.apexSpeedDelta, "km/h"))
+                    apexLine = apexLine .. string.format(" (%s)", ui_utils.speedDeltaDisplay(comparison.apexSpeedDelta, true))
                 end
                 add(apexLine)
             end
 
             -- Exit
             local exitLine = string.format("- **Exit** at %dm, %s, time %.2fs",
-                endM, formatSpeed(currentAnalysis.exitSpeed, useKmh), currentAnalysis.exitTime or 0)
+                endM, formatSpeed(currentAnalysis.exitSpeed), currentAnalysis.exitTime or 0)
             if comparison and comparison.exitSpeedDelta then
-                exitLine = exitLine .. string.format(" (%s vs ref)", formatDelta(comparison.exitSpeedDelta, "km/h"))
+                exitLine = exitLine .. string.format(" (%s vs ref)", ui_utils.speedDeltaDisplay(comparison.exitSpeedDelta, true))
             end
             add(exitLine)
 
@@ -574,15 +570,14 @@ end
 --- Copy markdown to clipboard
 ---@param currentLap table The lap to analyze
 ---@param referenceLap table|nil Optional reference lap
----@param useKmh boolean Use km/h (true) or mph (false)
 ---@return boolean success
 ---@return string message
-function markdown.copyToClipboard(currentLap, referenceLap, useKmh)
+function markdown.copyToClipboard(currentLap, referenceLap)
     if not currentLap then
         return false, "No lap data to export"
     end
 
-    local text = markdown.generate(currentLap, referenceLap, useKmh)
+    local text = markdown.generate(currentLap, referenceLap)
     ac.setClipboardText(text)
 
     local corners = state.trackCorners or {}

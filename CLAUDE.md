@@ -540,6 +540,24 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 - **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position
 - **Front/rear brake** - `brake` = front, `brake_r` = rear (or same as front if no DLL/CSV data)
 
+### Speed Units Convention
+
+**All speed data is stored in km/h internally.** The `settings.useKMH` flag controls display only.
+
+For displaying speeds, use `ui_utils` functions instead of passing `useKmh` parameters:
+
+```lua
+local ui_utils = require('ui_utils')
+
+-- Convert km/h to display units (respects settings.useKMH)
+ui_utils.speed(kmh)              -- Returns number in display units
+ui_utils.speedUnit()             -- Returns "km/h" or "mph"
+ui_utils.speedDisplay(kmh)       -- Returns "150 km/h" or "93 mph"
+ui_utils.speedDeltaDisplay(delta) -- Returns "+5" or "-3" in display units
+```
+
+**Do NOT** pass `useKmh` as a function parameter - this clutters APIs. The setting is global and should be accessed via `ui_utils`.
+
 ---
 
 ## Architecture (v2.0)

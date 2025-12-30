@@ -1000,6 +1000,8 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
         drawCsvRow("Speed", src.speed)
         drawCsvRow("Steer", src.steering)
         drawCsvRow("Fuel", src.fuel)
+        drawCsvRow("Lat G", src.g_lat)
+        drawCsvRow("Long G", src.g_long)
         drawCsvRow("Pos", src.position)
     end
 
@@ -1303,7 +1305,7 @@ function lap_telemetry.draw(dt, context)
         -- Copy as Markdown button
         ui.sameLine()
         if ui.button("Copy as Markdown", vec2(120, 0)) then
-            local success, msg = markdown.copyToClipboard(selectedLap, referenceLap, settings.useKMH)
+            local success, msg = markdown.copyToClipboard(selectedLap, referenceLap)
             if success then
                 ac.setMessage("Copied", msg)
             else
