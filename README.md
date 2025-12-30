@@ -2,15 +2,19 @@
 
 A high-performance driver input telemetry and analysis app for Assetto Corsa, built with CSP Lua.
 
-[![AC Tracer Demo](https://img.youtube.com/vi/IOnGbJZTJ80/maxresdefault.jpg)](https://www.youtube.com/watch?v=IOnGbJZTJ80)
+### Watch the Demo
 
-![AC Tracer Screenshot](./assets/screenshot.png)
+[![Watch on YouTube](https://img.youtube.com/vi/IOnGbJZTJ80/maxresdefault.jpg)](https://www.youtube.com/watch?v=IOnGbJZTJ80)
+
+▶️ *Click to watch on YouTube*
 
 ## Installation
 
 [**Download ac-tracer.zip**](https://github.com/tobi/ac-tracer/releases/latest/download/ac-tracer.zip) and drag & drop it onto Content Manager.
 
 ## Features
+
+![AC Tracer Screenshot](./assets/screenshot.png)
 
 ### 🏁 Professional Analysis
 - **Corner Analysis**: Automatic detection of corners with detailed breakdowns of:
