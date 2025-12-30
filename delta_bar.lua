@@ -22,12 +22,6 @@ local smoothedBarWidth = 0
 local smoothedDelta = 0
 local displayDelta = 0
 
--- Speed difference tracking (2-second window)
-local speedDiffHistory = {}  -- {time, speedDiff} pairs
-local SPEED_WINDOW = 2.0     -- 2-second window for speed comparison
-local avgSpeedDiff = 0       -- Average speed diff over window (positive = faster than ghost)
-local SPEED_NEUTRAL_THRESHOLD = 2.0  -- km/h difference considered neutral (white)
-
 -- Lap completion display
 local lastLapCount = 0
 local lastLapTime = 0       -- The completed lap time in ms
@@ -55,38 +49,7 @@ function delta_bar.draw(dt)
     local padding = 10
 
     -- Skip updates during replay/rewind (keep showing last known values)
-    local now = state.time()  -- Use session time (rewind-aware)
     if not sim.isReplayActive and not sim.isPaused then
-        -- Track speed difference vs ghost every frame
-        local currentPos = car.splinePosition
-        local currentSpeed = car.speedKmh
-        local ghostSpeed = state.getGhostValueAt('speed', currentPos)
-
-        if ghostSpeed and ghostSpeed > 0 then
-            local speedDiff = currentSpeed - ghostSpeed  -- positive = faster than ghost
-            table.insert(speedDiffHistory, { time = now, diff = speedDiff })
-        end
-
-        -- Remove entries older than 2 seconds (or entries from "future" after rewind)
-        while #speedDiffHistory > 0 and (now - speedDiffHistory[1].time) > SPEED_WINDOW do
-            table.remove(speedDiffHistory, 1)
-        end
-        -- Also remove any entries with time > now (happens after rewind)
-        while #speedDiffHistory > 0 and speedDiffHistory[#speedDiffHistory].time > now do
-            table.remove(speedDiffHistory)
-        end
-
-        -- Calculate average speed difference over the window
-        if #speedDiffHistory > 0 then
-            local sum = 0
-            for _, entry in ipairs(speedDiffHistory) do
-                sum = sum + entry.diff
-            end
-            avgSpeedDiff = sum / #speedDiffHistory
-        else
-            avgSpeedDiff = 0
-        end
-
         -- Throttle delta updates to 2 Hz
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then
@@ -106,26 +69,32 @@ function delta_bar.draw(dt)
     local targetFillWidth = normalizedDelta * maxBarHalf
     smoothedBarWidth = smoothedBarWidth + (targetFillWidth - smoothedBarWidth) * config.barSmoothing
 
-    -- Color based on 2-second average speed difference vs ghost
-    -- Positive avgSpeedDiff = faster than ghost = GREEN
-    -- Negative avgSpeedDiff = slower than ghost = RED
-    -- Near zero = WHITE (neutral)
+    -- Color based on delta time
+    -- Green at 0.0 or better (ahead), gradient to red over 0.2s behind
     local barColor, textColor
     if not state.hasBestLap() then
         barColor = theme.text.muted
         textColor = theme.text.muted
-    elseif avgSpeedDiff > SPEED_NEUTRAL_THRESHOLD then
-        -- Faster than ghost - GREEN
+    elseif smoothedDelta <= 0 then
+        -- Ahead or even - GREEN
         barColor = theme.delta.positive
         textColor = theme.delta.positive
-    elseif avgSpeedDiff < -SPEED_NEUTRAL_THRESHOLD then
-        -- Slower than ghost - RED
+    elseif smoothedDelta >= 0.2 then
+        -- Behind by 0.2s or more - RED
         barColor = theme.delta.negative
         textColor = theme.delta.negative
     else
-        -- Neutral - WHITE
-        barColor = theme.text.primary
-        textColor = theme.text.primary
+        -- Gradient from green to red over 0-0.2s range
+        local t = smoothedDelta / 0.2  -- 0 to 1
+        local green = theme.delta.positive
+        local red = theme.delta.negative
+        barColor = rgbm(
+            green.r + (red.r - green.r) * t,
+            green.g + (red.g - green.g) * t,
+            green.b + (red.b - green.b) * t,
+            green.mult + (red.mult - green.mult) * t
+        )
+        textColor = barColor
     end
 
     -- Detect lap completion
@@ -267,8 +236,6 @@ function delta_bar.reset()
     smoothedBarWidth = 0
     smoothedDelta = 0
     displayDelta = 0
-    speedDiffHistory = {}
-    avgSpeedDiff = 0
     updateTimer = 0
     lastDelta = 0
 end
