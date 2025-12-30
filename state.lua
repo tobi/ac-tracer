@@ -679,8 +679,8 @@ function state.update(dt, car)
     -- Update global time tracking
     lastRawDt = dt
 
-    -- Optionally freeze time when car is stationary with engine off
-    local shouldFreezeTime = car.speedKmh < 1 and car.rpm < 1000
+    -- Optionally freeze time when car is stationary
+    local shouldFreezeTime = car.speedKmh < 1
     if shouldFreezeTime then
         timeFrozen = true
         -- Don't increment sessionTime when frozen
