@@ -849,33 +849,32 @@ function corner_analysis.draw(dt, useKmh)
     -- Background
     ui.drawRectFilled(vec2(0, 0), windowSize, theme.bg.window, 4)
 
-    -- Graph area background
-    ui.drawRectFilled(
-        vec2(padding, graphY),
-        vec2(padding + graphWidth, graphY + graphHeight),
-        theme.bg.graph,
-        4
-    )
-    
-    -- Score gauge (always visible, same position)
-    drawScoreGauge(gaugeCenterX, gaugeCenterY, gaugeRadius, displayScore)
-    
-    -- Header text
-    ui.setCursor(vec2(padding, 4))
-    ui.pushFont(ui.Font.Small)
-    ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    if frozenCorner.active then
-        local lapText = frozenCorner.lapNumber > 0 and string.format(" from lap %d", frozenCorner.lapNumber) or ""
-        ui.text(string.format("Focusing on corner %d%s", frozenCorner.cornerNum, lapText))
-    else
-        ui.text("Corner Speed & Position vs. Reference Lap")
-    end
-    ui.popStyleColor()
-    ui.popFont()
-    
-    local statsY = statsStartY
-    
     if displayData then
+        -- Graph area background (left side when we have data)
+        ui.drawRectFilled(
+            vec2(padding, graphY),
+            vec2(padding + graphWidth, graphY + graphHeight),
+            theme.bg.graph,
+            4
+        )
+
+        -- Score gauge (only when we have data)
+        drawScoreGauge(gaugeCenterX, gaugeCenterY, gaugeRadius, displayScore)
+
+        -- Header text
+        ui.setCursor(vec2(padding, 4))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        if frozenCorner.active then
+            local lapText = frozenCorner.lapNumber > 0 and string.format(" from lap %d", frozenCorner.lapNumber) or ""
+            ui.text(string.format("Focusing on corner %d%s", frozenCorner.cornerNum, lapText))
+        else
+            ui.text("Corner Speed & Position vs. Reference Lap")
+        end
+        ui.popStyleColor()
+        ui.popFont()
+
+        local statsY = statsStartY
         -- Graph outline (blue for frozen, green for live)
         local outlineColor = frozenCorner.active
             and theme.corner.focusedBorder
@@ -1027,9 +1026,29 @@ function corner_analysis.draw(dt, useKmh)
                 displayData.refStartPos, displayData.refEndPos, currentLap, refLap)
         end
     else
-        -- Empty state: message in graph area
-        ui.setCursor(vec2(padding + graphWidth / 2 - 60, graphY + graphHeight / 2 - 10))
-        ui_utils.text(state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first", theme.text.muted)
+        -- Empty state: full-width centered message
+        local emptyAreaW = windowSize.x - padding * 2
+        local emptyAreaH = windowSize.y - graphY - padding
+
+        -- Draw a subtle full-width background
+        ui.drawRectFilled(
+            vec2(padding, graphY),
+            vec2(padding + emptyAreaW, graphY + emptyAreaH),
+            theme.bg.graph,
+            4
+        )
+
+        -- Center the message
+        local message = state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first"
+        ui.pushFont(ui.Font.Main)
+        local textSize = ui.measureText(message)
+        local textX = padding + (emptyAreaW - textSize.x) / 2
+        local textY = graphY + (emptyAreaH - textSize.y) / 2
+        ui.setCursor(vec2(textX, textY))
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        ui.text(message)
+        ui.popStyleColor()
+        ui.popFont()
     end
 end
 
