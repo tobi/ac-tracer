@@ -11,6 +11,15 @@ local csv_parser = require('csv_parser')
 -- Constants
 lap.SAMPLE_RATE = 60  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
+local SPARSE_EPS = 1e-4
+
+-- Sparse channels (position -> value) for low-frequency settings
+lap.SPARSE_FIELDS = {
+    brake_balance = true,
+    tc_slip = true,
+    tc_gain = true,
+    fuel = true,
+}
 
 --------------------------------------------------------------------------------
 -- Flags Bitmask (in-sim only telemetry events)
@@ -71,14 +80,113 @@ function lap.new(track, car, sessionId)
         pos = {},              -- spline position 0.0 to 1.0
         times = {},            -- seconds (elapsed lap time at each sample)
         fuel = {},             -- liters remaining
+        gforce = {},           -- vec3 (X = lateral, Z = longitudinal)
 
         -- In-sim only telemetry flags (bitmask per sample, see lap.FLAGS)
         -- NOTE: Not populated for CSV imports - these are sim-only events
         flags = {},            -- Bitmask: TC, limiter, wheel slip, lockups
 
+        -- Sparse channels (position -> value) for low-frequency settings
+        -- Format: { {pos, value}, ... } in ascending pos order
+        sparse = {
+            brake_balance = {},
+            tc_slip = {},
+            tc_gain = {},
+            fuel = {},
+        },
+
         -- CSV import metadata (nil for in-game recorded laps)
         csvSource = nil,       -- { throttle, brake, speed, steering, clutch, position, fuel }
     }, lap)
+end
+
+--------------------------------------------------------------------------------
+-- Sparse Helpers
+--------------------------------------------------------------------------------
+
+local function ensureSparseTable(self)
+    if self.sparse then return end
+    self.sparse = {
+        brake_balance = {},
+        tc_slip = {},
+        tc_gain = {},
+        fuel = {},
+    }
+end
+
+local function sparseAppend(list, pos, value)
+    if value == nil then return end
+    if not list then return end
+    local n = #list
+    if n == 0 then
+        table.insert(list, { pos, value })
+        return
+    end
+    local last = list[n]
+    if last and math.abs((last[2] or 0) - value) <= SPARSE_EPS then
+        return
+    end
+    table.insert(list, { pos, value })
+end
+
+--- Append a sparse sample for a low-frequency field
+---@param field string Sparse field name
+---@param pos number Spline position
+---@param value number Value to record
+function lap:addSparseSample(field, pos, value)
+    if not lap.SPARSE_FIELDS[field] then return end
+    ensureSparseTable(self)
+    sparseAppend(self.sparse[field], pos, value)
+end
+
+--- Get sparse value at a specific track position (step-wise)
+---@param field string Sparse field name
+---@param targetPos number Spline position (0.0 to 1.0)
+---@return number|nil Value at that position
+function lap:getSparseAtPos(field, targetPos)
+    if not lap.SPARSE_FIELDS[field] then return nil end
+    if targetPos == nil then return nil end
+    if not self.sparse or not self.sparse[field] then return nil end
+    local list = self.sparse[field]
+    if #list == 0 then return nil end
+
+    -- Binary search for last entry <= targetPos
+    local lo, hi = 1, #list
+    if targetPos <= list[1][1] then
+        return list[1][2]
+    end
+    while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        if list[mid][1] <= targetPos then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    return list[lo][2]
+end
+
+--- Build sparse samples from a dense array (position-based)
+---@param field string Dense field name to compress into sparse
+function lap:populateSparseFromDense(field)
+    if not lap.SPARSE_FIELDS[field] then return end
+    if not self[field] or #self[field] == 0 then return end
+    if not self.pos or #self.pos == 0 then return end
+    ensureSparseTable(self)
+
+    local out = {}
+    local last = nil
+    for i = 1, #self[field] do
+        local v = self[field][i]
+        if v ~= nil and (last == nil or math.abs(v - last) > SPARSE_EPS) then
+            local p = self.pos[i]
+            if p ~= nil then
+                table.insert(out, { p, v })
+                last = v
+            end
+        end
+    end
+    self.sparse[field] = out
 end
 
 --------------------------------------------------------------------------------
@@ -119,7 +227,24 @@ function lap:addSample(car)
     table.insert(self.gear, car.gear)
     table.insert(self.pos, car.splinePosition)
     table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
-    table.insert(self.fuel, car.fuel or 0)  -- Fuel remaining in liters
+    -- Fuel is recorded as a sparse channel to avoid huge arrays
+    self:addSparseSample('fuel', car.splinePosition, car.fuel or 0)
+
+    -- G-forces (non-sparse, full resolution)
+    if car.acceleration then
+        table.insert(self.gforce, car.acceleration)
+    end
+
+    -- Low-frequency settings (sparse)
+    if car.brakeBias then
+        self:addSparseSample('brake_balance', car.splinePosition, car.brakeBias)
+    end
+    if car.tractionControlMode then
+        self:addSparseSample('tc_slip', car.splinePosition, car.tractionControlMode)
+    end
+    if car.tractionControl2 then
+        self:addSparseSample('tc_gain', car.splinePosition, car.tractionControl2)
+    end
 
     -- Build flags bitmask for this sample (in-sim only data)
     local flagBits = 0
@@ -241,11 +366,26 @@ function lap:pruneToPosition(targetPos)
     if samplesToRemove <= 0 then return 0 end
 
     -- Prune all arrays to pruneIdx length
-    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'flags'}
+    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'gforce', 'flags'}
     for _, field in ipairs(arrays) do
         if self[field] then
             for i = originalLength, pruneIdx + 1, -1 do
                 self[field][i] = nil
+            end
+        end
+    end
+
+    -- Prune sparse channels
+    if self.sparse then
+        for field, list in pairs(self.sparse) do
+            if type(list) == 'table' and #list > 0 then
+                for i = #list, 1, -1 do
+                    if list[i][1] > targetPos then
+                        table.remove(list, i)
+                    else
+                        break
+                    end
+                end
             end
         end
     end
@@ -283,6 +423,9 @@ end
 ---@return number|nil Interpolated value
 function lap:getValueAtPos(field, targetPos)
     local data = self[field]
+    if (not data or #data < 2) and lap.SPARSE_FIELDS[field] then
+        return self:getSparseAtPos(field, targetPos)
+    end
     if not data or #data < 2 then return nil end
     
     local lo, hi = findIndicesAtPos(self.pos, targetPos)
@@ -718,6 +861,160 @@ function lap:getOverlapTimeInRange(startPos, endPos)
     return totalTime
 end
 
+--- Get a summary of all flags in a position range
+--- Returns counts and boolean flags for each event type
+---@param startPos number Start of search range
+---@param endPos number End of search range
+---@return table summary { tc={count,active}, limiter={count,active}, slip={count,active}, lockup={count,active,wheels}, overlap={count,time}, offtrack={count,active} }
+function lap:getFlagSummary(startPos, endPos)
+    local summary = {
+        tc = { count = 0, active = false },
+        limiter = { count = 0, active = false },
+        slip = { count = 0, active = false },
+        lockup = { count = 0, active = false, wheels = { fl = false, fr = false, rl = false, rr = false } },
+        overlap = { count = 0, active = false, time = 0 },
+        offtrack = { count = 0, active = false },
+    }
+
+    if not self.flags or #self.flags == 0 then return summary end
+
+    local sampleDt = 1 / lap.SAMPLE_RATE
+
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        local inRange
+        if startPos <= endPos then
+            inRange = pos >= startPos and pos <= endPos
+        else
+            inRange = pos >= startPos or pos <= endPos
+        end
+
+        if inRange and self.flags[i] then
+            local f = self.flags[i]
+
+            if bit.band(f, lap.FLAGS.TC_ACTIVE) ~= 0 then
+                summary.tc.count = summary.tc.count + 1
+                summary.tc.active = true
+            end
+            if bit.band(f, lap.FLAGS.LIMITER_HIT) ~= 0 then
+                summary.limiter.count = summary.limiter.count + 1
+                summary.limiter.active = true
+            end
+            if bit.band(f, lap.FLAGS.WHEEL_SLIP) ~= 0 then
+                summary.slip.count = summary.slip.count + 1
+                summary.slip.active = true
+            end
+            if bit.band(f, lap.FLAGS.OFFTRACK) ~= 0 then
+                summary.offtrack.count = summary.offtrack.count + 1
+                summary.offtrack.active = true
+            end
+            if bit.band(f, lap.FLAGS.OVERLAP) ~= 0 then
+                summary.overlap.count = summary.overlap.count + 1
+                summary.overlap.active = true
+                summary.overlap.time = summary.overlap.time + sampleDt
+            end
+
+            -- Lockups (track individual wheels)
+            local hasLockup = false
+            if bit.band(f, lap.FLAGS.LOCKUP_FL) ~= 0 then
+                summary.lockup.wheels.fl = true
+                hasLockup = true
+            end
+            if bit.band(f, lap.FLAGS.LOCKUP_FR) ~= 0 then
+                summary.lockup.wheels.fr = true
+                hasLockup = true
+            end
+            if bit.band(f, lap.FLAGS.LOCKUP_RL) ~= 0 then
+                summary.lockup.wheels.rl = true
+                hasLockup = true
+            end
+            if bit.band(f, lap.FLAGS.LOCKUP_RR) ~= 0 then
+                summary.lockup.wheels.rr = true
+                hasLockup = true
+            end
+            if hasLockup then
+                summary.lockup.count = summary.lockup.count + 1
+                summary.lockup.active = true
+            end
+        end
+    end
+
+    return summary
+end
+
+--- Check if lap has any flags data (in-sim recorded, not CSV import)
+---@return boolean True if flags array has data
+function lap:hasFlags()
+    return self.flags and #self.flags > 0
+end
+
+--- Get flag at a specific sample index
+---@param index number Sample index (1-based)
+---@return number flags Bitmask of flags at that sample (0 if no data)
+function lap:getFlagAt(index)
+    if not self.flags or index < 1 or index > #self.flags then
+        return 0
+    end
+    return self.flags[index] or 0
+end
+
+--- Check if a specific flag is set at a sample index
+---@param index number Sample index (1-based)
+---@param flag number Flag bit to check (from lap.FLAGS)
+---@return boolean True if flag is set
+function lap:hasFlagAt(index, flag)
+    local f = self:getFlagAt(index)
+    return bit.band(f, flag) ~= 0
+end
+
+--- Get human-readable flag names for a bitmask
+---@param flagBits number Bitmask of flags
+---@return table names Array of flag name strings
+function lap.flagsToNames(flagBits)
+    local names = {}
+    if not flagBits or flagBits == 0 then return names end
+
+    if bit.band(flagBits, lap.FLAGS.TC_ACTIVE) ~= 0 then table.insert(names, "TC") end
+    if bit.band(flagBits, lap.FLAGS.LIMITER_HIT) ~= 0 then table.insert(names, "Limiter") end
+    if bit.band(flagBits, lap.FLAGS.WHEEL_SLIP) ~= 0 then table.insert(names, "Slip") end
+    if bit.band(flagBits, lap.FLAGS.LOCKUP_FL) ~= 0 then table.insert(names, "Lockup FL") end
+    if bit.band(flagBits, lap.FLAGS.LOCKUP_FR) ~= 0 then table.insert(names, "Lockup FR") end
+    if bit.band(flagBits, lap.FLAGS.LOCKUP_RL) ~= 0 then table.insert(names, "Lockup RL") end
+    if bit.band(flagBits, lap.FLAGS.LOCKUP_RR) ~= 0 then table.insert(names, "Lockup RR") end
+    if bit.band(flagBits, lap.FLAGS.OVERLAP) ~= 0 then table.insert(names, "Overlap") end
+    if bit.band(flagBits, lap.FLAGS.OFFTRACK) ~= 0 then table.insert(names, "Offtrack") end
+
+    return names
+end
+
+--- Combine multiple flags into a bitmask
+---@vararg number Flag values from lap.FLAGS
+---@return number Combined bitmask
+function lap.combineFlags(...)
+    local result = 0
+    for i = 1, select('#', ...) do
+        local flag = select(i, ...)
+        if flag then
+            result = bit.bor(result, flag)
+        end
+    end
+    return result
+end
+
+--- Check if any lockup flag is set in a bitmask
+---@param flagBits number Bitmask of flags
+---@return boolean True if any lockup flag is set
+function lap.hasAnyLockup(flagBits)
+    if not flagBits then return false end
+    local lockupMask = bit.bor(
+        lap.FLAGS.LOCKUP_FL,
+        lap.FLAGS.LOCKUP_FR,
+        lap.FLAGS.LOCKUP_RL,
+        lap.FLAGS.LOCKUP_RR
+    )
+    return bit.band(flagBits, lockupMask) ~= 0
+end
+
 --------------------------------------------------------------------------------
 -- Serialization
 --------------------------------------------------------------------------------
@@ -743,8 +1040,10 @@ function lap:serialize()
         gear = self.gear,        -- Gear number
         pos = self.pos,
         times = self.times,  -- Actual elapsed time at each sample
-        fuel = self.fuel,    -- Fuel remaining in liters
+        fuel = self.fuel,    -- Fuel remaining in liters (may be empty if sparse)
+        gforce = self.gforce,
         flags = self.flags,  -- In-sim only: TC, limiter, slip, lockups (bitmask per sample)
+        sparse = self.sparse,
         csvSource = self.csvSource,  -- CSV column mappings
     }
     return stringify(data)
@@ -761,7 +1060,16 @@ function lap.deserialize(data)
     end)
     
     if not ok or not parsed then return nil end
-    return setmetatable(parsed, lap)
+    local l = setmetatable(parsed, lap)
+    if not l.gforce then l.gforce = {} end
+    ensureSparseTable(l)
+    if l.fuel and #l.fuel > 0 and (not l.sparse or not l.sparse.fuel or #l.sparse.fuel == 0) then
+        l:populateSparseFromDense('fuel')
+        if l.sparse and l.sparse.fuel and #l.sparse.fuel > 0 then
+            l.fuel = {}
+        end
+    end
+    return l
 end
 
 --------------------------------------------------------------------------------
@@ -820,10 +1128,17 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l.steering = data.steering
     l.speed = data.speed
     l.fuel = data.fuel or {}
+    l.gforce = {}
     l.time = parsed.time
     l.completed = parsed.completed
     l.fuelLeftAtStart = parsed.fuelLeftAtStart or 0
     l.csvSource = parsed.csvSource
+
+    -- Build sparse fuel channel for lighter lookups
+    l:populateSparseFromDense('fuel')
+    if l.sparse and l.sparse.fuel and #l.sparse.fuel > 0 then
+        l.fuel = {}
+    end
 
     ac.log(string.format("lap.fromCSV: Loaded lap with %d samples, time: %.3fs",
         l:length(), l.time / 1000))

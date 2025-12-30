@@ -307,4 +307,31 @@ package.loaded['extended-brake'] = {
     getStatus = function() return { available = false, source = "car.brake", status = "fallback mode" } end,
 }
 
+-- Mock app_settings module
+package.loaded['app_settings'] = {
+    brakeThreshold = 0.1,
+    throttleThreshold = 0.98,
+    useKMH = true,
+}
+
+-- Mock theme module (minimal stub for corner_analysis)
+package.loaded['theme'] = {
+    bg = { window = rgbm(0.1, 0.1, 0.1, 1), graph = rgbm(0.15, 0.15, 0.15, 1), panel = rgbm(0.12, 0.12, 0.12, 1) },
+    text = { primary = rgbm(1, 1, 1, 1), muted = rgbm(0.6, 0.6, 0.6, 1) },
+    delta = { positive = rgbm(0, 1, 0, 1), negative = rgbm(1, 0, 0, 1) },
+    corner = { faster = rgbm(0, 0.8, 0, 0.6), slower = rgbm(0.8, 0, 0, 0.6), onSpeed = rgbm(0.5, 0.5, 0.5, 0.4), focusedBorder = rgbm(0.3, 0.5, 1, 1) },
+    marker = { brake = rgbm(1, 0, 0, 1), brakeRef = rgbm(1, 0.3, 0.3, 0.6), apex = rgbm(1, 1, 0, 1), apexRef = rgbm(1, 1, 0.3, 0.6), lift = rgbm(0, 1, 0, 1), liftRef = rgbm(0.3, 1, 0.3, 0.6) },
+    score = { bg = rgbm(0.3, 0.3, 0.3, 1), fill = rgbm(0, 0.8, 0.4, 1) },
+    trace = { throttle = rgbm(0, 1, 0, 1), brake = rgbm(1, 0, 0, 1), fuel = rgbm(1, 0.6, 0, 1) },
+    ghost = { throttle = rgbm(0, 0.5, 0, 0.5), brake = rgbm(0.5, 0, 0, 0.5) },
+    grid = { major = rgbm(0.4, 0.4, 0.4, 1), line = rgbm(0.3, 0.3, 0.3, 0.5) },
+    withAlpha = function(color, alpha) return rgbm(color.r, color.g, color.b, alpha) end,
+}
+
+-- Mock ui_utils module
+package.loaded['ui_utils'] = {
+    textFont = function() end,
+    drawDashedLine = function() end,
+}
+
 return mock
