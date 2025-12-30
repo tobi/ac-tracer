@@ -1,7 +1,6 @@
 -- Lap Telemetry - MoTeC-style professional telemetry analysis
 -- Uses centralized state for all lap data
 
-local state = require('state')
 local lap = require('lap')
 local settings = require('app_settings')
 local corner_analysis = require('corner_analysis')
@@ -40,13 +39,16 @@ local lastEditedCorner = nil  -- Track which corner we're editing to reset buffe
 local showMarkersDropdown = false
 local markersButtonPos = vec2(0, 0)
 
+-- External context (passed in from main script)
+local ctx = nil
+
 --------------------------------------------------------------------------------
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
 -- Check if we should switch to auto mode (new lap completed since manual selection)
 local function checkAutoMode()
-    local history = state.history or {}
+    local history = ctx and ctx.history or {}
     local currentLapCount = #history
 
     -- If a lap was completed since last manual selection, switch to auto mode
@@ -66,13 +68,13 @@ local function getSelectedLap()
 
     -- Auto mode: select best lap automatically
     -- First, try fastest from current session
-    local fastest = state.getFastestSessionLap()
+    local fastest = ctx and ctx.getFastestSessionLap and ctx.getFastestSessionLap() or nil
     if fastest then
         return fastest
     end
 
     -- Fallback to first history lap (which should be most recent)
-    local history = state.history or {}
+    local history = ctx and ctx.history or {}
     return history[1]
 end
 
@@ -80,12 +82,12 @@ end
 local function setSelectedLap(lapData)
     selectedLap = lapData
     autoMode = false
-    lastManualSelectLapCount = #(state.history or {})
+    lastManualSelectLapCount = #(ctx and ctx.history or {})
 end
 
 -- Get reference lap (defaults to state.bestLap)
 local function getReferenceLap()
-    return state.bestLap
+    return ctx and ctx.bestLap or nil
 end
 
 --------------------------------------------------------------------------------
@@ -130,8 +132,17 @@ local function getValueAtTime(lapObj, time, field)
     lo = math.clamp(lo, 1, lapObj:length())
     hi = math.clamp(hi, 1, lapObj:length())
 
-    -- Check if field exists on this lap
+    -- Handle sparse fields (position-based lookup)
     local fieldData = lapObj[field]
+    if lap.SPARSE_FIELDS[field] and (not fieldData or #fieldData == 0) then
+        if not lapObj.pos or #lapObj.pos == 0 then return nil end
+        local p1, p2 = lapObj.pos[lo], lapObj.pos[hi]
+        if not p1 or not p2 then return nil end
+        local pos = (lo == hi) and p1 or (p1 + (p2 - p1) * (t or 0))
+        return lapObj:getSparseAtPos(field, pos)
+    end
+
+    -- Check if field exists on this lap
     if not fieldData or #fieldData == 0 then return nil end
 
     if lo == hi then return fieldData[lo] end
@@ -140,6 +151,78 @@ local function getValueAtTime(lapObj, time, field)
     local v2 = fieldData[hi]
 
     if not v1 or not v2 then return v1 or v2 end
+    return v1 + (v2 - v1) * t
+end
+
+local function getAxisValue(v, axis)
+    if not v then return nil end
+    if axis == "x" then return v.x end
+    if axis == "y" then return v.y end
+    if axis == "z" then return v.z end
+    return nil
+end
+
+-- Get G-force axis at time from lap (using times array if available, else sample rate)
+local function getGForceAtTime(lapObj, time, axis)
+    if not lapObj or not lapObj.gforce or #lapObj.gforce < 2 then return nil end
+
+    local lo, hi, t
+    if lapObj.times and #lapObj.times >= lapObj:length() then
+        local times = lapObj.times
+        lo, hi = 1, #times
+        while hi - lo > 1 do
+            local mid = math.floor((lo + hi) / 2)
+            if times[mid] <= time then
+                lo = mid
+            else
+                hi = mid
+            end
+        end
+
+        local t1, t2 = times[lo], times[hi]
+        if t1 == t2 then
+            t = 0
+        else
+            t = math.clamp((time - t1) / (t2 - t1), 0, 1)
+        end
+    else
+        local index = time * lap.SAMPLE_RATE + 1
+        lo = math.floor(index)
+        hi = math.ceil(index)
+        t = index - lo
+    end
+
+    lo = math.clamp(lo, 1, lapObj:length())
+    hi = math.clamp(hi, 1, lapObj:length())
+
+    local v1 = getAxisValue(lapObj.gforce[lo], axis)
+    local v2 = getAxisValue(lapObj.gforce[hi], axis)
+    if v1 == nil then return nil end
+    if lo == hi or v2 == nil then return v1 end
+    return v1 + (v2 - v1) * (t or 0)
+end
+
+-- Get G-force axis at position from lap (position-based)
+local function getGForceAtPos(lapObj, targetPos, axis)
+    if not lapObj or not lapObj.gforce or #lapObj.gforce < 2 then return nil end
+    if not lapObj.pos or #lapObj.pos < 2 then return nil end
+
+    local lo, hi = 1, #lapObj.pos
+    while hi - lo > 1 do
+        local mid = math.floor((lo + hi) / 2)
+        if lapObj.pos[mid] <= targetPos then
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+
+    local p1, p2 = lapObj.pos[lo], lapObj.pos[hi]
+    local v1 = getAxisValue(lapObj.gforce[lo], axis)
+    local v2 = getAxisValue(lapObj.gforce[hi], axis)
+    if v1 == nil then return nil end
+    if p1 == p2 or v2 == nil then return v1 end
+    local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
     return v1 + (v2 - v1) * t
 end
 
@@ -285,6 +368,117 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
     ui_utils.textFont(label, ui.Font.Small, theme.text.primary)
 end
 
+-- Draw lateral G trace (x-axis of car acceleration)
+local function drawLatGTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj)
+    if not lapObj or lapObj:length() < 2 then return end
+    if endTime <= startTime then return end
+
+    local numSamples = math.max(10, math.floor(w / 2))
+    local timeStep = (endTime - startTime) / numSamples
+
+    local values = {}
+    local refValues = {}
+    local positions = {}
+    local actualMin = math.huge
+    local actualMax = -math.huge
+
+    for i = 0, numSamples do
+        local t = startTime + i * timeStep
+        local val = getGForceAtTime(lapObj, t, "x")
+        local pos = getValueAtTime(lapObj, t, "pos")
+
+        if val ~= nil then
+            table.insert(values, val)
+            table.insert(positions, pos)
+            actualMin = math.min(actualMin, val)
+            actualMax = math.max(actualMax, val)
+        else
+            table.insert(values, 0)
+            table.insert(positions, nil)
+        end
+
+        if refLapObj and pos then
+            local refVal = getGForceAtPos(refLapObj, pos, "x")
+            if refVal ~= nil then
+                table.insert(refValues, refVal)
+                actualMin = math.min(actualMin, refVal)
+                actualMax = math.max(actualMax, refVal)
+            else
+                table.insert(refValues, 0)
+            end
+        elseif refLapObj then
+            table.insert(refValues, 0)
+        end
+    end
+
+    if #values < 2 then return end
+
+    local maxAbs = math.max(math.abs(actualMin), math.abs(actualMax), 0.5)
+    local minVal = -maxAbs
+    local maxVal = maxAbs
+    local range = maxVal - minVal
+    if range <= 0 then return end
+
+    -- Draw grid lines
+    local gridLines = 5
+    for i = 0, gridLines do
+        local val = minVal + (maxVal - minVal) * (i / gridLines)
+        local py = y + h - (i / gridLines) * h
+        ui.drawLine(vec2(x, py), vec2(x + w, py), i == gridLines / 2 and theme.grid.major or theme.grid.line, 1)
+
+        ui.setCursor(vec2(x - 50, py - 7))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        ui.text(string.format("%.1fg", val))
+        ui.popStyleColor()
+        ui.popFont()
+    end
+
+    -- Draw reference trace
+    if refLapObj and #refValues == #values then
+        ui.pathClear()
+        for i = 1, #refValues do
+            local px = x + (i - 1) / (#refValues - 1) * w
+            local py = y + h - ((refValues[i] - minVal) / range) * h
+            ui.pathLineTo(vec2(px, py))
+        end
+        ui.pathStroke(theme.ghost.speed, false, 1.5)
+    end
+
+    -- Draw current trace
+    ui.pathClear()
+    for i = 1, #values do
+        local px = x + (i - 1) / (#values - 1) * w
+        local py = y + h - ((values[i] - minVal) / range) * h
+        ui.pathLineTo(vec2(px, py))
+    end
+    ui.pathStroke(theme.trace.speed, false, 2)
+
+    -- Cursor markers
+    if cursorTime and cursorTime >= startTime and cursorTime <= endTime then
+        local cursorX = x + ((cursorTime - startTime) / (endTime - startTime)) * w
+        local cursorVal = getGForceAtTime(lapObj, cursorTime, "x")
+        local cursorPos = getValueAtTime(lapObj, cursorTime, "pos")
+        if cursorVal ~= nil then
+            local cursorY = y + h - ((cursorVal - minVal) / range) * h
+            ui.drawCircleFilled(vec2(cursorX, cursorY), 6, theme.trace.speed, 16)
+            ui.drawCircle(vec2(cursorX, cursorY), 6, theme.marker.cursor, 16, 2)
+        end
+
+        if refLapObj and cursorPos then
+            local refVal = getGForceAtPos(refLapObj, cursorPos, "x")
+            if refVal ~= nil then
+                local refY = y + h - ((refVal - minVal) / range) * h
+                ui.drawCircleFilled(vec2(cursorX, refY), 5, theme.ghost.speed, 12)
+            end
+        end
+    end
+
+    -- Trace label
+    ui.setCursor(vec2(x + 5, y + 2))
+    ui_utils.textFont("Lat G", ui.Font.Small, theme.text.primary)
+end
+
 --------------------------------------------------------------------------------
 -- Corner Zone Drawing
 --------------------------------------------------------------------------------
@@ -347,7 +541,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     if maxDelta == 0 then maxDelta = 0.1 end
 
     -- Draw corner zones (before other elements) - with partial corner support
-    local corners = state.trackCorners
+    local corners = ctx and ctx.trackCorners or nil
     local mousePos = ui.mousePos()
     local winPos = ui.windowPos()
     local localMouseX = mousePos.x - winPos.x
@@ -397,7 +591,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                     if not editMode and ui.mouseClicked(ui.MouseButton.Left) then
                         if localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h then
                             -- Show this corner in corner_analysis
-                            corner_analysis.setViewedCorner(corner.number, selectedLap, refLapObj)
+                            corner_analysis.setViewedCorner(corner, selectedLap, refLapObj)
                         end
                     end
 
@@ -516,9 +710,13 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
             local newPos = xToPos(localMouseX)
             if newPos then
                 if draggingHandle == "start" then
-                    state.updateCorner(selectedCorner, { startPos = newPos })
+                    if ctx and ctx.updateCorner then
+                        ctx.updateCorner(selectedCorner, { startPos = newPos })
+                    end
                 elseif draggingHandle == "end" then
-                    state.updateCorner(selectedCorner, { endPos = newPos })
+                    if ctx and ctx.updateCorner then
+                        ctx.updateCorner(selectedCorner, { endPos = newPos })
+                    end
                 end
             end
         end
@@ -631,6 +829,10 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     cursorValues.speed = getValueAtTime(selectedLap, cursorTime, "speed")
     cursorValues.steering = getValueAtTime(selectedLap, cursorTime, "steering")
     cursorValues.fuel = getValueAtTime(selectedLap, cursorTime, "fuel")
+    cursorValues.latG = getGForceAtTime(selectedLap, cursorTime, "x")
+    cursorValues.brake_balance = getValueAtTime(selectedLap, cursorTime, "brake_balance")
+    cursorValues.tc_slip = getValueAtTime(selectedLap, cursorTime, "tc_slip")
+    cursorValues.tc_gain = getValueAtTime(selectedLap, cursorTime, "tc_gain")
 
     if referenceLap and cursorValues.pos then
         cursorValues.refThrottle = referenceLap:getValueAtPos("throttle", cursorValues.pos)
@@ -639,6 +841,10 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
         cursorValues.refSpeed = referenceLap:getValueAtPos("speed", cursorValues.pos)
         cursorValues.refSteering = referenceLap:getValueAtPos("steering", cursorValues.pos)
         cursorValues.refFuel = referenceLap:getValueAtPos("fuel", cursorValues.pos)
+        cursorValues.refLatG = getGForceAtPos(referenceLap, cursorValues.pos, "x")
+        cursorValues.refBrakeBalance = referenceLap:getValueAtPos("brake_balance", cursorValues.pos)
+        cursorValues.refTcSlip = referenceLap:getValueAtPos("tc_slip", cursorValues.pos)
+        cursorValues.refTcGain = referenceLap:getValueAtPos("tc_gain", cursorValues.pos)
     end
 
     if not cursorValues.throttle then return end
@@ -711,14 +917,36 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     drawRow("Speed", string.format("%.1f", cursorValues.speed or 0), theme.trace.speed,
         cursorValues.refSpeed and string.format("(%.1f)", cursorValues.refSpeed))
 
+    -- Lateral G
+    if cursorValues.latG ~= nil then
+        drawRow("Lat G", string.format("%.2fg", cursorValues.latG), theme.trace.speed,
+            cursorValues.refLatG and string.format("(%.2fg)", cursorValues.refLatG))
+    end
+
     -- Steering
     local steerDeg = lap.steerToDegrees(cursorValues.steering or 0.5)
     local refSteerDeg = cursorValues.refSteering and lap.steerToDegrees(cursorValues.refSteering)
     drawRow("Steering", string.format("%.1f", steerDeg), theme.trace.steering,
         refSteerDeg and string.format("(%.1f)", refSteerDeg))
 
+    -- Brake bias (sparse)
+    if cursorValues.brake_balance ~= nil then
+        drawRow("Brake Bias", string.format("%.1f%%", (cursorValues.brake_balance or 0) * 100), theme.text.primary,
+            cursorValues.refBrakeBalance and string.format("(%.1f%%)", cursorValues.refBrakeBalance * 100))
+    end
+
+    -- TC settings (sparse)
+    if cursorValues.tc_slip ~= nil then
+        drawRow("TC Slip", tostring(math.floor(cursorValues.tc_slip or 0)), theme.text.primary,
+            cursorValues.refTcSlip and string.format("(%d)", math.floor(cursorValues.refTcSlip)))
+    end
+    if cursorValues.tc_gain ~= nil then
+        drawRow("TC Gain", tostring(math.floor(cursorValues.tc_gain or 0)), theme.text.primary,
+            cursorValues.refTcGain and string.format("(%d)", math.floor(cursorValues.refTcGain)))
+    end
+
     -- Fuel (show if lap has any fuel data)
-    local hasFuelData = selectedLap.fuel and #selectedLap.fuel > 0
+    local hasFuelData = cursorValues.fuel ~= nil
     if hasFuelData then
         drawRow("Fuel", string.format("%.1fL", cursorValues.fuel or 0), theme.trace.fuel,
             cursorValues.refFuel and string.format("(%.1fL)", cursorValues.refFuel))
@@ -805,7 +1033,7 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
     local eLineH = 22
 
     if selectedCorner then
-        local corner = state.getCornerInfo(selectedCorner)
+        local corner = ctx and ctx.getCornerInfo and ctx.getCornerInfo(selectedCorner) or nil
         if corner then
             -- Header
             ui.setCursor(vec2(panelX + 10, epy))
@@ -843,7 +1071,9 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
             local newName = ui.inputText("##cornerName", nameInputBuffer, ui.InputTextFlags.None)
             if newName ~= nameInputBuffer then
                 nameInputBuffer = newName
-                state.updateCorner(selectedCorner, { name = newName ~= "" and newName or nil })
+                if ctx and ctx.updateCorner then
+                    ctx.updateCorner(selectedCorner, { name = newName ~= "" and newName or nil })
+                end
             end
 
             ui.popStyleColor(2)
@@ -870,7 +1100,9 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
             ui.pushStyleColor(ui.StyleColor.Button, theme.button.danger)
             ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.dangerHover)
             if ui.button("Delete Corner", vec2(panelW - 20, 0)) then
-                state.deleteCorner(selectedCorner)
+                if ctx and ctx.deleteCorner then
+                    ctx.deleteCorner(selectedCorner)
+                end
                 selectedCorner = nil
             end
             ui.popStyleColor(2)
@@ -898,7 +1130,8 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
 
         ui.setCursor(vec2(panelX + 10, epy))
         ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text(string.format("Corners: %d", state.getCornerCount()))
+        local cornerCount = ctx and ctx.getCornerCount and ctx.getCornerCount() or 0
+        ui.text(string.format("Corners: %d", cornerCount))
         ui.popStyleColor()
         epy = epy + eLineH + 5
 
@@ -909,7 +1142,9 @@ local function drawCornerEditPanel(panelX, contentY, contentH, panelW)
         if ui.button("+ Insert Corner", vec2(panelW - 20, 0)) then
             -- Insert at cursor position
             local insertPos = cursorTime and getValueAtTime(getSelectedLap(), cursorTime, "pos") or 0.5
-            state.insertCorner(insertPos - 0.02, insertPos + 0.02)
+            if ctx and ctx.insertCorner then
+                ctx.insertCorner(insertPos - 0.02, insertPos + 0.02)
+            end
         end
         ui.popStyleColor(2)
     end
@@ -919,8 +1154,8 @@ end
 -- Main Window
 --------------------------------------------------------------------------------
 
-function lap_telemetry.draw(dt)
-    local car = ac.getCar(0)
+function lap_telemetry.draw(dt, context)
+    ctx = context or ctx or {}
 
     local windowSize = ui.availableSpace()
     if windowSize.x <= 0 or windowSize.y <= 0 then return end
@@ -968,7 +1203,7 @@ function lap_telemetry.draw(dt)
 
         -- Navigation through history
         ui.sameLine(130)
-        local history = state.history or {}
+        local history = ctx and ctx.history or {}
         if #history > 0 then
             -- Find current index in history
             local currentIdx = 1
@@ -1043,7 +1278,9 @@ function lap_telemetry.draw(dt)
             ui.pushStyleColor(ui.StyleColor.Button, theme.button.success)
             ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.successHover)
             if ui.button("Save Corners", vec2(100, 0)) then
-                state.saveCornersToFile()
+                if ctx and ctx.saveCornersToFile then
+                    ctx.saveCornersToFile()
+                end
                 editMode = false
                 selectedCorner = nil
                 draggingHandle = nil
@@ -1103,10 +1340,10 @@ function lap_telemetry.draw(dt)
     local contentH = windowSize.y - contentY - 30
     if contentH < 100 then return end
 
-    -- Add 10px padding between traces (4 gaps for 5 traces)
+    -- Add 10px padding between traces (5 gaps for 6 traces)
     local tracePadding = 10
-    local totalPadding = tracePadding * 4
-    local traceH = (contentH - totalPadding) / 5
+    local totalPadding = tracePadding * 5
+    local traceH = (contentH - totalPadding) / 6
     local graphX = padding + labelW
     local panelW = 180
     local graphW = windowSize.x - padding * 2 - labelW - panelW - 10
@@ -1268,6 +1505,10 @@ function lap_telemetry.draw(dt)
         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "speed", theme.trace.speed, theme.ghost.speed, 0, maxSpeed, "Speed", " kmh")
         y = y + traceH + tracePadding
 
+        -- Lateral G
+        drawLatGTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap)
+        y = y + traceH + tracePadding
+
         -- Steering
         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "steering", theme.trace.steering, theme.ghost.steering, 0, 1, "Steering", "")
 
@@ -1317,7 +1558,9 @@ function lap_telemetry.draw(dt)
         end
 
         local function onSelectReference(lapData)
-            state.setBestLap(lapData)
+            if ctx and ctx.setBestLap then
+                ctx.setBestLap(lapData)
+            end
             showRefPicker = false
         end
 

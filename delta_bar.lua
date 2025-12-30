@@ -1,7 +1,6 @@
 -- delta_bar.lua - iRacing-style delta bar window
 -- Shows lap time, delta vs reference lap with color-coded bar
 
-local state = require('state')
 local theme = require('theme')
 
 local delta_bar = {}
@@ -39,7 +38,10 @@ local lastDelta = 0
 
 --- Draw the delta bar window
 ---@param dt number Delta time
-function delta_bar.draw(dt)
+---@param currentLap table Current lap data
+---@param referenceLap table Reference lap data
+---@param currentPos number Current spline position
+function delta_bar.draw(dt, currentLap, referenceLap, currentPos)
     local car = ac.getCar(0)
     if not car then return end
 
@@ -54,7 +56,11 @@ function delta_bar.draw(dt)
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
-            lastDelta = state.getDelta()  -- positive = behind/slower
+            if currentLap and referenceLap and currentPos then
+                lastDelta = currentLap:getDeltaVs(referenceLap, currentPos)
+            else
+                lastDelta = 0
+            end
         end
     end
 
@@ -72,7 +78,8 @@ function delta_bar.draw(dt)
     -- Color based on delta time
     -- Green at 0.0 or better (ahead), gradient to red over 0.2s behind
     local barColor, textColor
-    if not state.hasBestLap() then
+    local hasRef = referenceLap and referenceLap:length() > 10
+    if not hasRef then
         barColor = theme.text.muted
         textColor = theme.text.muted
     elseif smoothedDelta <= 0 then
@@ -176,7 +183,7 @@ function delta_bar.draw(dt)
     )
 
     -- Fill bar from center
-    if state.hasBestLap() and smoothedBarWidth > 0.5 then
+    if hasRef and smoothedBarWidth > 0.5 then
         if smoothedDelta < 0 then
             -- Ahead: green bar goes LEFT
             ui.drawRectFilled(
@@ -205,7 +212,7 @@ function delta_bar.draw(dt)
     -- Bottom: Large delta in dark box
     ----------------------------------------
     local sign = displayDelta >= 0 and "+" or ""
-    local deltaText = state.hasBestLap() and string.format("%s%.2f", sign, displayDelta) or "NO REF"
+    local deltaText = hasRef and string.format("%s%.2f", sign, displayDelta) or "NO REF"
 
     ui.pushFont(ui.Font.Title)
     local deltaSize = ui.measureText(deltaText)

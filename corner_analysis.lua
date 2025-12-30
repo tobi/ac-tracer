@@ -1,7 +1,6 @@
 -- Corner Analysis - All corner-specific logic
 -- Analyzes corners in laps, tracks live corner data, compares to reference
 
-local state = require('state')
 local lap = require('lap')
 local scoring = require('scoring')
 local settings = require('app_settings')
@@ -25,6 +24,7 @@ local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 
 local liveCorner = {
     cornerNum = 0,
+    cornerInfo = nil,
     entrySpeed = nil,
     entryPos = nil,
     entryTime = nil,
@@ -72,6 +72,7 @@ end
 
 local function resetLiveCorner()
     liveCorner.cornerNum = 0
+    liveCorner.cornerInfo = nil
     liveCorner.entrySpeed = nil
     liveCorner.entryPos = nil
     liveCorner.entryTime = nil
@@ -91,6 +92,32 @@ local function resetLiveCorner()
     liveCorner.speeds = {}
     liveCorner.maxSteeringDeg = 0
 end
+
+local function getCornerInfo(corners, cornerNum)
+    if not corners then return nil end
+    for _, c in ipairs(corners) do
+        if c.number == cornerNum then return c end
+    end
+    return nil
+end
+
+local function getCornerAtPos(corners, pos)
+    if not corners then return 0, nil end
+    for _, c in ipairs(corners) do
+        if c.startPos and c.endPos then
+            local inCorner
+            if c.endPos >= c.startPos then
+                inCorner = pos >= c.startPos and pos <= c.endPos
+            else
+                inCorner = pos >= c.startPos or pos <= c.endPos
+            end
+            if inCorner then return c.number, c end
+        end
+    end
+    return 0, nil
+end
+
+local captureRefSpeeds
 
 --------------------------------------------------------------------------------
 -- Corner Notes Analysis Functions
@@ -162,6 +189,23 @@ local function samplePedalTraces(lapData, startPos, endPos, numSamples)
         table.insert(traces.brake, brake)
     end
     return traces
+end
+
+local function sampleSpeedTrace(lapData, startPos, endPos, numSamples)
+    if not lapData or lapData:length() == 0 then return {} end
+    local speeds = {}
+    local posRange = endPos - startPos
+    if posRange <= 0 then posRange = posRange + 1 end
+
+    for i = 0, numSamples do
+        local pos = startPos + (i / numSamples) * posRange
+        if pos > 1 then pos = pos - 1 end
+        local spd = lapData:getValueAtPos('speed', pos)
+        if spd then
+            table.insert(speeds, { pos = pos, speed = spd })
+        end
+    end
+    return speeds
 end
 
 --- Analyze bad throttle during heavy braking (not just gear blips)
@@ -478,11 +522,10 @@ end
 
 --- Analyze all corners in a lap
 ---@param lapData table Lap instance
----@param corners table Array of corner definitions (defaults to state.trackCorners)
+---@param corners table Array of corner definitions
 ---@return table Corner analysis indexed by corner number
 function corner_analysis.analyzeLap(lapData, corners)
     if not lapData then return {} end
-    corners = corners or state.trackCorners
     if not corners then return {} end
     
     local analysis = {}
@@ -546,64 +589,67 @@ function corner_analysis.compareCorners(current, reference)
     }
 end
 
---- Set a specific corner for display (called from lap_telemetry when clicking a corner)
----@param cornerNum number Corner number to display
+--- Compare two laps for a specific corner and build display data
+---@param cornerDef table Corner definition
 ---@param currentLap table Current lap data
 ---@param referenceLap table Reference lap data
-function corner_analysis.setViewedCorner(cornerNum, currentLap, referenceLap)
-    if not cornerNum or not currentLap or not referenceLap then return end
+---@param opts table|nil Options: { currentSpeeds, refSpeeds, numSpeedSamples, numPedalSamples, timeDeltaOverride, apply }
+---@return table|nil displayData
+---@return number|nil score
+function corner_analysis.compare(cornerDef, currentLap, referenceLap, opts)
+    if not cornerDef or not currentLap or not referenceLap then return nil end
+    if not cornerDef.startPos or not cornerDef.endPos then return nil end
 
-    -- Find the corner definition
-    local cornerDef = state.getCornerInfo(cornerNum)
-    if not cornerDef then return end
-
-    -- Analyze both laps for this corner
     local currentAnalysis = corner_analysis.analyzeCorner(currentLap, cornerDef)
     local refAnalysis = corner_analysis.analyzeCorner(referenceLap, cornerDef)
+    if not currentAnalysis or not refAnalysis then return nil end
 
-    if not currentAnalysis or not refAnalysis then return end
+    local data = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
+    if not data then return nil end
 
-    -- Build comparison data (matching the displayData structure from live tracking)
-    displayData = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
+    local numSpeedSamples = opts and opts.numSpeedSamples or 50
+    local numPedalSamples = opts and opts.numPedalSamples or 100
 
-    if displayData then
-        local startPos = cornerDef.startPos
-        local endPos = cornerDef.endPos
-        local numSamples = 50  -- Reasonable resolution for the speed trace
+    local currentSpeeds = opts and opts.currentSpeeds or sampleSpeedTrace(currentLap, cornerDef.startPos, cornerDef.endPos, numSpeedSamples)
+    local refSpeeds = opts and opts.refSpeeds or captureRefSpeeds(referenceLap, currentSpeeds)
 
-        -- Generate currentSpeeds and refSpeeds arrays (captured snapshot)
-        local currentSpeeds = {}
-        local refSpeeds = {}
-        for i = 0, numSamples do
-            local pos = startPos + (endPos - startPos) * (i / numSamples)
-            local curSpeed = currentLap:getValueAtPos('speed', pos)
-            local refSpeed = referenceLap:getValueAtPos('speed', pos)
-            if curSpeed then
-                table.insert(currentSpeeds, { pos = pos, speed = curSpeed })
-                table.insert(refSpeeds, { pos = pos, speed = refSpeed or curSpeed })
-            end
-        end
-        displayData.currentSpeeds = currentSpeeds
-        displayData.refSpeeds = refSpeeds
+    data.currentSpeeds = currentSpeeds
+    data.refSpeeds = refSpeeds
+    data.currentPedals = samplePedalTraces(currentLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples)
+    data.refPedals = samplePedalTraces(referenceLap, cornerDef.startPos, cornerDef.endPos, numPedalSamples)
 
-        -- Capture pedal traces (snapshot, not live references)
-        local numPedalSamples = 100
-        displayData.currentPedals = samplePedalTraces(currentLap, startPos, endPos, numPedalSamples)
-        displayData.refPedals = samplePedalTraces(referenceLap, startPos, endPos, numPedalSamples)
-
-        -- Calculate score
-        displayScore = scoring.calculate(displayData)
-
-        -- Set frozen state (store lap refs for notes/flag analysis only)
-        frozenCorner.active = true
-        frozenCorner.cornerNum = cornerNum
-        frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
-        frozenCorner.currentLap = currentLap
-        frozenCorner.referenceLap = referenceLap
-
-        ac.log(string.format("AC Tracer: Viewing corner %d analysis from telemetry (lap %d)",
-            cornerNum, frozenCorner.lapNumber))
+    if opts and opts.timeDeltaOverride ~= nil then
+        data.timeDelta = opts.timeDeltaOverride
     end
+
+    local score = scoring.calculate(data)
+    if not opts or opts.apply ~= false then
+        displayData = data
+        displayScore = score
+    end
+
+    return data, score
+end
+
+--- Set a specific corner for display (called from lap_telemetry when clicking a corner)
+---@param cornerDef table Corner definition to display
+---@param currentLap table Current lap data
+---@param referenceLap table Reference lap data
+function corner_analysis.setViewedCorner(cornerDef, currentLap, referenceLap)
+    if not cornerDef or not currentLap or not referenceLap then return end
+
+    local data = corner_analysis.compare(cornerDef, currentLap, referenceLap)
+    if not data then return end
+
+    -- Set frozen state (store lap refs for notes/flag analysis only)
+    frozenCorner.active = true
+    frozenCorner.cornerNum = cornerDef.number or 0
+    frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
+    frozenCorner.currentLap = currentLap
+    frozenCorner.referenceLap = referenceLap
+
+    ac.log(string.format("AC Tracer: Viewing corner %d analysis from telemetry (lap %d)",
+        frozenCorner.cornerNum, frozenCorner.lapNumber))
 end
 
 --- Clear frozen corner state (return to live tracking)
@@ -630,20 +676,27 @@ end
 --------------------------------------------------------------------------------
 
 --- Helper to capture reference speeds at specific positions
-local function captureRefSpeeds(positions)
+captureRefSpeeds = function(referenceLap, positions)
     local refSpeeds = {}
     for _, s in ipairs(positions) do
-        local refSpd = state.getGhostValueAt('speed', s.pos)
+        local refSpd = referenceLap and referenceLap:getValueAtPos('speed', s.pos) or nil
         table.insert(refSpeeds, { pos = s.pos, speed = refSpd or s.speed })
     end
     return refSpeeds
 end
 
-local function onCornerExit()
+local function onCornerExit(currentLap, referenceLap)
     if liveCorner.cornerNum == 0 then return end
 
-    local cornerInfo = state.getCornerInfo(liveCorner.cornerNum)
+    local cornerInfo = liveCorner.cornerInfo
     if not cornerInfo then return end
+    if not currentLap then return end
+    if not referenceLap then
+        displayData = nil
+        displayScore = 0
+        displayLap = currentLap
+        return
+    end
 
     -- Calculate corner time delta
     local timeDelta = nil
@@ -655,65 +708,18 @@ local function onCornerExit()
         end
     end
 
-    -- Get ghost data from best lap (capture NOW, not at draw time)
-    local ghostEntrySpeed = state.getGhostValueAt('speed', cornerInfo.startPos) or 0
-    local ghostExitSpeed = state.getGhostValueAt('speed', cornerInfo.endPos) or 0
-    local ghostMaxSteeringDeg = state.getGhostMaxSteeringInRange(cornerInfo.startPos, cornerInfo.endPos)
-    local refBrakePos = state.getGhostBrakePointInRange(cornerInfo.startPos, cornerInfo.endPos)
-    local refLiftOffPos = state.getGhostLiftPointInRange(cornerInfo.startPos, cornerInfo.endPos)
+    local currentSpeeds = (#liveCorner.speeds >= 2) and liveCorner.speeds or nil
+    local refSpeeds = currentSpeeds and captureRefSpeeds(referenceLap, currentSpeeds) or nil
 
-    -- Get ghost's actual apex (minimum speed point) in the corner range
-    local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
-    ghostApexSpeed = ghostApexSpeed or 0
-
-    -- Capture reference speeds at each position we have current data for (snapshot, not live)
-    local refSpeeds = captureRefSpeeds(liveCorner.speeds)
-
-    -- Capture pedal traces (snapshot current lap and reference lap data)
-    local numPedalSamples = 100
-    local currentPedals = samplePedalTraces(state.currentLap, cornerInfo.startPos, cornerInfo.endPos, numPedalSamples)
-    local refPedals = samplePedalTraces(state.bestLap, cornerInfo.startPos, cornerInfo.endPos, numPedalSamples)
-
-    -- Build comparison data (all data captured now, nothing fetched at draw time)
-    displayData = {
-        number = liveCorner.cornerNum,
-        -- Reference data (captured snapshot)
-        refEntrySpeed = ghostEntrySpeed,
-        refApexSpeed = ghostApexSpeed,
-        refExitSpeed = ghostExitSpeed,
-        refApexPos = ghostApexPos,
-        refStartPos = cornerInfo.startPos,
-        refEndPos = cornerInfo.endPos,
-        refBrakePos = refBrakePos,
-        refLiftOffPos = refLiftOffPos,
-        refMaxSteeringDeg = ghostMaxSteeringDeg,
-        refSpeeds = refSpeeds,  -- Captured reference speeds at each position
-        refPedals = refPedals,  -- Captured reference pedal traces
-        -- Current lap data (captured snapshot)
-        currentSpeeds = liveCorner.speeds,
-        currentEntrySpeed = liveCorner.entrySpeed,
-        currentApexSpeed = liveCorner.apexSpeed,
-        currentApexPos = liveCorner.apexPos,
-        currentExitSpeed = liveCorner.exitSpeed or liveCorner.apexSpeed,
-        currentBrakePos = liveCorner.brakePos,
-        currentLiftOffPos = liveCorner.liftOffPos,
-        currentMaxSteeringDeg = liveCorner.maxSteeringDeg,
-        currentPedals = currentPedals,  -- Captured current pedal traces
-        -- Deltas (apex speed uses each lap's own apex, not same position)
-        timeDelta = timeDelta,
-        entrySpeedDelta = liveCorner.entrySpeed and ghostEntrySpeed > 0 and
-                          (liveCorner.entrySpeed - ghostEntrySpeed) or nil,
-        apexSpeedDelta = liveCorner.apexSpeed and ghostApexSpeed > 0 and
-                         (liveCorner.apexSpeed - ghostApexSpeed) or nil,
-        exitSpeedDelta = (liveCorner.exitSpeed or liveCorner.apexSpeed or 0) - ghostExitSpeed,
-        steeringDelta = liveCorner.maxSteeringDeg - ghostMaxSteeringDeg,
-    }
-
-    displayScore = scoring.calculate(displayData)
+    corner_analysis.compare(cornerInfo, currentLap, referenceLap, {
+        currentSpeeds = currentSpeeds,
+        refSpeeds = refSpeeds,
+        timeDeltaOverride = timeDelta,
+    })
 
     -- Store snapshot of current lap for flag analysis (notes section)
     -- Note: This is still a reference, but flags don't change after capture
-    displayLap = state.currentLap
+    displayLap = currentLap
 end
 
 --------------------------------------------------------------------------------
@@ -722,7 +728,10 @@ end
 
 --- Update live corner tracking
 ---@param car table Car state from ac.getCar()
-function corner_analysis.update(car)
+---@param currentLap table Current lap data
+---@param referenceLap table Reference lap data
+---@param corners table Array of corner definitions
+function corner_analysis.update(car, currentLap, referenceLap, corners)
     if not car then return end
     
     -- Clear frozen corner state when car starts moving (above 30 km/h)
@@ -753,17 +762,17 @@ function corner_analysis.update(car)
     local wasInCorner = liveCorner.cornerNum > 0 and not liveCorner.leftCorner
     
     -- Check what corner we're in
-    local cornerNum = state.isInCorner(currentPos)
-    local cornerInfo = cornerNum > 0 and state.getCornerInfo(cornerNum) or nil
+    local cornerNum, cornerInfo = getCornerAtPos(corners, currentPos)
     
     if cornerNum > 0 and cornerInfo then
         if liveCorner.cornerNum ~= cornerNum then
             -- Entering new corner
             liveCorner.cornerNum = cornerNum
+            liveCorner.cornerInfo = cornerInfo
             liveCorner.entrySpeed = currentSpeed
             liveCorner.entryPos = currentPos
             liveCorner.entryTime = currentLapTime
-            liveCorner.ghostEntryTime = state.getGhostTimeAtPos(currentPos)
+            liveCorner.ghostEntryTime = referenceLap and referenceLap:getTimeAtPos(currentPos) or nil
             liveCorner.ghostExitTime = nil
             liveCorner.apexSpeed = currentSpeed
             liveCorner.apexPos = currentPos
@@ -832,13 +841,13 @@ function corner_analysis.update(car)
         if liveCorner.cornerNum > 0 and not liveCorner.leftCorner then
             liveCorner.leftCorner = true
             liveCorner.exitTime = currentLapTime
-            liveCorner.ghostExitTime = state.getGhostTimeAtPos(currentPos)
+            liveCorner.ghostExitTime = referenceLap and referenceLap:getTimeAtPos(currentPos) or nil
         end
     end
     
     -- Detect corner exit
     if wasInCorner and liveCorner.leftCorner then
-        onCornerExit()
+        onCornerExit(currentLap, referenceLap)
     end
 end
 
@@ -847,10 +856,12 @@ end
 --------------------------------------------------------------------------------
 
 --- Get current corner data (while in corner)
-function corner_analysis.getCurrentCornerData()
+---@param referenceLap table Reference lap data
+---@param corners table Array of corner definitions
+function corner_analysis.getCurrentCornerData(referenceLap, corners)
     if liveCorner.cornerNum == 0 then return nil end
     
-    local cornerInfo = state.getCornerInfo(liveCorner.cornerNum)
+    local cornerInfo = getCornerInfo(corners, liveCorner.cornerNum)
     if not cornerInfo then return nil end
     
     local cornerTimeDelta = nil
@@ -862,10 +873,10 @@ function corner_analysis.getCurrentCornerData()
         end
     end
     
-    local ghostEntrySpeed = state.getGhostValueAt('speed', cornerInfo.startPos) or 0
-    local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
+    local ghostEntrySpeed = referenceLap and referenceLap:getValueAtPos('speed', cornerInfo.startPos) or 0
+    local ghostApexPos, ghostApexSpeed = referenceLap and referenceLap:findApex(cornerInfo.startPos, cornerInfo.endPos) or nil
     ghostApexSpeed = ghostApexSpeed or 0
-    local ghostExitSpeed = state.getGhostValueAt('speed', cornerInfo.endPos) or 0
+    local ghostExitSpeed = referenceLap and referenceLap:getValueAtPos('speed', cornerInfo.endPos) or 0
 
     return {
         number = liveCorner.cornerNum,
@@ -1180,9 +1191,7 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
 end
 
 --- Main window rendering
-function corner_analysis.draw(dt, useKmh)
-    local car = ac.getCar(0)
-
+function corner_analysis.draw(dt, useKmh, currentLap, referenceLap, corners)
     local windowSize = ui.availableSpace()
     local padding = 8
     local panelX = windowSize.x * 0.68
@@ -1421,19 +1430,19 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         -- Get lap data (use frozen lap data if viewing from telemetry, or displayLap for live)
-        local currentLap, refLap
+        local liveLap, refLap
         if frozenCorner.active then
-            currentLap = frozenCorner.currentLap
+            liveLap = frozenCorner.currentLap
             refLap = frozenCorner.referenceLap
         else
             -- Use displayLap which was captured at corner exit time
             -- This ensures we have the correct lap data even if a new lap started
-            currentLap = displayLap or state.currentLap
-            refLap = state.bestLap
+            liveLap = displayLap or currentLap
+            refLap = referenceLap
         end
 
         -- NOTES section (only shown if there are significant observations)
-        local notes = collectCornerNotes(displayData, currentLap, refLap, speedUnit)
+        local notes = collectCornerNotes(displayData, liveLap, refLap, speedUnit)
 
         -- Draw notes section if we have any valid notes
         if notes and #notes > 0 then
@@ -1481,7 +1490,8 @@ function corner_analysis.draw(dt, useKmh)
         )
 
         -- Center the message
-        local message = state.hasBestLap() and "Waiting for corner exit..." or "Load a reference lap first"
+        local hasRef = referenceLap and referenceLap:length() > 10
+        local message = hasRef and "Waiting for corner exit..." or "Load a reference lap first"
         ui.pushFont(ui.Font.Main)
         local textSize = ui.measureText(message)
         local textX = padding + (emptyAreaW - textSize.x) / 2

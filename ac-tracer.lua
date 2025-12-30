@@ -84,7 +84,7 @@ function script.update(dt)
     end
 
     -- Update corner analysis (live tracking)
-    corner_analysis.update(currentCar)
+    corner_analysis.update(currentCar, state.currentLap, state.bestLap, state.trackCorners)
 
     -- Auto-hide telemetry window when above speed threshold (traces always visible)
     if settings.telemetryAutoHide then
@@ -529,11 +529,11 @@ end
 
 function script.windowCorners(dt)
     -- corner_analysis.update() handles corner tracking internally
-    corner_analysis.draw(dt, settings.useKMH)
+    corner_analysis.draw(dt, settings.useKMH, state.currentLap, state.bestLap, state.trackCorners)
 end
 
 function script.windowTelemetry(dt)
-    lap_telemetry.draw(dt)
+    lap_telemetry.draw(dt, state)
 end
 
 function script.windowReferenceLap(dt)
@@ -543,5 +543,5 @@ function script.windowReferenceLap(dt)
 end
 
 function script.windowDelta(dt)
-    delta_bar.draw(dt)
+    delta_bar.draw(dt, state.currentLap, state.bestLap, state.trackPosition)
 end
