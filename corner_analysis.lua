@@ -842,7 +842,7 @@ function corner_analysis.draw(dt, useKmh)
     local graphWidth = panelX - padding * 2
     local graphY = 22
     local meterLabelHeight = 16  -- Space for meter annotations at bottom
-    local pedalTraceHeight = 200  -- Height for brake/throttle traces
+    local pedalTraceHeight = 100  -- Height for brake/throttle traces
     local pedalTracePadding = 5   -- Padding between speed graph and pedal traces
     local graphHeight = windowSize.y - padding - graphY - meterLabelHeight - pedalTraceHeight - pedalTracePadding
     
@@ -1018,9 +1018,8 @@ function corner_analysis.draw(dt, useKmh)
 
         ui.popFont()
 
-        -- Draw pedal traces at bottom (full width)
+        -- Draw pedal traces at bottom (same width as speed graph above)
         local pedalY = graphY + graphHeight + meterLabelHeight + pedalTracePadding
-        local pedalWidth = windowSize.x - padding * 2
 
         -- Get lap data for pedal traces (use frozen lap data if viewing from telemetry)
         local currentLap, refLap
@@ -1033,7 +1032,7 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         if displayData.refStartPos and displayData.refEndPos then
-            drawPedalTraces(padding, pedalY, pedalWidth, pedalTraceHeight,
+            drawPedalTraces(padding, pedalY, graphWidth, pedalTraceHeight,
                 displayData.refStartPos, displayData.refEndPos, currentLap, refLap)
         end
     else
