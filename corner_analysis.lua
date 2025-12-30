@@ -57,6 +57,8 @@ local frozenCorner = {
     active = false,
     cornerNum = 0,
     lapNumber = 0,
+    currentLap = nil,   -- The lap being analyzed
+    referenceLap = nil, -- The reference lap for comparison
 }
 
 --------------------------------------------------------------------------------
@@ -239,7 +241,9 @@ function corner_analysis.setViewedCorner(cornerNum, currentLap, referenceLap)
         frozenCorner.active = true
         frozenCorner.cornerNum = cornerNum
         frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
-        
+        frozenCorner.currentLap = currentLap
+        frozenCorner.referenceLap = referenceLap
+
         ac.log(string.format("AC Tracer: Viewing corner %d analysis from telemetry (lap %d)",
             cornerNum, frozenCorner.lapNumber))
     end
@@ -250,6 +254,8 @@ function corner_analysis.clearFrozenCorner()
     frozenCorner.active = false
     frozenCorner.cornerNum = 0
     frozenCorner.lapNumber = 0
+    frozenCorner.currentLap = nil
+    frozenCorner.referenceLap = nil
 end
 
 --- Check if viewing a frozen corner
@@ -725,6 +731,107 @@ local function drawScoreGauge(cx, cy, radius, score)
     ui.popFont()
 end
 
+--- Draw brake/throttle traces for a corner
+local function drawPedalTraces(x, y, w, h, startPos, endPos, currentLap, refLap)
+    -- Background
+    ui.drawRectFilled(vec2(x, y), vec2(x + w, y + h), theme.bg.graph, 4)
+
+    -- Draw horizontal grid lines at 25%, 50%, 75%
+    for frac = 0.25, 0.75, 0.25 do
+        local lineY = y + h * (1 - frac)
+        ui.drawLine(vec2(x, lineY), vec2(x + w, lineY), rgbm(0.3, 0.3, 0.3, 0.3), 1)
+    end
+
+    local posRange = endPos - startPos
+    if posRange <= 0 then posRange = posRange + 1 end  -- Handle wrap-around
+
+    local numPoints = math.floor(w / 2)  -- One point every 2 pixels
+
+    -- Helper to convert position to X
+    local function posToX(pos)
+        local normalizedPos = (pos - startPos) / posRange
+        if normalizedPos < 0 then normalizedPos = normalizedPos + 1 end
+        return x + normalizedPos * w
+    end
+
+    -- Draw reference traces first (behind current)
+    if refLap and refLap:length() > 0 then
+        -- Reference throttle (ghost)
+        ui.pathClear()
+        for i = 0, numPoints do
+            local pos = startPos + (i / numPoints) * posRange
+            if pos > 1 then pos = pos - 1 end
+            local throttle = refLap:getValueAtPos('throttle', pos)
+            if throttle then
+                local px = x + (i / numPoints) * w
+                local py = y + h - throttle * h
+                ui.pathLineTo(vec2(px, py))
+            end
+        end
+        ui.pathStroke(theme.ghost.throttle, false, 2)
+
+        -- Reference brake (ghost)
+        ui.pathClear()
+        for i = 0, numPoints do
+            local pos = startPos + (i / numPoints) * posRange
+            if pos > 1 then pos = pos - 1 end
+            local brake = refLap:getValueAtPos('brake', pos)
+            if brake then
+                local px = x + (i / numPoints) * w
+                local py = y + h - brake * h
+                ui.pathLineTo(vec2(px, py))
+            end
+        end
+        ui.pathStroke(theme.ghost.brake, false, 2)
+    end
+
+    -- Draw current traces
+    if currentLap and currentLap:length() > 0 then
+        -- Current throttle
+        ui.pathClear()
+        for i = 0, numPoints do
+            local pos = startPos + (i / numPoints) * posRange
+            if pos > 1 then pos = pos - 1 end
+            local throttle = currentLap:getValueAtPos('throttle', pos)
+            if throttle then
+                local px = x + (i / numPoints) * w
+                local py = y + h - throttle * h
+                ui.pathLineTo(vec2(px, py))
+            end
+        end
+        ui.pathStroke(theme.trace.throttle, false, 2)
+
+        -- Current brake
+        ui.pathClear()
+        for i = 0, numPoints do
+            local pos = startPos + (i / numPoints) * posRange
+            if pos > 1 then pos = pos - 1 end
+            local brake = currentLap:getValueAtPos('brake', pos)
+            if brake then
+                local px = x + (i / numPoints) * w
+                local py = y + h - brake * h
+                ui.pathLineTo(vec2(px, py))
+            end
+        end
+        ui.pathStroke(theme.trace.brake, false, 2)
+    end
+
+    -- Labels
+    ui.pushFont(ui.Font.Small)
+    ui.setCursor(vec2(x + 4, y + 2))
+    ui.pushStyleColor(ui.StyleColor.Text, theme.trace.throttle)
+    ui.text("Throttle")
+    ui.popStyleColor()
+    ui.sameLine()
+    ui.pushStyleColor(ui.StyleColor.Text, theme.trace.brake)
+    ui.text(" / Brake")
+    ui.popStyleColor()
+    ui.popFont()
+
+    -- Outline
+    ui.drawRect(vec2(x, y), vec2(x + w, y + h), rgbm(0.4, 0.4, 0.4, 0.5), 4, 1)
+end
+
 --- Main window rendering
 function corner_analysis.draw(dt, useKmh)
     local car = ac.getCar(0)
@@ -735,7 +842,9 @@ function corner_analysis.draw(dt, useKmh)
     local graphWidth = panelX - padding * 2
     local graphY = 22
     local meterLabelHeight = 16  -- Space for meter annotations at bottom
-    local graphHeight = windowSize.y - padding - graphY - meterLabelHeight
+    local pedalTraceHeight = 200  -- Height for brake/throttle traces
+    local pedalTracePadding = 5   -- Padding between speed graph and pedal traces
+    local graphHeight = windowSize.y - padding - graphY - meterLabelHeight - pedalTraceHeight - pedalTracePadding
     
     -- Fixed layout constants
     local gaugeRadius = 25
@@ -908,6 +1017,25 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         ui.popFont()
+
+        -- Draw pedal traces at bottom (full width)
+        local pedalY = graphY + graphHeight + meterLabelHeight + pedalTracePadding
+        local pedalWidth = windowSize.x - padding * 2
+
+        -- Get lap data for pedal traces (use frozen lap data if viewing from telemetry)
+        local currentLap, refLap
+        if frozenCorner.active then
+            currentLap = frozenCorner.currentLap
+            refLap = frozenCorner.referenceLap
+        else
+            currentLap = state.currentLap
+            refLap = state.bestLap
+        end
+
+        if displayData.refStartPos and displayData.refEndPos then
+            drawPedalTraces(padding, pedalY, pedalWidth, pedalTraceHeight,
+                displayData.refStartPos, displayData.refEndPos, currentLap, refLap)
+        end
     else
         -- Empty state: message in graph area
         ui.setCursor(vec2(padding + graphWidth / 2 - 60, graphY + graphHeight / 2 - 10))
