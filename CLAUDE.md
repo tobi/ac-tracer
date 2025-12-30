@@ -70,8 +70,8 @@ lap = {
     
     -- Telemetry arrays (all synchronized, same length, sampled at 60 Hz)
     throttle = { number, ... },  -- Throttle input (0.0 to 1.0)
-    brake = { number, ... },     -- Front brake pressure (0.0 to 1.0, normalized to 100 bar)
-    brake_r = { number, ... },   -- Rear brake pressure (0.0 to 1.0, or same as front if no DLL)
+    brake = { number, ... },     -- Front brake pressure in BAR (NOT normalized)
+    brake_r = { number, ... },   -- Rear brake pressure in BAR (or same as front if no DLL)
     clutch = { number, ... },    -- Clutch input (0.0 to 1.0, inverted: 1.0 = pressed)
     steering = { number, ... },  -- Steering input (0.0 to 1.0, normalized, 0.5 = straight)
     speed = { number, ... },     -- Speed in km/h
@@ -99,8 +99,8 @@ lap = {
 | `fuelLeftAtStart` | number | liters | Fuel level when crossing start line |
 | `lapNumberInSession` | number | 1, 2, 3... | Which lap number in this session |
 | `throttle[i]` | number | 0.0-1.0 | Throttle position at sample i |
-| `brake[i]` | number | 0.0-1.0 | Front brake pressure at sample i (normalized to 100 bar) |
-| `brake_r[i]` | number | 0.0-1.0 | Rear brake pressure at sample i (or same as front if no DLL) |
+| `brake[i]` | number | bar | Front brake pressure at sample i (in bar, NOT normalized) |
+| `brake_r[i]` | number | bar | Rear brake pressure at sample i (in bar, or same as front) |
 | `clutch[i]` | number | 0.0-1.0 | Clutch position (inverted: 1.0 = foot on pedal) |
 | `steering[i]` | number | 0.0-1.0 | Steering angle normalized (0.5 = straight) |
 | `speed[i]` | number | km/h | Ground speed at sample i |
@@ -534,10 +534,10 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 
 - **All sampling is 60 Hz** - consistent across recording, CSV import, and display
 - **Position-based matching** - ghost traces matched by track position, not time
-- **Normalized inputs** - all 0.0-1.0 for consistent display
+- **Normalized inputs** - throttle, clutch, steering are 0.0-1.0; brake is in bar
 - **Time in milliseconds** - internal storage uses ms for precision
 - **Corner files** - saved as `./corners/<track_id>.csv` (per-track)
-- **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position
+- **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position * 100 bar
 - **Front/rear brake** - `brake` = front, `brake_r` = rear (or same as front if no DLL/CSV data)
 
 ### Speed Units Convention
@@ -557,6 +557,55 @@ ui_utils.speedDeltaDisplay(delta) -- Returns "+5" or "-3" in display units
 ```
 
 **Do NOT** pass `useKmh` as a function parameter - this clutters APIs. The setting is global and should be accessed via `ui_utils`.
+
+### Brake Pressure Convention
+
+**All brake data is stored in BAR internally.** This preserves fidelity for race cars with 100+ bar brake systems while still working for road cars.
+
+#### Data Sources
+
+| Source | Raw Unit | Conversion |
+|--------|----------|------------|
+| cphys DLL | PSI | `bar = psi * 0.0689476` |
+| CSV (MoTeC) | PSI/bar/kPa | Auto-detected from unit row |
+| Fallback (pedal) | 0-1 | `bar = pedal * 100` |
+
+#### Storage
+
+```lua
+lap.brake[i]   -- Front brake pressure in bar
+lap.brake_r[i] -- Rear brake pressure in bar
+```
+
+Values are **never normalized** during storage or serialization. A GT3 car might have values 0-120 bar, a road car 0-40 bar.
+
+#### Chart Scaling
+
+For consistent display across different cars, `state.brakeScaleBar` provides a computed scale:
+
+```lua
+state.brakeScaleBar  -- Computed max for brake charts (e.g., 90 or 100)
+```
+
+Computed as: `max(bestLap, currentLap, recent history) * 1.11`, rounded up to nearest 10, minimum 90.
+
+This ensures:
+- Race cars with high brake pressure use full chart height
+- Road cars don't show tiny brake traces at the bottom
+- 11% headroom prevents clipping at chart top
+
+#### Usage in UI
+
+```lua
+-- Get brake value at position (returns bar)
+local brakeBar = lap:getValueAtPos('brake', pos)
+
+-- For chart rendering, normalize to 0-1 using state scale
+local brakeNorm = brakeBar / state.brakeScaleBar
+
+-- Get max brake for a lap
+local maxBar = lap:maxBrakeBars()  -- Cached for completed laps
+```
 
 ---
 

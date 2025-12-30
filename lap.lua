@@ -44,7 +44,8 @@ lap.FLAGS = {
 -- Thresholds for detecting events
 local SLIP_THRESHOLD = 0.15      -- Wheel slip ratio threshold (15% difference from road speed)
 local LOCKUP_SPEED_MIN = 20      -- Minimum car speed (km/h) for lockup detection
-local OVERLAP_THRESHOLD = 0.1    -- Both pedals must be > 10% to count as overlap
+local OVERLAP_THROTTLE_THRESHOLD = 0.1  -- Throttle must be > 10% for overlap
+local OVERLAP_BRAKE_THRESHOLD_BAR = 10  -- Brake must be > 10 bar for overlap
 local OVERLAP_MIN_DURATION = 0.1 -- 100ms minimum duration for overlap to be flagged
 
 -- Overlap tracking state (per-lap)
@@ -72,8 +73,8 @@ function lap.new(track, car, sessionId)
 
         -- Telemetry arrays (all synchronized, sampled at 60 Hz)
         throttle = {},         -- 0.0 to 1.0
-        brake = {},            -- 0.0 to 1.0 (front brake pressure normalized)
-        brake_r = {},          -- 0.0 to 1.0 (rear brake pressure normalized)
+        brake = {},            -- bar (front brake pressure) - NOT normalized, stored in bar
+        brake_r = {},          -- bar (rear brake pressure) - NOT normalized, stored in bar
         clutch = {},           -- 0.0 to 1.0 (inverted: 1.0 = pressed)
         steering = {},         -- 0.0 to 1.0 (normalized, 0.5 = straight)
         speed = {},            -- km/h
@@ -227,11 +228,11 @@ end
 ---@param car table Car state from ac.getCar()
 function lap:addSample(car)
     table.insert(self.throttle, car.gas)
-    -- Use extended brake pressure if available, otherwise fall back to pedal position
+    -- Get brake pressure in bar (from cphys DLL or fallback: pedal * 100)
     -- brake = front brake, brake_r = rear brake (or same as front if no DLL)
-    local brakeFront, brakeRear = extended_brake.getNormalizedFrontRear(car)
-    table.insert(self.brake, brakeFront)
-    table.insert(self.brake_r, brakeRear)
+    local brakeFrontBar, brakeRearBar = extended_brake.getFrontRearBar(car)
+    table.insert(self.brake, brakeFrontBar)
+    table.insert(self.brake_r, brakeRearBar)
     table.insert(self.clutch, 1 - car.clutch)  -- Invert: 1.0 = foot on pedal
     table.insert(self.steering, lap.normalizeSteer(car.steer))
     table.insert(self.speed, car.speedKmh)
@@ -310,9 +311,9 @@ function lap:addSample(car)
     -- Overlap detection (both throttle and brake pressed > threshold)
     local currentTime = car.lapTimeMs / 1000
     local throttle = car.gas
-    local brake = extended_brake.getNormalizedBrake(car)
+    local brakeBar = extended_brake.getBrakePressureBar(car)
 
-    if throttle > OVERLAP_THRESHOLD and brake > OVERLAP_THRESHOLD then
+    if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
         -- Both pedals pressed
         if not overlapStartTime then
             overlapStartTime = currentTime
@@ -348,6 +349,30 @@ end
 ---@return boolean True if lap is empty
 function lap:isEmpty()
     return not self.pos or #self.pos == 0
+end
+
+--- Get maximum brake pressure in bar for this lap
+--- Caches result in _maxBrakeBar for completed laps
+---@return number Maximum brake pressure in bar
+function lap:maxBrakeBars()
+    -- Return cached value if available
+    if self._maxBrakeBar then return self._maxBrakeBar end
+    
+    if self:isEmpty() or not self.brake then return 0 end
+    
+    local maxBar = 0
+    for i = 1, #self.brake do
+        if self.brake[i] > maxBar then
+            maxBar = self.brake[i]
+        end
+    end
+    
+    -- Cache only for completed laps (still recording laps may get higher values)
+    if self.completed then
+        self._maxBrakeBar = maxBar
+    end
+    
+    return maxBar
 end
 
 --- Prune lap data to a specific position (for TimeShift rewind support)

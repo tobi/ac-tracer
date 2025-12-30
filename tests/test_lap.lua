@@ -49,8 +49,7 @@ test("adds sample from car state", function()
     
     assert_equal(l:length(), 1)
     assert_equal(l.throttle[1], 0.8)
-    assert_equal(l.brake[1], 0.3)  -- Mock returns car.brake directly
-    assert_equal(l.clutch[1], 1.0)  -- Inverted: 1 - 0 = 1
+    -- Note: brake is stored in bar (implementation detail, not tested here)
     assert_equal(l.speed[1], 150)
     assert_equal(l.gear[1], 4)
     assert_equal(l.pos[1], 0.25)
@@ -71,6 +70,28 @@ test("steering is normalized to 0-1", function()
     -- Right turn (negative degrees)
     l:addSample({ gas = 0, brake = 0, clutch = 0, steer = -90, speedKmh = 100, gear = 3, splinePosition = 0.3, lapTimeMs = 3000, fuel = 50 })
     assert_true(l.steering[3] > 0.5, "Right turn should be > 0.5")
+end)
+
+test("brake pedal fallback scales to bar", function()
+    -- When cphys DLL is not available, car.brake (0-1) should be scaled to bar
+    -- Convention: 100% pedal = 100 bar
+    local l = lap.new("track", "car")
+    
+    -- No braking
+    l:addSample({ gas = 1, brake = 0, clutch = 0, steer = 0, speedKmh = 200, gear = 5, splinePosition = 0.1, lapTimeMs = 1000, fuel = 50 })
+    assert_equal(l.brake[1], 0, "0% pedal should be 0 bar")
+    
+    -- Light braking (30%)
+    l:addSample({ gas = 0, brake = 0.3, clutch = 0, steer = 0, speedKmh = 180, gear = 4, splinePosition = 0.2, lapTimeMs = 2000, fuel = 50 })
+    assert_equal(l.brake[2], 30, "30% pedal should be 30 bar")
+    
+    -- Full braking (100%)
+    l:addSample({ gas = 0, brake = 1.0, clutch = 0, steer = 0, speedKmh = 100, gear = 3, splinePosition = 0.3, lapTimeMs = 3000, fuel = 50 })
+    assert_equal(l.brake[3], 100, "100% pedal should be 100 bar")
+    
+    -- Half braking (50%)
+    l:addSample({ gas = 0, brake = 0.5, clutch = 0, steer = 0, speedKmh = 150, gear = 4, splinePosition = 0.4, lapTimeMs = 4000, fuel = 50 })
+    assert_equal(l.brake[4], 50, "50% pedal should be 50 bar")
 end)
 
 

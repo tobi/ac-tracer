@@ -149,6 +149,13 @@ ac.getTrackID = function()
     return "test_track"
 end
 
+-- Mock memory-mapped file reading (for cphys DLL / dwrite.dll)
+-- Returns nil to simulate DLL not being present (fallback mode)
+ac.readMemoryMappedFile = function(name, struct, readOnly)
+    -- Return nil to trigger fallback to car.brake
+    return nil
+end
+
 -- Mock storage (in-memory)
 local storageData = {}
 
@@ -296,13 +303,37 @@ function mock.clearStorage()
     storageData = {}
 end
 
--- Mock extended-brake module (stub that returns car.brake)
+-- Mock extended-brake module (stub that returns car.brake converted to bar)
+-- Convention: 100% pedal = 100 bar
+local FALLBACK_MAX_BAR = 100
 package.loaded['extended-brake'] = {
     isAvailable = function() return false end,
-    getBrakePressure = function(car) return car and car.brake or 0, false end,
+    -- New bar-based API
+    getBrakePressureBar = function(car) 
+        local pedal = car and car.brake or 0
+        return pedal * FALLBACK_MAX_BAR, false 
+    end,
+    getFrontRearBar = function(car) 
+        local pedal = car and car.brake or 0
+        local bar = pedal * FALLBACK_MAX_BAR
+        return bar, bar, false 
+    end,
+    getBrakeData = function(car) 
+        local pedal = car and car.brake or 0
+        return { value = pedal * FALLBACK_MAX_BAR, isFromDLL = false, unit = "bar" } 
+    end,
+    -- Legacy aliases (now call bar versions)
+    getBrakePressure = function(car) 
+        local pedal = car and car.brake or 0
+        return pedal * FALLBACK_MAX_BAR, false 
+    end,
+    getFrontRearPressure = function(car) 
+        local pedal = car and car.brake or 0
+        local bar = pedal * FALLBACK_MAX_BAR
+        return bar, bar, false 
+    end,
+    -- Normalized (legacy)
     getNormalizedBrake = function(car) return car and car.brake or 0 end,
-    getBrakeData = function(car) return { value = car and car.brake * 100 or 0, isPressure = false, unit = "%" } end,
-    getFrontRearPressure = function(car) local b = car and car.brake or 0; return b, b, false end,
     getNormalizedFrontRear = function(car) local b = car and car.brake or 0; return b, b end,
     getStatus = function() return { available = false, source = "car.brake", status = "fallback mode" } end,
 }

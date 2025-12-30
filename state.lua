@@ -32,6 +32,9 @@ state.currentLap = nil         -- lap: being recorded
 state.bestLap = nil            -- lap: current reference for ghost comparison
 state.bestLapCorners = {}      -- pre-computed corner analysis for bestLap
 
+-- Brake scale for charts (computed from max brake across relevant laps)
+state.brakeScaleBar = 100      -- number: max bar value for brake charts (90 or 100)
+
 -- Manual corner recording
 state.cornerRecording = false
 state.cornerRecordStart = nil
@@ -80,6 +83,50 @@ local CORNERS_DIR = __dirname .. "/corners"
 local function getCornersPath()
     if not state.track then return nil end
     return CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
+end
+
+--------------------------------------------------------------------------------
+-- Brake Scale Computation
+--------------------------------------------------------------------------------
+
+--- Compute brake scale from relevant laps
+--- Takes max brake across bestLap, currentLap, adds 11%, rounds up to nearest 10
+--- Result is either 90 or 100 (minimum 90)
+local function computeBrakeScale()
+    local maxBar = 0
+    
+    -- Check bestLap
+    if state.bestLap then
+        local best = state.bestLap:maxBrakeBars()
+        if best > maxBar then maxBar = best end
+    end
+    
+    -- Check currentLap
+    if state.currentLap then
+        local current = state.currentLap:maxBrakeBars()
+        if current > maxBar then maxBar = current end
+    end
+    
+    -- Check history (first few laps)
+    for i = 1, math.min(5, #state.history) do
+        local histLap = state.history[i]
+        if histLap then
+            local hist = histLap:maxBrakeBars()
+            if hist > maxBar then maxBar = hist end
+        end
+    end
+    
+    -- Add 11% headroom and round up to nearest 10
+    local withHeadroom = maxBar * 1.11
+    local rounded = math.ceil(withHeadroom / 10) * 10
+    
+    -- Minimum 90, typical max 100 (but allow higher for race cars)
+    return math.max(90, rounded)
+end
+
+--- Update brake scale (call when bestLap changes or periodically)
+function state.updateBrakeScale()
+    state.brakeScaleBar = computeBrakeScale()
 end
 
 --------------------------------------------------------------------------------
@@ -730,9 +777,13 @@ function state.update(dt, car)
                     state.bestLapCorners = state.analyzeCorners(state.currentLap)
                     saveBestLap()
                     updateAutoDetectedCorners()
+                    state.updateBrakeScale()
                     ac.log('Traces: New best lap: ' .. (state.currentLap.time / 1000) .. 's')
                 end
             end
+            
+            -- Update brake scale after each completed lap (even if not best)
+            state.updateBrakeScale()
         end
         
         -- Reset for new lap
@@ -862,6 +913,7 @@ function state.setBestLap(lapData)
     state.bestLapCorners = state.analyzeCorners(lapData)
     saveBestLap()
     updateAutoDetectedCorners()
+    state.updateBrakeScale()
 end
 
 --- Reset best lap

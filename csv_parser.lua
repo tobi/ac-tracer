@@ -21,7 +21,8 @@ local COLUMN_MAPPINGS = {
     distance = { "distance" },             -- meters from lap start (real car exports)
 
     -- Speed columns (in order of preference)
-    speed = { "ground speed", "corr speed", "wheel speed avg" },
+    -- Note: Real car telemetry uses various names for speed
+    speed = { "ground speed", "corr speed", "wheel speed avg", "aero speed", "uspeed", "vehrefspeed", "speed" },
 
     -- Input columns - driver throttle pos preferred over throttle pos
     throttle = { "driver throttle pos", "throttle pos" },
@@ -40,6 +41,12 @@ local COLUMN_MAPPINGS = {
     g_lat = { "g force lat", "lat g", "g lat", "lateral g", "lat accel", "lateral accel" },
     g_long = { "g force long", "long g", "g long", "longitudinal g", "long accel", "longitudinal accel" },
 }
+
+-- Conversion constant: 1 PSI = 0.0689476 bar
+local PSI_TO_BAR = 0.0689476
+
+-- Fallback assumption: 100% pedal = 100 bar (for CSVs with only pedal position)
+local FALLBACK_MAX_BAR = 100
 
 -- Unit conversions based on CSV unit row
 local UNIT_CONVERSIONS = {
@@ -67,6 +74,13 @@ local UNIT_CONVERSIONS = {
     g = {
         ["g"] = 1.0,
         ["G"] = 1.0,
+    },
+    -- Brake pressure conversions to bar
+    brake = {
+        ["bar"] = 1.0,
+        ["psi"] = PSI_TO_BAR,
+        ["kpa"] = 0.01,     -- 1 kPa = 0.01 bar
+        ["%"] = 1.0,        -- percentage -> multiply by FALLBACK_MAX_BAR later
     },
 }
 
@@ -459,30 +473,41 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         local clutch = tonumber(fields.clutch) or 0
                         local steering = tonumber(fields.steering) or 0
 
-                        -- Front brake (brake = front)
-                        local brake = 0
+                        -- Front brake in BAR (brake = front)
+                        local brakeBar = 0
                         if config.useBrakePressure then
+                            -- CSV has brake pressure - convert to bar using unit factor
                             local pressure = tonumber(fields.brakePressure) or 0
-                            brake = pressure / config.brakePressureMax
+                            brakeBar = pressure * config.brakePressureFactor
                         elseif indices.brakePos then
-                            brake = tonumber(fields.brakePos) or 0
-                            if brake > 1 then brake = brake / 100 end
+                            -- CSV only has pedal position - assume 100% = 100 bar
+                            local pedal = tonumber(fields.brakePos) or 0
+                            if pedal > 1 then pedal = pedal / 100 end  -- Normalize 0-100 to 0-1
+                            brakeBar = pedal * FALLBACK_MAX_BAR
                         end
 
-                        -- Rear brake (use rear pressure if available, else same as front)
-                        local brake_r = brake
+                        -- Rear brake in BAR (use rear pressure if available, else same as front)
+                        local brakeBarR = brakeBar
                         if config.useBrakePressureR then
                             local pressureR = tonumber(fields.brakePressureR) or 0
-                            brake_r = pressureR / config.brakePressureMax
+                            brakeBarR = pressureR * config.brakePressureFactor
                         end
+                        
+                        -- Clamp brake to >= 0 (no upper limit - real cars can have 100+ bar)
+                        brakeBar = math.max(0, brakeBar)
+                        brakeBarR = math.max(0, brakeBarR)
 
-                        -- Normalize 0-100 to 0-1
+                        -- Normalize 0-100 to 0-1 and clamp to valid range
                         if throttle > 1 and throttle <= 2 then
                             throttle = 1
                         elseif throttle > 2 then
                             throttle = throttle / 100
                         end
+                        -- Clamp throttle to 0-1 (real car data may have negative values during engine braking)
+                        throttle = math.max(0, math.min(1, throttle))
+                        
                         if clutch > 1 then clutch = clutch / 100 end
+                        clutch = math.max(0, math.min(1, clutch))
 
                         speed = speed * config.speedFactor
 
@@ -520,8 +545,8 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         table.insert(data.times, sampleTime)
                         table.insert(data.pos, pos)
                         table.insert(data.throttle, throttle)
-                        table.insert(data.brake, brake)
-                        table.insert(data.brake_r, brake_r)
+                        table.insert(data.brake, brakeBar)      -- Stored in bar
+                        table.insert(data.brake_r, brakeBarR)   -- Stored in bar
                         table.insert(data.clutch, 1 - clutch)
                         table.insert(data.steering, steerNorm)
                         table.insert(data.speed, speed)
@@ -671,29 +696,27 @@ function csv_parser.parseFile(filePath, trackLength)
             "INFO: Unknown CSV sample rate - normalizing to %d Hz", TARGET_SAMPLE_RATE))
     end
 
-    -- Determine brake source (front and rear)
+    -- Determine brake source (front and rear) - output is always in BAR
     local useBrakePressure = indices.brakePressure ~= nil
     local useBrakePressureR = indices.brakePressureR ~= nil
-    local brakePressureMax = 100  -- default bar
     local brakePressureUnit = nil
+    local brakePressureFactor = 1.0  -- Factor to convert CSV unit to bar
 
     if useBrakePressure and units then
         local brakeHeader = headers[indices.brakePressure]
         brakePressureUnit = units[brakeHeader]
-        if brakePressureUnit == "psi" then
-            brakePressureMax = 1450
-        elseif brakePressureUnit == "kpa" then
-            brakePressureMax = 10000
-        end
+        -- Get conversion factor from CSV unit to bar
+        brakePressureFactor = UNIT_CONVERSIONS.brake[brakePressureUnit] or 1.0
     end
 
     if useBrakePressure then
-        ac.log("csv_parser: Using front brake pressure (unit: " .. (brakePressureUnit or "bar") .. ")")
+        ac.log("csv_parser: Using front brake pressure (unit: " .. (brakePressureUnit or "bar") .. 
+            ", factor to bar: " .. brakePressureFactor .. ")")
         if useBrakePressureR then
             ac.log("csv_parser: Using rear brake pressure")
         end
     elseif indices.brakePos then
-        ac.log("csv_parser: Using brake pedal position")
+        ac.log("csv_parser: Using brake pedal position (assuming 100%% = " .. FALLBACK_MAX_BAR .. " bar)")
     else
         table.insert(warnings, "WARNING: No brake data column found")
     end
@@ -753,7 +776,7 @@ function csv_parser.parseFile(filePath, trackLength)
         speedFactor = speedFactor,
         useBrakePressure = useBrakePressure,
         useBrakePressureR = useBrakePressureR,
-        brakePressureMax = brakePressureMax,
+        brakePressureFactor = brakePressureFactor,  -- Factor to convert CSV unit to bar
         fuelFactor = fuelFactor,
         gLatFactor = gLatFactor,
         gLongFactor = gLongFactor,
