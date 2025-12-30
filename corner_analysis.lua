@@ -816,18 +816,6 @@ local function drawPedalTraces(x, y, w, h, startPos, endPos, currentLap, refLap)
         ui.pathStroke(theme.trace.brake, false, 2)
     end
 
-    -- Labels
-    ui.pushFont(ui.Font.Small)
-    ui.setCursor(vec2(x + 4, y + 2))
-    ui.pushStyleColor(ui.StyleColor.Text, theme.trace.throttle)
-    ui.text("Throttle")
-    ui.popStyleColor()
-    ui.sameLine()
-    ui.pushStyleColor(ui.StyleColor.Text, theme.trace.brake)
-    ui.text(" / Brake")
-    ui.popStyleColor()
-    ui.popFont()
-
     -- Outline
     ui.drawRect(vec2(x, y), vec2(x + w, y + h), rgbm(0.4, 0.4, 0.4, 0.5), 4, 1)
 end
