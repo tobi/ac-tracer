@@ -102,7 +102,7 @@ end
 ---@return table|nil Note {text, severity} about steering difference, or nil if not significant
 local function analyzeSteeringInput(data)
     if not data.steeringDelta then return nil end
-    if math.abs(data.steeringDelta) <= 5 then return nil end
+    if math.abs(data.steeringDelta) <= 10 then return nil end  -- Only report > 10° difference
 
     local dir = data.steeringDelta > 0 and "more" or "less"
     return { text = string.format("%.0f° %s steering", math.abs(data.steeringDelta), dir), severity = "info" }
@@ -119,26 +119,49 @@ local function analyzeGearUsage(data)
     return { text = string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir), severity = "info" }
 end
 
---- Analyze coasting distance (throttle lift to brake application)
+--- Analyze coasting distance vs reference (throttle lift to brake application)
 ---@param data table Corner comparison data
----@return table|nil Note {text, severity} about coasting, or nil if minimal/none
+---@return table|nil Note {text, severity} about coasting difference, or nil if similar
 local function analyzeCoasting(data)
     if not data.currentLiftOffPos or not data.currentBrakePos then return nil end
+    if not data.refLiftOffPos or not data.refBrakePos then return nil end
 
     local trackLen = ac.getSim().trackLengthM or 5000
-    local coastM = (data.currentBrakePos - data.currentLiftOffPos) * trackLen
-    if coastM < 0 then coastM = coastM + trackLen end  -- Handle wrap
 
-    if coastM <= 10 then return nil end  -- Only report if > 10m
-    return { text = string.format("%.0fm coasting", coastM), severity = "info" }
+    -- Calculate current coasting distance
+    local currentCoastM = (data.currentBrakePos - data.currentLiftOffPos) * trackLen
+    if currentCoastM < 0 then currentCoastM = currentCoastM + trackLen end
+
+    -- Calculate reference coasting distance
+    local refCoastM = (data.refBrakePos - data.refLiftOffPos) * trackLen
+    if refCoastM < 0 then refCoastM = refCoastM + trackLen end
+
+    -- Only report if significantly different from reference (> 15m)
+    local diff = currentCoastM - refCoastM
+    if math.abs(diff) < 15 then return nil end
+
+    local dir = diff > 0 and "more" or "less"
+    return { text = string.format("%.0fm %s coasting", math.abs(diff), dir), severity = "info" }
 end
 
---- Analyze pedal overlap (trail braking / left-foot braking)
----@param data table Corner comparison data
----@return table|nil Note {text, severity} about overlap time, or nil if minimal
-local function analyzeOverlap(data)
-    if not data.currentOverlapTime or data.currentOverlapTime <= 0.1 then return nil end
-    return { text = string.format("%.1fs trail braking", data.currentOverlapTime), severity = "info" }
+--- Helper to sample pedal traces from a lap in a position range
+--- (Defined early so it can be used by setViewedCorner)
+local function samplePedalTraces(lapData, startPos, endPos, numSamples)
+    if not lapData or lapData:length() == 0 then return nil end
+
+    local traces = { throttle = {}, brake = {} }
+    local posRange = endPos - startPos
+    if posRange <= 0 then posRange = posRange + 1 end
+
+    for i = 0, numSamples do
+        local pos = startPos + (i / numSamples) * posRange
+        if pos > 1 then pos = pos - 1 end
+        local throttle = lapData:getValueAtPos('throttle', pos) or 0
+        local brake = lapData:getValueAtPos('brake', pos) or 0
+        table.insert(traces.throttle, throttle)
+        table.insert(traces.brake, brake)
+    end
+    return traces
 end
 
 --- Analyze bad throttle during heavy braking (not just gear blips)
@@ -152,7 +175,7 @@ local function analyzeBadBrakeZoneThrottle(currentLap, data)
 
     local HEAVY_BRAKE_THRESHOLD = 0.5  -- 50% brake = heavy braking
     local THROTTLE_THRESHOLD = 0.3     -- 30% throttle = not just a blip
-    local BLIP_DURATION = 0.15         -- 150ms = typical heel-toe blip
+    local BLIP_DURATION = 0.5          -- 500ms = allow for heel-toe blips (longer threshold)
 
     local badOverlapSamples = 0
     local consecutiveBadSamples = 0
@@ -240,9 +263,26 @@ local function analyzeTractionControl(currentLap, data)
 
     -- Convert samples to approximate duration (60 Hz sampling)
     local tcDuration = tcCount / 60
-    if tcDuration < 0.1 then return nil end  -- Ignore brief interventions
+    if tcDuration < 1.0 then return nil end  -- Only warn for excessive TC (> 1 second)
 
     return { text = string.format("TC active %.1fs", tcDuration), severity = "info" }
+end
+
+--- Analyze offtrack excursions
+---@param currentLap table Current lap data
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about offtrack, or nil if none
+local function analyzeOfftrack(currentLap, data)
+    if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
+
+    local offtrackCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.OFFTRACK)
+    if offtrackCount == 0 then return nil end
+
+    -- Convert samples to approximate duration (60 Hz sampling)
+    local offtrackDuration = offtrackCount / 60
+    if offtrackDuration < 0.1 then return nil end  -- Ignore very brief excursions
+
+    return { text = string.format("off track %.1fs", offtrackDuration), severity = "error" }
 end
 
 --- Analyze rev limiter hits
@@ -303,9 +343,9 @@ local function analyzeThrottleTiming(currentLap, refLap, data)
 
     local trackLen = ac.getSim().trackLengthM or 5000
     local diffM = (currentThrottlePos - refThrottlePos) * trackLen
-    if math.abs(diffM) < 5 then return nil end  -- Ignore < 5m difference
+    if math.abs(diffM) < 15 then return nil end  -- Ignore < 15m difference
 
-    local dir = diffM < 0 and "earlier" or "later"
+    local dir = diffM < 0 and "early" or "late"
     return { text = string.format("throttle %.0fm %s", math.abs(diffM), dir), severity = "info" }
 end
 
@@ -338,9 +378,9 @@ local function analyzeBrakePressure(currentLap, refLap, data)
         end
     end
 
-    -- Only report if significant difference (> 10%)
+    -- Only report if significant difference (> 15%)
     local diff = currentMaxBrake - refMaxBrake
-    if math.abs(diff) < 0.10 then return nil end
+    if math.abs(diff) < 0.15 then return nil end
 
     local dir = diff < 0 and "lighter" or "harder"
     return { text = string.format("%s braking (%.0f%% vs %.0f%%)", dir, currentMaxBrake * 100, refMaxBrake * 100), severity = "info" }
@@ -374,14 +414,11 @@ local function collectCornerNotes(data, currentLap, refLap, speedUnit)
         if note then table.insert(notes, note) end
     end
 
-    -- DEBUG: Test note to verify rendering works
-    addNote({ text = "DEBUG: Notes working!", severity = "info" })
 
     -- Basic comparisons (data only)
     addNote(analyzeSteeringInput(data))
     addNote(analyzeGearUsage(data))
     addNote(analyzeCoasting(data))
-    addNote(analyzeOverlap(data))
     addNote(analyzeEntrySpeed(data, speedUnit))
 
     -- Lap-based analysis (flags, pressure, timing)
@@ -389,6 +426,7 @@ local function collectCornerNotes(data, currentLap, refLap, speedUnit)
         addNote(analyzeLockups(currentLap, data))
         addNote(analyzeTractionControl(currentLap, data))
         addNote(analyzeLimiter(currentLap, data))
+        addNote(analyzeOfftrack(currentLap, data))
         addNote(analyzeBadBrakeZoneThrottle(currentLap, data))
     end
 
@@ -514,40 +552,49 @@ end
 ---@param referenceLap table Reference lap data
 function corner_analysis.setViewedCorner(cornerNum, currentLap, referenceLap)
     if not cornerNum or not currentLap or not referenceLap then return end
-    
+
     -- Find the corner definition
     local cornerDef = state.getCornerInfo(cornerNum)
     if not cornerDef then return end
-    
+
     -- Analyze both laps for this corner
     local currentAnalysis = corner_analysis.analyzeCorner(currentLap, cornerDef)
     local refAnalysis = corner_analysis.analyzeCorner(referenceLap, cornerDef)
-    
+
     if not currentAnalysis or not refAnalysis then return end
-    
+
     -- Build comparison data (matching the displayData structure from live tracking)
     displayData = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
-    
+
     if displayData then
-        -- Generate currentSpeeds array by sampling the lap data through the corner
-        local speeds = {}
         local startPos = cornerDef.startPos
         local endPos = cornerDef.endPos
         local numSamples = 50  -- Reasonable resolution for the speed trace
-        
+
+        -- Generate currentSpeeds and refSpeeds arrays (captured snapshot)
+        local currentSpeeds = {}
+        local refSpeeds = {}
         for i = 0, numSamples do
             local pos = startPos + (endPos - startPos) * (i / numSamples)
-            local speed = currentLap:getValueAtPos('speed', pos)
-            if speed then
-                table.insert(speeds, { pos = pos, speed = speed })
+            local curSpeed = currentLap:getValueAtPos('speed', pos)
+            local refSpeed = referenceLap:getValueAtPos('speed', pos)
+            if curSpeed then
+                table.insert(currentSpeeds, { pos = pos, speed = curSpeed })
+                table.insert(refSpeeds, { pos = pos, speed = refSpeed or curSpeed })
             end
         end
-        displayData.currentSpeeds = speeds
-        
+        displayData.currentSpeeds = currentSpeeds
+        displayData.refSpeeds = refSpeeds
+
+        -- Capture pedal traces (snapshot, not live references)
+        local numPedalSamples = 100
+        displayData.currentPedals = samplePedalTraces(currentLap, startPos, endPos, numPedalSamples)
+        displayData.refPedals = samplePedalTraces(referenceLap, startPos, endPos, numPedalSamples)
+
         -- Calculate score
         displayScore = scoring.calculate(displayData)
-        
-        -- Set frozen state
+
+        -- Set frozen state (store lap refs for notes/flag analysis only)
         frozenCorner.active = true
         frozenCorner.cornerNum = cornerNum
         frozenCorner.lapNumber = currentLap.lapNumberInSession or 0
@@ -582,12 +629,22 @@ end
 -- Live Corner Tracking: Called on corner exit
 --------------------------------------------------------------------------------
 
+--- Helper to capture reference speeds at specific positions
+local function captureRefSpeeds(positions)
+    local refSpeeds = {}
+    for _, s in ipairs(positions) do
+        local refSpd = state.getGhostValueAt('speed', s.pos)
+        table.insert(refSpeeds, { pos = s.pos, speed = refSpd or s.speed })
+    end
+    return refSpeeds
+end
+
 local function onCornerExit()
     if liveCorner.cornerNum == 0 then return end
-    
+
     local cornerInfo = state.getCornerInfo(liveCorner.cornerNum)
     if not cornerInfo then return end
-    
+
     -- Calculate corner time delta
     local timeDelta = nil
     if liveCorner.entryTime and liveCorner.exitTime then
@@ -597,22 +654,30 @@ local function onCornerExit()
             timeDelta = currentDuration - ghostDuration
         end
     end
-    
-    -- Get ghost data from best lap
+
+    -- Get ghost data from best lap (capture NOW, not at draw time)
     local ghostEntrySpeed = state.getGhostValueAt('speed', cornerInfo.startPos) or 0
     local ghostExitSpeed = state.getGhostValueAt('speed', cornerInfo.endPos) or 0
     local ghostMaxSteeringDeg = state.getGhostMaxSteeringInRange(cornerInfo.startPos, cornerInfo.endPos)
     local refBrakePos = state.getGhostBrakePointInRange(cornerInfo.startPos, cornerInfo.endPos)
     local refLiftOffPos = state.getGhostLiftPointInRange(cornerInfo.startPos, cornerInfo.endPos)
-    
+
     -- Get ghost's actual apex (minimum speed point) in the corner range
     local ghostApexPos, ghostApexSpeed = state.getGhostApexInRange(cornerInfo.startPos, cornerInfo.endPos)
     ghostApexSpeed = ghostApexSpeed or 0
-    
-    -- Build comparison data
+
+    -- Capture reference speeds at each position we have current data for (snapshot, not live)
+    local refSpeeds = captureRefSpeeds(liveCorner.speeds)
+
+    -- Capture pedal traces (snapshot current lap and reference lap data)
+    local numPedalSamples = 100
+    local currentPedals = samplePedalTraces(state.currentLap, cornerInfo.startPos, cornerInfo.endPos, numPedalSamples)
+    local refPedals = samplePedalTraces(state.bestLap, cornerInfo.startPos, cornerInfo.endPos, numPedalSamples)
+
+    -- Build comparison data (all data captured now, nothing fetched at draw time)
     displayData = {
         number = liveCorner.cornerNum,
-        -- Reference data
+        -- Reference data (captured snapshot)
         refEntrySpeed = ghostEntrySpeed,
         refApexSpeed = ghostApexSpeed,
         refExitSpeed = ghostExitSpeed,
@@ -622,7 +687,9 @@ local function onCornerExit()
         refBrakePos = refBrakePos,
         refLiftOffPos = refLiftOffPos,
         refMaxSteeringDeg = ghostMaxSteeringDeg,
-        -- Current lap data
+        refSpeeds = refSpeeds,  -- Captured reference speeds at each position
+        refPedals = refPedals,  -- Captured reference pedal traces
+        -- Current lap data (captured snapshot)
         currentSpeeds = liveCorner.speeds,
         currentEntrySpeed = liveCorner.entrySpeed,
         currentApexSpeed = liveCorner.apexSpeed,
@@ -631,11 +698,12 @@ local function onCornerExit()
         currentBrakePos = liveCorner.brakePos,
         currentLiftOffPos = liveCorner.liftOffPos,
         currentMaxSteeringDeg = liveCorner.maxSteeringDeg,
+        currentPedals = currentPedals,  -- Captured current pedal traces
         -- Deltas (apex speed uses each lap's own apex, not same position)
         timeDelta = timeDelta,
-        entrySpeedDelta = liveCorner.entrySpeed and ghostEntrySpeed > 0 and 
+        entrySpeedDelta = liveCorner.entrySpeed and ghostEntrySpeed > 0 and
                           (liveCorner.entrySpeed - ghostEntrySpeed) or nil,
-        apexSpeedDelta = liveCorner.apexSpeed and ghostApexSpeed > 0 and 
+        apexSpeedDelta = liveCorner.apexSpeed and ghostApexSpeed > 0 and
                          (liveCorner.apexSpeed - ghostApexSpeed) or nil,
         exitSpeedDelta = (liveCorner.exitSpeed or liveCorner.apexSpeed or 0) - ghostExitSpeed,
         steeringDelta = liveCorner.maxSteeringDeg - ghostMaxSteeringDeg,
@@ -643,8 +711,8 @@ local function onCornerExit()
 
     displayScore = scoring.calculate(displayData)
 
-    -- Store reference to current lap for flag analysis
-    -- This captures the lap state at corner exit, before it might be cleared on new lap
+    -- Store snapshot of current lap for flag analysis (notes section)
+    -- Note: This is still a reference, but flags don't change after capture
     displayLap = state.currentLap
 end
 
@@ -841,20 +909,20 @@ end
 -- UI Drawing
 --------------------------------------------------------------------------------
 
-local function drawFilledComparison(x, y, w, h, currentSpeeds, refStartPos, refEndPos, refApexPos)
+local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
     if not currentSpeeds or #currentSpeeds < 2 then return end
-    if not state.hasBestLap() then return end
+    if not refSpeeds or #refSpeeds < 2 then return end
 
     local SPEED_TOLERANCE = 1
 
+    -- Calculate speed range from captured data (no live state queries)
     local minSpeed, maxSpeed = math.huge, 0
-    for _, s in ipairs(currentSpeeds) do
+    for i, s in ipairs(currentSpeeds) do
         minSpeed = math.min(minSpeed, s.speed)
         maxSpeed = math.max(maxSpeed, s.speed)
-        local refSpd = state.getGhostValueAt('speed', s.pos)
-        if refSpd then
-            minSpeed = math.min(minSpeed, refSpd)
-            maxSpeed = math.max(maxSpeed, refSpd)
+        if refSpeeds[i] then
+            minSpeed = math.min(minSpeed, refSpeeds[i].speed)
+            maxSpeed = math.max(maxSpeed, refSpeeds[i].speed)
         end
     end
 
@@ -868,11 +936,12 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refStartPos, refE
     local numPoints = #currentSpeeds
     local bottomY = y + h
 
+    -- Draw filled comparison using captured data
     for i = 1, numPoints - 1 do
         local s1 = currentSpeeds[i]
         local s2 = currentSpeeds[i + 1]
-        local ref1 = state.getGhostValueAt('speed', s1.pos) or s1.speed
-        local ref2 = state.getGhostValueAt('speed', s2.pos) or s2.speed
+        local ref1 = refSpeeds[i] and refSpeeds[i].speed or s1.speed
+        local ref2 = refSpeeds[i + 1] and refSpeeds[i + 1].speed or s2.speed
         local x1 = x + (i - 1) / (numPoints - 1) * w
         local x2 = x + i / (numPoints - 1) * w
         local curY1 = y + h - ((s1.speed - minSpeed) / speedRange) * h
@@ -896,11 +965,11 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refStartPos, refE
         ui.pathFillConvex(color)
     end
 
+    -- Draw reference speed line using captured data
     ui.pathClear()
-    for i, s in ipairs(currentSpeeds) do
-        local refSpd = state.getGhostValueAt('speed', s.pos) or s.speed
+    for i, s in ipairs(refSpeeds) do
         local px = x + (i - 1) / (numPoints - 1) * w
-        local py = y + h - ((refSpd - minSpeed) / speedRange) * h
+        local py = y + h - ((s.speed - minSpeed) / speedRange) * h
         ui.pathLineTo(vec2(px, py))
     end
     ui.pathStroke(theme.text.primary, false, 2)
@@ -1049,8 +1118,8 @@ local function drawScoreGauge(cx, cy, radius, score)
     ui.popFont()
 end
 
---- Draw brake/throttle traces for a corner
-local function drawPedalTraces(x, y, w, h, startPos, endPos, currentLap, refLap)
+--- Draw brake/throttle traces for a corner using captured pedal data
+local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
     -- Background
     ui.drawRectFilled(vec2(x, y), vec2(x + w, y + h), theme.bg.graph, 4)
 
@@ -1060,76 +1129,48 @@ local function drawPedalTraces(x, y, w, h, startPos, endPos, currentLap, refLap)
         ui.drawLine(vec2(x, lineY), vec2(x + w, lineY), rgbm(0.3, 0.3, 0.3, 0.3), 1)
     end
 
-    local posRange = endPos - startPos
-    if posRange <= 0 then posRange = posRange + 1 end  -- Handle wrap-around
+    -- Draw reference traces first (behind current) using captured data
+    if refPedals and #refPedals.throttle > 0 then
+        local numPoints = #refPedals.throttle
 
-    local numPoints = math.floor(w / 2)  -- One point every 2 pixels
-
-    -- Helper to convert position to X
-    local function posToX(pos)
-        local normalizedPos = (pos - startPos) / posRange
-        if normalizedPos < 0 then normalizedPos = normalizedPos + 1 end
-        return x + normalizedPos * w
-    end
-
-    -- Draw reference traces first (behind current)
-    if refLap and refLap:length() > 0 then
         -- Reference throttle (ghost)
         ui.pathClear()
-        for i = 0, numPoints do
-            local pos = startPos + (i / numPoints) * posRange
-            if pos > 1 then pos = pos - 1 end
-            local throttle = refLap:getValueAtPos('throttle', pos)
-            if throttle then
-                local px = x + (i / numPoints) * w
-                local py = y + h - throttle * h
-                ui.pathLineTo(vec2(px, py))
-            end
+        for i, throttle in ipairs(refPedals.throttle) do
+            local px = x + ((i - 1) / (numPoints - 1)) * w
+            local py = y + h - throttle * h
+            ui.pathLineTo(vec2(px, py))
         end
         ui.pathStroke(theme.ghost.throttle, false, 2)
 
         -- Reference brake (ghost)
         ui.pathClear()
-        for i = 0, numPoints do
-            local pos = startPos + (i / numPoints) * posRange
-            if pos > 1 then pos = pos - 1 end
-            local brake = refLap:getValueAtPos('brake', pos)
-            if brake then
-                local px = x + (i / numPoints) * w
-                local py = y + h - brake * h
-                ui.pathLineTo(vec2(px, py))
-            end
+        for i, brake in ipairs(refPedals.brake) do
+            local px = x + ((i - 1) / (numPoints - 1)) * w
+            local py = y + h - brake * h
+            ui.pathLineTo(vec2(px, py))
         end
         ui.pathStroke(theme.ghost.brake, false, 2)
     end
 
-    -- Draw current traces
-    if currentLap and currentLap:length() > 0 then
+    -- Draw current traces using captured data
+    if currentPedals and #currentPedals.throttle > 0 then
+        local numPoints = #currentPedals.throttle
+
         -- Current throttle
         ui.pathClear()
-        for i = 0, numPoints do
-            local pos = startPos + (i / numPoints) * posRange
-            if pos > 1 then pos = pos - 1 end
-            local throttle = currentLap:getValueAtPos('throttle', pos)
-            if throttle then
-                local px = x + (i / numPoints) * w
-                local py = y + h - throttle * h
-                ui.pathLineTo(vec2(px, py))
-            end
+        for i, throttle in ipairs(currentPedals.throttle) do
+            local px = x + ((i - 1) / (numPoints - 1)) * w
+            local py = y + h - throttle * h
+            ui.pathLineTo(vec2(px, py))
         end
         ui.pathStroke(theme.trace.throttle, false, 2)
 
         -- Current brake
         ui.pathClear()
-        for i = 0, numPoints do
-            local pos = startPos + (i / numPoints) * posRange
-            if pos > 1 then pos = pos - 1 end
-            local brake = currentLap:getValueAtPos('brake', pos)
-            if brake then
-                local px = x + (i / numPoints) * w
-                local py = y + h - brake * h
-                ui.pathLineTo(vec2(px, py))
-            end
+        for i, brake in ipairs(currentPedals.brake) do
+            local px = x + ((i - 1) / (numPoints - 1)) * w
+            local py = y + h - brake * h
+            ui.pathLineTo(vec2(px, py))
         end
         ui.pathStroke(theme.trace.brake, false, 2)
     end
@@ -1233,12 +1274,12 @@ function corner_analysis.draw(dt, useKmh)
             displayData.currentSpeeds, displayData
         )
 
-        -- Graph content (filled comparison on top of markers)
+        -- Graph content (filled comparison on top of markers) - uses captured snapshot data
         drawFilledComparison(
             padding + 4, graphY + 4,
             graphWidth - 8, graphHeight - 8,
             displayData.currentSpeeds,
-            displayData.refStartPos, displayData.refEndPos, displayData.refApexPos
+            displayData.refSpeeds
         )
 
         -- Meter annotations at bottom
@@ -1309,7 +1350,7 @@ function corner_analysis.draw(dt, useKmh)
 
         -- Helper to draw a note sentence with severity-based color
         local function drawNote(note)
-            local color = theme.warning  -- Default: info/warning (orange)
+            local color = theme.trace.fuel  -- Default: info (warm orange, same as fuel trace)
             if note.severity == "error" then
                 color = theme.delta.negative  -- Error: red
             end
@@ -1394,16 +1435,6 @@ function corner_analysis.draw(dt, useKmh)
         -- NOTES section (only shown if there are significant observations)
         local notes = collectCornerNotes(displayData, currentLap, refLap, speedUnit)
 
-        -- DEBUG: Show notes count
-        statsY = statsY + 8
-        ui.setCursor(vec2(panelInnerX, statsY))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.warning)
-        ui.text(string.format("DEBUG: %d notes", notes and #notes or 0))
-        ui.popStyleColor()
-        ui.popFont()
-        statsY = statsY + lineH
-
         -- Draw notes section if we have any valid notes
         if notes and #notes > 0 then
             -- Count valid notes (those with actual text)
@@ -1429,12 +1460,12 @@ function corner_analysis.draw(dt, useKmh)
             end
         end
 
-        -- Draw pedal traces at bottom (same width as speed graph above)
+        -- Draw pedal traces at bottom (same width as speed graph above) - uses captured snapshot data
         local pedalY = graphY + graphHeight + meterLabelHeight + pedalTracePadding
 
-        if displayData.refStartPos and displayData.refEndPos then
+        if displayData.currentPedals or displayData.refPedals then
             drawPedalTraces(padding, pedalY, graphWidth, pedalTraceHeight,
-                displayData.refStartPos, displayData.refEndPos, currentLap, refLap)
+                displayData.currentPedals, displayData.refPedals)
         end
     else
         -- Empty state: full-width centered message

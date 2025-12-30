@@ -28,6 +28,7 @@ lap.FLAGS = {
     LOCKUP_RL     = 0x20,  -- Rear left wheel lockup
     LOCKUP_RR     = 0x40,  -- Rear right wheel lockup
     OVERLAP       = 0x80,  -- Both pedals pressed (throttle & brake > 0.1 for > 100ms)
+    OFFTRACK      = 0x100, -- Car went off track (2+ wheels outside track limits)
 }
 
 -- Thresholds for detecting events
@@ -151,21 +152,22 @@ function lap:addSample(car)
         -- Lockup detection (wheel locked while car is moving)
         -- Only detect lockups above minimum speed to avoid false positives at standstill
         if car.speedKmh > LOCKUP_SPEED_MIN then
-            -- Lockup = wheel slip is very negative (wheel stopped, car moving)
-            -- In AC, slip < -0.9 typically indicates a locked wheel
+            -- Lockup = wheel slip is very negative (wheel stopped/slowing, car moving)
+            -- Use ndSlip (normalized directional slip) if available, fallback to slip
+            -- Threshold: < -0.5 indicates significant lockup
+            local LOCKUP_SLIP_THRESHOLD = -0.5
             local wheels = car.wheels
-            if wheels[0] and wheels[0].slip and wheels[0].slip < -0.9 then
-                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL)
+
+            local function isLocked(wheel)
+                if not wheel then return false end
+                local slip = wheel.ndSlip or wheel.slip
+                return slip and slip < LOCKUP_SLIP_THRESHOLD
             end
-            if wheels[1] and wheels[1].slip and wheels[1].slip < -0.9 then
-                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR)
-            end
-            if wheels[2] and wheels[2].slip and wheels[2].slip < -0.9 then
-                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL)
-            end
-            if wheels[3] and wheels[3].slip and wheels[3].slip < -0.9 then
-                flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR)
-            end
+
+            if isLocked(wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
+            if isLocked(wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
+            if isLocked(wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
+            if isLocked(wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
         end
     end
 
@@ -185,6 +187,11 @@ function lap:addSample(car)
     else
         -- Pedals released, reset overlap tracking
         overlapStartTime = nil
+    end
+
+    -- Offtrack detection (2+ wheels outside track limits)
+    if car.wheelsOutside and car.wheelsOutside >= 2 then
+        flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
     end
 
     table.insert(self.flags, flagBits)

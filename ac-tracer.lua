@@ -86,9 +86,9 @@ function script.update(dt)
     -- Update corner analysis (live tracking)
     corner_analysis.update(currentCar)
 
-    -- Auto-hide windows when above speed threshold
+    -- Auto-hide telemetry window when above speed threshold (traces always visible)
     if settings.telemetryAutoHide then
-        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed, {"main", "telemetry"})
+        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed, {"telemetry"})
     end
 end
 
