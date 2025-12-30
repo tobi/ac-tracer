@@ -497,6 +497,33 @@ local function updateAutoDetectedCorners()
 end
 
 --------------------------------------------------------------------------------
+-- Lap Discard Helper (must be before state.init for callback access)
+--------------------------------------------------------------------------------
+
+-- Track previous state for detecting resets/teleports
+local prevInPit = false
+local prevPosition = 0
+local prevLapTimeMs = 0
+local prevResetCounter = 0
+
+--- Discard current lap and start fresh
+local lastDiscardTime = 0
+local function discardCurrentLap()
+    -- Only log if we haven't discarded in the last second (avoid spam)
+    local now = os.clock()
+    local shouldLog = (now - lastDiscardTime) > 1.0 and state.currentLap and state.currentLap:length() > 10
+    lastDiscardTime = now
+
+    state.currentLap = lap.new(state.track, state.car, state.sessionId)
+    state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
+    lap.resetOverlapTracking()  -- Reset overlap detection state
+
+    if shouldLog then
+        ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Initialization
 --------------------------------------------------------------------------------
 
@@ -631,29 +658,6 @@ end
 --------------------------------------------------------------------------------
 -- Update Loop
 --------------------------------------------------------------------------------
-
--- Track previous state for detecting resets/teleports
-local prevInPit = false
-local prevPosition = 0
-local prevLapTimeMs = 0
-local prevResetCounter = 0
-
---- Discard current lap and start fresh
-local lastDiscardTime = 0
-local function discardCurrentLap()
-    -- Only log if we haven't discarded in the last second (avoid spam)
-    local now = os.clock()
-    local shouldLog = (now - lastDiscardTime) > 1.0 and state.currentLap and state.currentLap:length() > 10
-    lastDiscardTime = now
-
-    state.currentLap = lap.new(state.track, state.car, state.sessionId)
-    state.currentLap.fuelLeftAtStart = ac.getCar(0).fuel or 0
-    lap.resetOverlapTracking()  -- Reset overlap detection state
-
-    if shouldLog then
-        ac.log("AC Tracer: Discarded current lap (teleport/pit/reset)")
-    end
-end
 
 --- Update state (call from script.update)
 ---@param dt number Delta time in seconds
