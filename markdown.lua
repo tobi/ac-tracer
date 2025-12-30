@@ -89,14 +89,7 @@ local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
     -- Find indices for this position range
     for i = 1, lapData:length() do
         local pos = lapData.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange then
+        if lap.isInRange(pos, startPos, endPos) then
             if not startIdx then startIdx = i end
             endIdx = i
         elseif startIdx then

@@ -182,28 +182,34 @@ local function parseCSVLine(line)
     local fields = {}
     local field = ""
     local inQuotes = false
+    local i = 1
     
-    for i = 1, #line do
+    while i <= #line do
         local c = line:sub(i, i)
         if inQuotes then
             if c == '"' then
                 if line:sub(i + 1, i + 1) == '"' then
                     field = field .. '"'
-                    -- Skip next quote (handled by loop increment)
+                    i = i + 2  -- Skip both quotes
                 else
                     inQuotes = false
+                    i = i + 1
                 end
             else
                 field = field .. c
+                i = i + 1
             end
         else
             if c == '"' then
                 inQuotes = true
+                i = i + 1
             elseif c == ',' then
                 table.insert(fields, field)
                 field = ""
+                i = i + 1
             else
                 field = field .. c
+                i = i + 1
             end
         end
     end

@@ -20,13 +20,7 @@ local history = {
 }
 local updateTimer = 0
 
--- Flag detection thresholds (same as lap.lua)
-local SLIP_THRESHOLD = 0.15
-local LOCKUP_SPEED_MIN = 20
-local LOCKUP_SLIP_THRESHOLD = -0.5
-local OVERLAP_THROTTLE_THRESHOLD = 0.1
-local OVERLAP_BRAKE_THRESHOLD_BAR = 10
-local OVERLAP_MIN_DURATION = 0.1
+-- Overlap tracking state (for flag detection)
 local overlapStartTime = nil
 
 -- Current car reference (updated once per frame in script.update)
@@ -45,67 +39,10 @@ local function updateHistory(car)
     table.insert(history.gear, car.gear)
     table.insert(history.pos, car.splinePosition)
     
-    -- Build flags bitmask (same logic as lap:addSample)
-    local flagBits = 0
-    
-    -- TC active
-    if car.tractionControlInAction then
-        flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
-    end
-    
-    -- Rev limiter
-    if car.isEngineLimiterOn then
-        flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
-    end
-    
-    -- Wheel slip detection
-    if car.wheels then
-        local hasSlip = false
-        for i = 0, 3 do
-            local wheel = car.wheels[i]
-            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
-                hasSlip = true
-                break
-            end
-        end
-        if hasSlip then
-            flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
-        end
-        
-        -- Lockup detection
-        if car.speedKmh > LOCKUP_SPEED_MIN then
-            local function isLocked(wheel)
-                if not wheel then return false end
-                local slip = wheel.ndSlip or wheel.slip
-                return slip and slip < LOCKUP_SLIP_THRESHOLD
-            end
-            
-            if isLocked(car.wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
-            if isLocked(car.wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
-            if isLocked(car.wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
-            if isLocked(car.wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
-        end
-    end
-    
-    -- Overlap detection
-    local currentTime = car.lapTimeMs / 1000
-    local throttle = car.gas
-    local brakeBar = extended_brake.getBrakePressureBar(car)
-    
-    if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
-        if not overlapStartTime then
-            overlapStartTime = currentTime
-        elseif currentTime - overlapStartTime >= OVERLAP_MIN_DURATION then
-            flagBits = bit.bor(flagBits, lap.FLAGS.OVERLAP)
-        end
-    else
-        overlapStartTime = nil
-    end
-    
-    -- Offtrack detection
-    if car.wheelsOutside and car.wheelsOutside >= 2 then
-        flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
-    end
+    -- Build flags bitmask using shared detection function
+    local overlapState = { startTime = overlapStartTime }
+    local flagBits = lap.detectFlags(car, overlapState)
+    overlapStartTime = overlapState.startTime  -- Sync state back
     
     table.insert(history.flags, flagBits)
 

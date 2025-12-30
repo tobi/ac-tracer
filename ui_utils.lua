@@ -141,29 +141,6 @@ function ui_utils.getDeltaColor(delta, invert)
 end
 
 --------------------------------------------------------------------------------
--- Speed Formatting (legacy - prefer speedDisplay/speedDeltaDisplay above)
---------------------------------------------------------------------------------
-
---- Format speed value (legacy - use speedDisplay instead)
----@param speed number Speed in km/h
----@param unit string|nil Unit to append (default uses settings)
----@return string Formatted speed
-function ui_utils.formatSpeed(speed, unit)
-    if not speed then return "--" end
-    unit = unit or ui_utils.speedUnit()
-    return string.format("%.0f %s", speed, unit)
-end
-
---- Format speed delta with sign (legacy - use speedDeltaDisplay instead)
----@param delta number Speed delta in km/h
----@return string Formatted delta (e.g., "+5", "-12")
-function ui_utils.formatSpeedDelta(delta)
-    if not delta then return "--" end
-    local sign = delta >= 0 and "+" or ""
-    return string.format("%s%.0f", sign, delta)
-end
-
---------------------------------------------------------------------------------
 -- Percentage Formatting
 --------------------------------------------------------------------------------
 

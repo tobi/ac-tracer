@@ -203,6 +203,26 @@ function lap:populateSparseFromDense(field)
 end
 
 --------------------------------------------------------------------------------
+-- Position Range Checking (handles track wrap-around)
+--------------------------------------------------------------------------------
+
+--- Check if a position is within a range, handling track wrap-around
+--- When startPos > endPos, the range wraps around the track (crosses 0.0 finish line)
+---@param pos number Current position (0.0 to 1.0)
+---@param startPos number Range start position (0.0 to 1.0)
+---@param endPos number Range end position (0.0 to 1.0)
+---@return boolean True if position is in range
+function lap.isInRange(pos, startPos, endPos)
+    if startPos <= endPos then
+        -- Normal range (no wrap-around)
+        return pos >= startPos and pos <= endPos
+    else
+        -- Wrap-around range (crosses finish line)
+        return pos >= startPos or pos <= endPos
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Steering Conversion
 --------------------------------------------------------------------------------
 
@@ -218,6 +238,82 @@ end
 ---@return number Steering angle in degrees
 function lap.steerToDegrees(steerNorm)
     return (0.5 - steerNorm) * 2 * STEERING_CAP * 180 / math.pi
+end
+
+--------------------------------------------------------------------------------
+-- Flag Detection (shared across in-sim recording)
+--------------------------------------------------------------------------------
+
+--- Detect and compute flag bitmask for current car state
+--- This is a static function used both during live recording and for display
+---@param car table Car state from ac.getCar()
+---@param overlapState table Table with { startTime = number|nil } to track overlap state
+---@return number flagBits Bitmask of lap.FLAGS
+function lap.detectFlags(car, overlapState)
+    local flagBits = 0
+    
+    -- TC active
+    if car.tractionControlInAction then
+        flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
+    end
+    
+    -- Rev limiter
+    if car.isEngineLimiterOn then
+        flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
+    end
+    
+    -- Wheel slip detection
+    if car.wheels then
+        local hasSlip = false
+        for i = 0, 3 do
+            local wheel = car.wheels[i]
+            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
+                hasSlip = true
+                break
+            end
+        end
+        if hasSlip then
+            flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
+        end
+        
+        -- Lockup detection
+        if car.speedKmh > LOCKUP_SPEED_MIN then
+            local function isLocked(wheel)
+                if not wheel then return false end
+                local slip = wheel.ndSlip or wheel.slip
+                return slip and slip < -0.5  -- Threshold for lockup
+            end
+            
+            if isLocked(car.wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
+            if isLocked(car.wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
+            if isLocked(car.wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
+            if isLocked(car.wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
+        end
+    end
+    
+    -- Overlap detection (throttle AND brake pressed simultaneously)
+    if overlapState then
+        local currentTime = car.lapTimeMs / 1000
+        local throttle = car.gas
+        local brakeBar = extended_brake.getBrakePressureBar(car)
+        
+        if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
+            if not overlapState.startTime then
+                overlapState.startTime = currentTime
+            elseif currentTime - overlapState.startTime >= OVERLAP_MIN_DURATION then
+                flagBits = bit.bor(flagBits, lap.FLAGS.OVERLAP)
+            end
+        else
+            overlapState.startTime = nil
+        end
+    end
+    
+    -- Offtrack detection (2+ wheels off track)
+    if car.wheelsOutside and car.wheelsOutside >= 2 then
+        flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
+    end
+    
+    return flagBits
 end
 
 --------------------------------------------------------------------------------
@@ -260,78 +356,11 @@ function lap:addSample(car)
     end
 
     -- Build flags bitmask for this sample (in-sim only data)
-    local flagBits = 0
-
-    -- TC active
-    if car.tractionControlInAction then
-        flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
-    end
-
-    -- Rev limiter (engine hitting rev limit)
-    if car.isEngineLimiterOn then
-        flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
-    end
-
-    -- Wheel slip detection (any wheel significantly faster than road speed)
-    -- car.wheels[i].slip contains slip ratio
-    if car.wheels then
-        local hasSlip = false
-        for i = 0, 3 do
-            local wheel = car.wheels[i]
-            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
-                hasSlip = true
-                break
-            end
-        end
-        if hasSlip then
-            flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
-        end
-
-        -- Lockup detection (wheel locked while car is moving)
-        -- Only detect lockups above minimum speed to avoid false positives at standstill
-        if car.speedKmh > LOCKUP_SPEED_MIN then
-            -- Lockup = wheel slip is very negative (wheel stopped/slowing, car moving)
-            -- Use ndSlip (normalized directional slip) if available, fallback to slip
-            -- Threshold: < -0.5 indicates significant lockup
-            local LOCKUP_SLIP_THRESHOLD = -0.5
-            local wheels = car.wheels
-
-            local function isLocked(wheel)
-                if not wheel then return false end
-                local slip = wheel.ndSlip or wheel.slip
-                return slip and slip < LOCKUP_SLIP_THRESHOLD
-            end
-
-            if isLocked(wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
-            if isLocked(wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
-            if isLocked(wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
-            if isLocked(wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
-        end
-    end
-
-    -- Overlap detection (both throttle and brake pressed > threshold)
-    local currentTime = car.lapTimeMs / 1000
-    local throttle = car.gas
-    local brakeBar = extended_brake.getBrakePressureBar(car)
-
-    if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
-        -- Both pedals pressed
-        if not overlapStartTime then
-            overlapStartTime = currentTime
-        elseif currentTime - overlapStartTime >= OVERLAP_MIN_DURATION then
-            -- Overlap has lasted long enough
-            flagBits = bit.bor(flagBits, lap.FLAGS.OVERLAP)
-        end
-    else
-        -- Pedals released, reset overlap tracking
-        overlapStartTime = nil
-    end
-
-    -- Offtrack detection (2+ wheels outside track limits)
-    if car.wheelsOutside and car.wheelsOutside >= 2 then
-        flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
-    end
-
+    -- Use shared detection function with overlap state tracking
+    local overlapState = { startTime = overlapStartTime }
+    local flagBits = lap.detectFlags(car, overlapState)
+    overlapStartTime = overlapState.startTime  -- Sync state back
+    
     table.insert(self.flags, flagBits)
 end
 
@@ -656,21 +685,13 @@ function lap:findBrakePoint(startPos, endPos, threshold)
     threshold = threshold or lap.BRAKE_THRESHOLD_BAR
 
     for i = 1, #self.pos do
-        local pos = self.pos[i]
-        -- Handle wrap-around
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-        
-        if inRange and self.brake[i] > threshold then
-            return pos
-        end
-    end
-    return nil
-end
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) and self.brake[i] > threshold then
+             return pos
+         end
+     end
+     return nil
+ end
 
 --- Find throttle lift point in a position range
 --- Lift point = first position where throttle drops below threshold after being at full throttle
@@ -684,20 +705,12 @@ function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
 
     local wasOnFullThrottle = false
 
-    for i = 1, #self.pos do
-        local pos = self.pos[i]
-        -- Handle wrap-around
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange then
-            local throttle = self.throttle[i]
-            if throttle >= fullThrottleThreshold then
-                wasOnFullThrottle = true
+     for i = 1, #self.pos do
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) then
+             local throttle = self.throttle[i]
+             if throttle >= fullThrottleThreshold then
+                 wasOnFullThrottle = true
             elseif wasOnFullThrottle and throttle < fullThrottleThreshold then
                 return pos  -- First drop below 98%
             end
@@ -714,20 +727,12 @@ function lap:findMaxSteering(startPos, endPos)
     if not self.pos then return 0 end
     local maxDeg = 0
 
-    for i = 1, #self.pos do
-        local pos = self.pos[i]
-        -- Handle wrap-around
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange then
-            local deg = math.abs(lap.steerToDegrees(self.steering[i]))
-            if deg > maxDeg then
-                maxDeg = deg
+     for i = 1, #self.pos do
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) then
+             local deg = math.abs(lap.steerToDegrees(self.steering[i]))
+             if deg > maxDeg then
+                 maxDeg = deg
             end
         end
     end
@@ -744,18 +749,11 @@ function lap:findMinGear(startPos, endPos)
     local minGear = nil
 
     for i = 1, #self.pos do
-        local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.gear[i] then
-            local g = self.gear[i]
-            -- Only consider forward gears (1+)
-            if g >= 1 then
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) and self.gear[i] then
+             local g = self.gear[i]
+             -- Only consider forward gears (1+)
+             if g >= 1 then
                 if not minGear or g < minGear then
                     minGear = g
                 end
@@ -776,23 +774,12 @@ function lap:findApex(startPos, endPos)
     local apexPos = nil
 
     for i = 1, #self.pos do
-        local pos = self.pos[i]
-        -- Handle wrap-around
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange then
-            local speed = self.speed[i]
-            if speed and speed < minSpeed then
-                minSpeed = speed
-                apexPos = pos
-            end
-        end
-    end
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) and self.speed[i] < minSpeed then
+             minSpeed = self.speed[i]
+             apexPos = pos
+         end
+     end
 
     if apexPos then
         return apexPos, minSpeed
@@ -882,18 +869,11 @@ function lap:hasFlagInRange(startPos, endPos, flag)
     if not self.flags or #self.flags == 0 then return false end
 
     for i = 1, #self.pos do
-        local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.flags[i] then
-            if bit.band(self.flags[i], flag) ~= 0 then
-                return true
-            end
+         local pos = self.pos[i]
+         if lap.isInRange(pos, startPos, endPos) and self.flags[i] then
+             if bit.band(self.flags[i], flag) ~= 0 then
+                 return true
+             end
         end
     end
     return false
@@ -912,14 +892,7 @@ function lap:hasLockupInRange(startPos, endPos)
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.flags[i] then
+        if lap.isInRange(pos, startPos, endPos) and self.flags[i] then
             local f = self.flags[i]
             if bit.band(f, lap.FLAGS.LOCKUP_FL) ~= 0 then lockups.fl = true; anyLockup = true end
             if bit.band(f, lap.FLAGS.LOCKUP_FR) ~= 0 then lockups.fr = true; anyLockup = true end
@@ -942,14 +915,7 @@ function lap:countFlagInRange(startPos, endPos, flag)
     local count = 0
     for i = 1, #self.pos do
         local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.flags[i] then
+        if lap.isInRange(pos, startPos, endPos) and self.flags[i] then
             if bit.band(self.flags[i], flag) ~= 0 then
                 count = count + 1
             end
@@ -972,14 +938,7 @@ function lap:getOverlapTimeInRange(startPos, endPos)
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.flags[i] then
+        if lap.isInRange(pos, startPos, endPos) and self.flags[i] then
             if bit.band(self.flags[i], lap.FLAGS.OVERLAP) ~= 0 then
                 totalTime = totalTime + sampleDt
             end
@@ -1010,14 +969,7 @@ function lap:getFlagSummary(startPos, endPos)
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
-        local inRange
-        if startPos <= endPos then
-            inRange = pos >= startPos and pos <= endPos
-        else
-            inRange = pos >= startPos or pos <= endPos
-        end
-
-        if inRange and self.flags[i] then
+        if lap.isInRange(pos, startPos, endPos) and self.flags[i] then
             local f = self.flags[i]
 
             if bit.band(f, lap.FLAGS.TC_ACTIVE) ~= 0 then

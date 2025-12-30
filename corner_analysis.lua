@@ -103,18 +103,12 @@ local function getCornerInfo(corners, cornerNum)
 end
 
 local function getCornerAtPos(corners, pos)
-    if not corners then return 0, nil end
-    for _, c in ipairs(corners) do
-        if c.startPos and c.endPos then
-            local inCorner
-            if c.endPos >= c.startPos then
-                inCorner = pos >= c.startPos and pos <= c.endPos
-            else
-                inCorner = pos >= c.startPos or pos <= c.endPos
-            end
-            if inCorner then return c.number, c end
-        end
-    end
+     if not corners then return 0, nil end
+     for _, c in ipairs(corners) do
+         if c.startPos and c.endPos then
+             if lap.isInRange(pos, c.startPos, c.endPos) then return c.number, c end
+         end
+     end
     return 0, nil
 end
 
@@ -874,8 +868,12 @@ function corner_analysis.getCurrentCornerData(referenceLap, corners)
     end
     
     local ghostEntrySpeed = referenceLap and referenceLap:speedAt(cornerInfo.startPos) or 0
-    local ghostApexPos, ghostApexSpeed = referenceLap and referenceLap:findApex(cornerInfo.startPos, cornerInfo.endPos) or nil
-    ghostApexSpeed = ghostApexSpeed or 0
+    local ghostApexPos, ghostApexSpeed
+    if referenceLap then
+        ghostApexPos, ghostApexSpeed = referenceLap:findApex(cornerInfo.startPos, cornerInfo.endPos)
+    else
+        ghostApexPos, ghostApexSpeed = nil, 0
+    end
     local ghostExitSpeed = referenceLap and referenceLap:speedAt(cornerInfo.endPos) or 0
 
     return {
