@@ -92,6 +92,76 @@ local function resetLiveCorner()
 end
 
 --------------------------------------------------------------------------------
+-- Corner Notes Analysis Functions
+-- Each function analyzes one aspect and returns a note string or nil
+--------------------------------------------------------------------------------
+
+--- Compare steering wheel inputs between current and reference
+---@param data table Corner comparison data
+---@return string|nil Note about steering difference, or nil if not significant
+local function analyzeSteeringInput(data)
+    if not data.steeringDelta then return nil end
+    if math.abs(data.steeringDelta) <= 5 then return nil end
+
+    local dir = data.steeringDelta > 0 and "more" or "less"
+    return string.format("%.0f° %s steering", math.abs(data.steeringDelta), dir)
+end
+
+--- Compare gear usage between current and reference
+---@param data table Corner comparison data
+---@return string|nil Note about gear difference, or nil if same gear
+local function analyzeGearUsage(data)
+    if not data.gearDelta or data.gearDelta == 0 then return nil end
+
+    local diff = math.abs(data.gearDelta)
+    local dir = data.gearDelta > 0 and "higher" or "lower"
+    return string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir)
+end
+
+--- Analyze coasting distance (throttle lift to brake application)
+---@param data table Corner comparison data
+---@return string|nil Note about coasting, or nil if minimal/none
+local function analyzeCoasting(data)
+    if not data.currentLiftOffPos or not data.currentBrakePos then return nil end
+
+    local trackLen = ac.getSim().trackLengthM or 5000
+    local coastM = (data.currentBrakePos - data.currentLiftOffPos) * trackLen
+    if coastM < 0 then coastM = coastM + trackLen end  -- Handle wrap
+
+    if coastM <= 10 then return nil end  -- Only report if > 10m
+    return string.format("%.0fm coasting", coastM)
+end
+
+--- Analyze pedal overlap (trail braking / left-foot braking)
+---@param data table Corner comparison data
+---@return string|nil Note about overlap time, or nil if minimal
+local function analyzeOverlap(data)
+    if not data.currentOverlapTime or data.currentOverlapTime <= 0.1 then return nil end
+    return string.format("%.1fs overlap", data.currentOverlapTime)
+end
+
+--- Collect all corner notes by running analysis functions
+---@param data table Corner comparison data
+---@return table Array of note strings (may be empty)
+local function collectCornerNotes(data)
+    local notes = {}
+
+    local steeringNote = analyzeSteeringInput(data)
+    if steeringNote then table.insert(notes, steeringNote) end
+
+    local gearNote = analyzeGearUsage(data)
+    if gearNote then table.insert(notes, gearNote) end
+
+    local coastingNote = analyzeCoasting(data)
+    if coastingNote then table.insert(notes, coastingNote) end
+
+    local overlapNote = analyzeOverlap(data)
+    if overlapNote then table.insert(notes, overlapNote) end
+
+    return notes
+end
+
+--------------------------------------------------------------------------------
 -- Corner Analysis: Analyze a single corner from a lap
 --------------------------------------------------------------------------------
 
@@ -1060,35 +1130,7 @@ function corner_analysis.draw(dt, useKmh)
         end
 
         -- NOTES section (only shown if there are significant observations)
-        local notes = {}
-        local trackLen = ac.getSim().trackLengthM or 5000
-
-        -- Steering difference (if > 5°)
-        if displayData.steeringDelta and math.abs(displayData.steeringDelta) > 5 then
-            local dir = displayData.steeringDelta > 0 and "more" or "less"
-            table.insert(notes, string.format("%.0f° %s steering", math.abs(displayData.steeringDelta), dir))
-        end
-
-        -- Gear difference
-        if displayData.gearDelta and displayData.gearDelta ~= 0 then
-            local diff = math.abs(displayData.gearDelta)
-            local dir = displayData.gearDelta > 0 and "higher" or "lower"
-            table.insert(notes, string.format("%d gear%s %s", diff, diff > 1 and "s" or "", dir))
-        end
-
-        -- Coasting (distance between lift and brake)
-        if displayData.currentLiftOffPos and displayData.currentBrakePos then
-            local coastM = (displayData.currentBrakePos - displayData.currentLiftOffPos) * trackLen
-            if coastM < 0 then coastM = coastM + trackLen end  -- Handle wrap
-            if coastM > 10 then  -- Only show if coasting > 10m
-                table.insert(notes, string.format("%.0fm coasting", coastM))
-            end
-        end
-
-        -- Overlap/trail braking time
-        if displayData.currentOverlapTime and displayData.currentOverlapTime > 0.1 then
-            table.insert(notes, string.format("%.1fs overlap", displayData.currentOverlapTime))
-        end
+        local notes = collectCornerNotes(displayData)
 
         -- Draw notes section if we have any
         if #notes > 0 then
