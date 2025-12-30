@@ -44,7 +44,7 @@ local config = ac.storage({
     telemetryAutoHideSpeed = 20,
 
     -- Flag markers (shown in trace window and telemetry)
-    showTCMarkers = true,
+    showTCMarkers = false,
     showLockupMarkers = true,
     showWheelSlipMarkers = false,
     showOverlapMarkers = false,

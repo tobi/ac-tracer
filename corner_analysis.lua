@@ -404,14 +404,14 @@ local function analyzeBrakePressure(currentLap, refLap, data)
     if not data.refStartPos or not data.refEndPos then return nil end
 
     -- Find max brake pressure in corner for both laps (values are in bar)
-    local currentMaxBrakeBar = 0
-    local refMaxBrakeBar = 0
+    local currentMaxBar = 0
+    local refMaxBar = 0
 
     for i = 1, #currentLap.pos do
         local pos = currentLap.pos[i]
         if pos >= data.refStartPos and pos <= data.refEndPos then
             local brake = currentLap.brake[i] or 0
-            if brake > currentMaxBrakeBar then currentMaxBrakeBar = brake end
+            if brake > currentMaxBar then currentMaxBar = brake end
         end
     end
 
@@ -419,21 +419,16 @@ local function analyzeBrakePressure(currentLap, refLap, data)
         local pos = refLap.pos[i]
         if pos >= data.refStartPos and pos <= data.refEndPos then
             local brake = refLap.brake[i] or 0
-            if brake > refMaxBrakeBar then refMaxBrakeBar = brake end
+            if brake > refMaxBar then refMaxBar = brake end
         end
     end
 
-    -- Normalize using max of both laps for consistent comparison
-    local maxBar = math.max(currentMaxBrakeBar, refMaxBrakeBar, 1)  -- Avoid division by zero
-    local currentPct = (currentMaxBrakeBar / maxBar) * 100
-    local refPct = (refMaxBrakeBar / maxBar) * 100
+    -- Only report if significant difference (> 5 bar)
+    local diffBar = currentMaxBar - refMaxBar
+    if math.abs(diffBar) < 5 then return nil end
 
-    -- Only report if significant difference (> 15% of max)
-    local diffPct = currentPct - refPct
-    if math.abs(diffPct) < 15 then return nil end
-
-    local dir = diffPct < 0 and "lighter" or "harder"
-    return { text = string.format("%s braking (%.0f%% vs %.0f%%)", dir, currentPct, refPct), severity = "info" }
+    local dir = diffBar < 0 and "lighter" or "harder"
+    return { text = string.format("%s braking (%.0f vs %.0f bar)", dir, currentMaxBar, refMaxBar), severity = "info" }
 end
 
 --- Analyze entry speed warning (significantly different from reference)
@@ -1046,66 +1041,20 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         return nil
     end
 
-    local trackLen = ac.getSim().trackLengthM or 5000
-
-    -- Reference lines (dashed, thicker for visibility)
-    local refBrakeX = posToX(data.refBrakePos)
-    if refBrakeX then
-        ui_utils.drawDashedLine(vec2(refBrakeX, y), vec2(refBrakeX, y + h), theme.marker.brakeRef, 2, 4, 3)
-    end
-
+    -- Reference apex line (dashed yellow) - slowest speed point
     local refApexX = posToX(data.refApexPos)
     if refApexX then
         ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, y + h), theme.marker.apexRef, 2, 5, 3)
     end
 
-    -- Reference lift line (dashed green) - only show if > 10m earlier than ref brake
-    local refLiftX = nil
-    if data.refLiftOffPos and data.refBrakePos then
-        local refLiftM = data.refLiftOffPos * trackLen
-        local refBrakeM = data.refBrakePos * trackLen
-        local refLiftToBrakeDist = refBrakeM - refLiftM
-        if refLiftToBrakeDist < 0 then refLiftToBrakeDist = refLiftToBrakeDist + trackLen end
-
-        if refLiftToBrakeDist > 10 then
-            refLiftX = posToX(data.refLiftOffPos)
-            if refLiftX then
-                ui_utils.drawDashedLine(vec2(refLiftX, y), vec2(refLiftX, y + h), theme.marker.liftRef, 2, 4, 3)
-            end
-        end
-    end
-
-    -- Current lines (solid)
-    local curBrakeX = posToX(data.currentBrakePos)
-    if curBrakeX then
-        ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), theme.marker.brake, 2)
-    end
-
+    -- Current apex line (solid yellow) - slowest speed point
     local curApexX = posToX(data.currentApexPos)
     if curApexX then
         ui.drawLine(vec2(curApexX, y), vec2(curApexX, y + h), theme.marker.apex, 3)
     end
 
-    -- Current lift point line (green) - only show if > 10m earlier than brake point
-    local curLiftX = nil
-    if data.currentLiftOffPos and data.currentBrakePos then
-        local liftM = data.currentLiftOffPos * trackLen
-        local brakeM = data.currentBrakePos * trackLen
-        local liftToBreakeDist = brakeM - liftM
-        if liftToBreakeDist < 0 then liftToBreakeDist = liftToBreakeDist + trackLen end
-
-        if liftToBreakeDist > 10 then
-            curLiftX = posToX(data.currentLiftOffPos)
-            if curLiftX then
-                ui.drawLine(vec2(curLiftX, y), vec2(curLiftX, y + h), theme.marker.lift, 2)
-            end
-        end
-    end
-
-    -- Draw direction arrows at top border (between solid and dashed lines)
-    drawDirectionArrows(curBrakeX, refBrakeX, y, theme.marker.brake)
+    -- Draw direction arrow at top border (between solid and dashed lines)
     drawDirectionArrows(curApexX, refApexX, y, theme.marker.apex)
-    drawDirectionArrows(curLiftX, refLiftX, y, theme.marker.lift)
 end
 
 local function drawScoreGauge(cx, cy, radius, score)

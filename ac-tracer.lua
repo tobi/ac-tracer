@@ -544,118 +544,6 @@ function script.windowMain(dt)
         
         drawGrid(traceOrigin, innerX, innerY, innerW, innerH)
 
-        -- Draw corner zones (faint gray with white borders, labels scroll with zone)
-        local corners = state.trackCorners
-        local currentPos = car.splinePosition
-        
-        if corners and #corners > 0 and history.pos and #history.pos > 1 then
-            local minPos = history.pos[1]
-            local maxPos = history.pos[#history.pos]
-            
-            -- Handle wrap-around: if maxPos < minPos, we've crossed start/finish
-            local wrapsAround = maxPos < minPos
-            
-            for _, c in ipairs(corners) do
-                if c.startPos and c.endPos then
-                    -- Determine if corner is visible (even partially)
-                    local cornerVisible = false
-                    local drawStartX, drawEndX = nil, nil
-                    
-                    -- Get actual X positions
-                    local cStartX = posToX(c.startPos, history.pos, innerX, innerW)
-                    local cEndX = posToX(c.endPos, history.pos, innerX, innerW)
-                    
-                    -- Check visibility and compute draw bounds
-                    if cStartX and cEndX then
-                        -- Both edges visible
-                        drawStartX, drawEndX = cStartX, cEndX
-                        cornerVisible = true
-                    elseif cStartX and not cEndX then
-                        -- Start visible, end off-screen (corner extends past right edge)
-                        drawStartX = cStartX
-                        drawEndX = innerX + innerW
-                        cornerVisible = true
-                    elseif not cStartX and cEndX then
-                        -- End visible, start off-screen (corner started before left edge)
-                        drawStartX = innerX
-                        drawEndX = cEndX
-                        cornerVisible = true
-                    else
-                        -- Neither edge visible - check if corner spans entire view
-                        local cornerSpansView = false
-                        if not wrapsAround then
-                            -- Normal case: corner wraps around or spans view
-                            if c.endPos < c.startPos then
-                                -- Corner wraps around start/finish
-                                cornerSpansView = (minPos <= c.endPos) or (maxPos >= c.startPos)
-                            else
-                                -- Normal corner: check if it contains our view range
-                                cornerSpansView = (c.startPos <= minPos and c.endPos >= maxPos)
-                            end
-                        end
-                        if cornerSpansView then
-                            drawStartX = innerX
-                            drawEndX = innerX + innerW
-                            cornerVisible = true
-                        end
-                    end
-                    
-                    if cornerVisible and drawStartX and drawEndX and drawEndX > drawStartX then
-                        -- Check if we're in this corner
-                        local inCorner = false
-                        if c.endPos >= c.startPos then
-                            inCorner = currentPos >= c.startPos and currentPos <= c.endPos
-                        else
-                            inCorner = currentPos >= c.startPos or currentPos <= c.endPos
-                        end
-                        
-                        local zoneTop = traceOrigin + vec2(drawStartX, innerY)
-                        local zoneBottom = traceOrigin + vec2(drawEndX, innerY + innerH)
-                        
-                        -- Draw zone fill - faint gray (0.05 alpha)
-                        ui.drawRectFilled(zoneTop, zoneBottom, rgbm(0.5, 0.5, 0.5, 0.05), 0)
-                        
-                        -- Draw zone border - white (slightly more visible when active)
-                        local borderAlpha = inCorner and 0.2 or 0.08
-                        ui.drawRect(zoneTop, zoneBottom, rgbm(1, 1, 1, borderAlpha), 0, 1)
-                        
-                        -- Corner name - clips to zone, scrolls with it
-                        if c.name then
-                            local labelPadX = 4
-                            local labelPadY = 2
-                            local zoneWidth = drawEndX - drawStartX
-                            
-                            -- Only draw label if zone is wide enough (at least 20px)
-                            if zoneWidth > 20 then
-                                -- Calculate label position relative to corner start
-                                -- If corner start is off-screen left, offset the label
-                                local labelOffsetX = 0
-                                if not cStartX then
-                                    -- Corner starts before view - calculate how much is clipped
-                                    -- Label should appear at left edge initially, then scroll left
-                                    labelOffsetX = 0  -- Start at left edge of visible zone
-                                end
-                                
-                                local labelX = drawStartX + labelPadX + labelOffsetX
-                                local labelY = innerY + labelPadY
-                                
-                                -- Use clipping to keep label inside zone
-                                ui.pushClipRect(zoneTop, zoneBottom, true)
-                                ui.pushFont(ui.Font.Small)
-                                ui.setCursor(traceOrigin + vec2(labelX, labelY))
-                                local textAlpha = inCorner and 0.6 or 0.25
-                                ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 1, 1, textAlpha))
-                                ui.text(c.name)
-                                ui.popStyleColor()
-                                ui.popFont()
-                                ui.popClipRect()
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
         -- Start/finish line (checkered flag pattern) - only at position 0
         -- Check if position 0 is within our sampled data range
         local hasZeroCrossing = false
@@ -727,16 +615,15 @@ function script.windowMain(dt)
     drawSpeed(origin, L.wheelCX, L.wheelCY + L.wheelR + 2, L.wheelR * 2, car)
 
     -- Toggle window buttons (left side, vertically stacked next to trace area)
-    local numButtons = 4
+    local numButtons = 3
     local btnSpacing = 4
     local totalBtnHeight = numButtons * buttonSize.y + (numButtons - 1) * btnSpacing
     local btnLocalX = (L.pad + L.btnAreaW - buttonSize.x) / 2  -- Center in button area
     local btnLocalY = L.pad + (L.contentH - totalBtnHeight) / 2  -- Vertically center
 
-    drawToggleButton(vec2(btnLocalX, btnLocalY), "⚡", "Corner Analysis", "corners")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + btnSpacing), "📊", "Lap Telemetry", "telemetry")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 2), "Δ", "Delta Bar", "delta")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 3), "◎", "Reference Lap", "referencelap")
+    drawToggleButton(vec2(btnLocalX, btnLocalY), "📊", "Lap Telemetry", "telemetry")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + btnSpacing), "Δ", "Delta Bar", "delta")
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 2), "◎", "Reference Lap", "referencelap")
 end
 
 function script.windowSettings(dt)
