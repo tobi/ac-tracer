@@ -743,6 +743,7 @@ function lap:findBrakePoint(startPos, endPos, threshold)
 
 --- Find throttle lift point in a position range
 --- Lift point = first position where throttle drops below threshold after being at full throttle
+--- Ignores brief throttle lifts during gear shifts (within GEAR_SHIFT_WINDOW samples)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
 ---@param fullThrottleThreshold number Throttle threshold for "full throttle" (default 0.98)
@@ -751,16 +752,37 @@ function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
     if not self.pos then return nil end
     fullThrottleThreshold = fullThrottleThreshold or 0.98  -- 98% = full throttle
 
+    local GEAR_SHIFT_WINDOW = 5  -- Samples to ignore around gear shifts (~167ms at 30Hz)
+
+    -- Helper to check if a gear shift occurred near index i
+    local function isNearGearShift(i)
+        if not self.gear or #self.gear < 2 then return false end
+        local currentGear = self.gear[i]
+        if not currentGear then return false end
+
+        -- Check samples before and after for gear changes
+        for j = math.max(1, i - GEAR_SHIFT_WINDOW), math.min(#self.gear, i + GEAR_SHIFT_WINDOW) do
+            if self.gear[j] and self.gear[j] ~= currentGear then
+                return true
+            end
+        end
+        return false
+    end
+
     local wasOnFullThrottle = false
 
-     for i = 1, #self.pos do
-         local pos = self.pos[i]
-         if lap.isInRange(pos, startPos, endPos) then
-             local throttle = self.throttle[i]
-             if throttle >= fullThrottleThreshold then
-                 wasOnFullThrottle = true
+    for i = 1, #self.pos do
+        local pos = self.pos[i]
+        if lap.isInRange(pos, startPos, endPos) then
+            local throttle = self.throttle[i]
+            if throttle >= fullThrottleThreshold then
+                wasOnFullThrottle = true
             elseif wasOnFullThrottle and throttle < fullThrottleThreshold then
-                return pos  -- First drop below 98%
+                -- Check if this is a gear shift - if so, skip it
+                if not isNearGearShift(i) then
+                    return pos  -- Real lift point (not a gear shift)
+                end
+                -- Otherwise continue looking - this was just a gear shift throttle cut
             end
         end
     end

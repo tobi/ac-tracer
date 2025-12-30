@@ -23,6 +23,8 @@ local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 -- Live Corner Tracking State
 --------------------------------------------------------------------------------
 
+local GEAR_SHIFT_IGNORE_TIME = 0.15  -- Seconds to ignore throttle after gear shift
+
 local liveCorner = {
     cornerNum = 0,
     cornerInfo = nil,
@@ -44,6 +46,8 @@ local liveCorner = {
     wasOnThrottle = false,
     speeds = {},
     maxSteeringDeg = 0,
+    lastGear = nil,
+    gearShiftTime = 0,
 }
 
 local lastLapCount = 0
@@ -92,6 +96,8 @@ local function resetLiveCorner()
     liveCorner.wasOnThrottle = false
     liveCorner.speeds = {}
     liveCorner.maxSteeringDeg = 0
+    liveCorner.lastGear = nil
+    liveCorner.gearShiftTime = 0
 end
 
 local function getCornerInfo(corners, cornerNum)
@@ -795,20 +801,30 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
         else
             -- In corner - track data
             table.insert(liveCorner.speeds, { pos = currentPos, speed = currentSpeed })
-            
+
             -- Track max steering (absolute degrees)
             local steerDeg = math.abs(car.steer)
             if steerDeg > liveCorner.maxSteeringDeg then
                 liveCorner.maxSteeringDeg = steerDeg
             end
-            
-            -- Track lift-off
+
+            -- Track gear shifts (to filter out throttle lift during shifts)
+            local currentGear = car.gear
+            if liveCorner.lastGear and currentGear ~= liveCorner.lastGear then
+                liveCorner.gearShiftTime = currentLapTime
+            end
+            liveCorner.lastGear = currentGear
+
+            -- Check if we're near a recent gear shift
+            local nearGearShift = (currentLapTime - liveCorner.gearShiftTime) < GEAR_SHIFT_IGNORE_TIME
+
+            -- Track lift-off (ignore throttle dips during gear shifts)
             if isFullThrottle then
                 liveCorner.wasOnThrottle = true
-            elseif liveCorner.wasOnThrottle and not liveCorner.liftOffPos then
+            elseif liveCorner.wasOnThrottle and not liveCorner.liftOffPos and not nearGearShift then
                 liveCorner.liftOffPos = currentPos
             end
-            
+
             -- Track brake point
             if isBraking and not liveCorner.brakePos then
                 liveCorner.brakePos = currentPos
