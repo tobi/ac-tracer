@@ -14,7 +14,7 @@ local function createTestLap(opts)
     opts = opts or {}
     local l = lap.new("test_track", "test_car")
     
-    local numSamples = opts.numSamples or 60  -- 1 second at 60Hz
+    local numSamples = opts.numSamples or lap.SAMPLE_RATE  -- 1 second at sample rate
     local startPos = opts.startPos or 0.1
     local endPos = opts.endPos or 0.2
     local posRange = endPos - startPos
@@ -24,7 +24,7 @@ local function createTestLap(opts)
         local pos = startPos + t * posRange
         
         table.insert(l.pos, pos)
-        table.insert(l.times, i / 60)  -- seconds
+        table.insert(l.times, i / lap.SAMPLE_RATE)  -- seconds
         table.insert(l.throttle, opts.throttle and opts.throttle[i] or 0.5)
         table.insert(l.brake, opts.brake and opts.brake[i] or 0)
         table.insert(l.brake_r, opts.brake_r and opts.brake_r[i] or (opts.brake and opts.brake[i] or 0))
@@ -66,22 +66,22 @@ test("lap detects lockups in corner range", function()
 end)
 
 test("lap detects TC active in corner range", function()
+    local numSamples = lap.SAMPLE_RATE  -- 1 second worth of samples
     local l = createTestLap({
-        numSamples = 60,
+        numSamples = numSamples,
         startPos = 0.1,
         endPos = 0.2,
     })
     
-    -- Add TC flags for 1.5 seconds worth of samples (90 samples at 60Hz)
-    -- But we only have 60 samples, so add TC to all of them
-    for i = 1, 60 do
+    -- Add TC flags for all samples (1 second duration)
+    for i = 1, numSamples do
         l.flags[i] = lap.FLAGS.TC_ACTIVE
     end
     
     local tcCount = l:countFlagInRange(0.1, 0.2, lap.FLAGS.TC_ACTIVE)
-    local tcDuration = tcCount / 60  -- seconds
+    local tcDuration = tcCount / lap.SAMPLE_RATE  -- seconds
     
-    assert_equal(tcCount, 60, "Should count all TC samples")
+    assert_equal(tcCount, numSamples, "Should count all TC samples")
     assert_near(tcDuration, 1.0, 0.1, "TC duration should be ~1 second")
 end)
 
@@ -143,7 +143,7 @@ test("getFlagSummary combines all flag types", function()
     assert_true(summary.lockup.wheels.fl, "FL lockup should be detected")
     
     assert_equal(summary.overlap.count, 2, "Should count 2 overlap samples")
-    assert_near(summary.overlap.time, 2/60, 0.01, "Overlap time should be ~33ms")
+    assert_near(summary.overlap.time, 2/lap.SAMPLE_RATE, 0.01, "Overlap time should be ~2 samples")
     
     assert_equal(summary.offtrack.count, 1, "Should count 1 offtrack sample")
 end)
@@ -157,7 +157,7 @@ suite("Pedal overlap analysis")
 
 test("detects throttle during heavy braking", function()
     local l = createTestLap({
-        numSamples = 60,
+        numSamples = lap.SAMPLE_RATE,  -- 1 second of data
         startPos = 0.1,
         endPos = 0.2,
     })
@@ -191,21 +191,25 @@ test("detects throttle during heavy braking", function()
 end)
 
 test("overlap flag tracks pedal overlap duration", function()
+    local numSamples = lap.SAMPLE_RATE  -- 1 second of data
     local l = createTestLap({
-        numSamples = 60,
+        numSamples = numSamples,
         startPos = 0.1,
         endPos = 0.2,
     })
     
-    -- Add overlap flags for 0.5 seconds (30 samples at 60Hz)
-    for i = 15, 45 do
+    -- Add overlap flags for roughly half the samples (0.5 seconds)
+    local halfSamples = math.floor(numSamples / 2)
+    local startIdx = math.floor(numSamples / 4)
+    local endIdx = startIdx + halfSamples
+    for i = startIdx, endIdx do
         l.flags[i] = lap.FLAGS.OVERLAP
     end
     
     local overlapTime = l:getOverlapTimeInRange(0.1, 0.2)
+    local expectedTime = (halfSamples + 1) / lap.SAMPLE_RATE  -- +1 because inclusive range
     
-    -- 31 samples * (1/60) = ~0.517 seconds
-    assert_near(overlapTime, 0.517, 0.05, "Overlap time should be ~0.5 seconds")
+    assert_near(overlapTime, expectedTime, 0.05, "Overlap time should be ~0.5 seconds")
 end)
 
 
@@ -275,18 +279,20 @@ test("gear difference detected", function()
 end)
 
 test("brake point and lift point detection", function()
+    local numSamples = lap.SAMPLE_RATE
     local l = createTestLap({
-        numSamples = 60,
+        numSamples = numSamples,
         startPos = 0.1,
         endPos = 0.2,
     })
     
-     -- Simulate: full throttle -> lift at sample 15 -> brake at sample 25
-     for i = 1, 60 do
-         if i <= 15 then
+     -- Simulate: full throttle -> lift at 25% -> brake at 40%
+     for i = 1, numSamples do
+         local t = i / numSamples
+         if t <= 0.25 then
              l.throttle[i] = 1.0  -- Full throttle
              l.brake[i] = 0
-         elseif i <= 25 then
+         elseif t <= 0.4 then
              l.throttle[i] = 0.5  -- Coasting
              l.brake[i] = 0
          else
@@ -313,15 +319,16 @@ end)
 suite("Speed analysis")
 
 test("entry/apex/exit speed detection", function()
+    local numSamples = lap.SAMPLE_RATE
     local l = createTestLap({
-        numSamples = 60,
+        numSamples = numSamples,
         startPos = 0.1,
         endPos = 0.2,
     })
     
     -- Simulate corner: entry 150 -> apex 80 -> exit 120
-    for i = 1, 60 do
-        local t = (i - 1) / 59
+    for i = 1, numSamples do
+        local t = (i - 1) / (numSamples - 1)
         if t < 0.3 then
             -- Entry phase: speed decreasing from 150
             l.speed[i] = 150 - (t / 0.3) * 70

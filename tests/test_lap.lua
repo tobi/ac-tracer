@@ -373,8 +373,9 @@ test("getOverlapTimeInRange calculates time", function()
     
     local overlapTime = l:getOverlapTimeInRange(0.1, 0.5)
     
-    -- 3 samples * (1/60) seconds = 0.05s
-    assert_near(overlapTime, 0.05, 0.01, "Should calculate ~50ms overlap")
+    -- 3 samples * (1/SAMPLE_RATE) seconds
+    local expectedTime = 3 / lap.SAMPLE_RATE
+    assert_near(overlapTime, expectedTime, 0.01, "Should calculate overlap based on sample rate")
 end)
 
 
@@ -489,7 +490,7 @@ test("getFlagSummary returns complete summary", function()
     assert_true(not summary.lockup.wheels.fr, "FR lockup should be false")
     
     assert_equal(summary.overlap.count, 2, "Should count 2 overlap samples")
-    assert_near(summary.overlap.time, 2/60, 0.001, "Should calculate overlap time")
+    assert_near(summary.overlap.time, 2/lap.SAMPLE_RATE, 0.001, "Should calculate overlap time")
     
     assert_equal(summary.limiter.count, 0, "Should count 0 limiter samples")
     assert_true(not summary.limiter.active, "Limiter should not be active")

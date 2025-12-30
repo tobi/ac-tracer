@@ -9,7 +9,7 @@ local extended_brake = require('extended-brake')
 local csv_parser = require('csv_parser')
 
 -- Constants
-lap.SAMPLE_RATE = 60  -- Hz (exported for other modules)
+lap.SAMPLE_RATE = 30  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
 local SPARSE_EPS = 1e-4
 local SPARSE_POS_EPS = 1e-6
@@ -1227,8 +1227,8 @@ end
 ---@return table|nil Lap instance
 ---@return table|nil warnings Array of warning messages
 function lap.fromCSV(filePath, track, car, trackLength)
-    -- Delegate to csv_parser module
-    local parsed, warnings = csv_parser.parseFile(filePath, trackLength)
+    -- Delegate to csv_parser module, passing our target sample rate
+    local parsed, warnings = csv_parser.parseFile(filePath, trackLength, lap.SAMPLE_RATE)
     if not parsed then
         return nil, warnings
     end

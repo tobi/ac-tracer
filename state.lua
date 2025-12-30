@@ -46,7 +46,7 @@ state.cornerRecordTime = nil
 
 local SAMPLE_RATE = lap.SAMPLE_RATE
 local TAP_THRESHOLD = 1.0
-local MAX_SAMPLES = 36000  -- ~10 minutes at 60Hz (36000 samples)
+local MAX_SAMPLES = 18000  -- ~10 minutes at 30Hz (18000 samples)
 
 -- state.history is a reference to history_storage.laps
 state.history = history_storage.laps
@@ -361,9 +361,9 @@ local function autoDetectCorners(lapData)
     if not lapData or lapData:length() < 30 then return {} end
 
     -- Detection parameters from centralized config
-    local SPEED_DROP_THRESHOLD = settings.speedDropThreshold
-    local BRAKE_THRESHOLD = settings.brakeThreshold
-    local THROTTLE_ON_THRESHOLD = settings.throttleThreshold
+    local SPEED_DROP_THRESHOLD = settings.speedDropThreshold()
+    local BRAKE_THRESHOLD = settings.brakeThreshold()
+    local THROTTLE_ON_THRESHOLD = settings.throttleThreshold()
     local LEAD_DISTANCE = 50
     local EXIT_TIME = 2.0
     local EXIT_TIME_THROTTLE_ONLY = 5.0
@@ -1033,8 +1033,8 @@ function state.analyzeCorners(lapData)
                 apexPos = apexPos,
                 apexSpeed = apexSpeed,
                 exitSpeed = lapData:speedAt(corner.endPos),
-                brakePos = lapData:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold),
-                liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold),
+                brakePos = lapData:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold()),
+                liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold()),
                 maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)
             }
         end

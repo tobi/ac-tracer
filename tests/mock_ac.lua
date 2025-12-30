@@ -8,6 +8,9 @@ render = render or {}
 physics = physics or {}
 bit = bit or {}
 
+-- Mock __dirname (CSP provides this as the script's directory)
+__dirname = __dirname or "."
+
 -- Math extensions CSP provides
 math.clamp = math.clamp or function(v, min, max)
     if v < min then return min end
@@ -166,16 +169,19 @@ ac.storage = setmetatable({}, {
     __newindex = function(t, k, v)
         storageData[k] = v
     end,
-    __call = function(t, defaults)
+    __call = function(t, defaults, prefix)
         -- Return a table that auto-persists (simplified mock)
+        -- prefix is optional and ignored in mock (would be used for key namespacing)
         local data = {}
         for k, v in pairs(defaults) do
-            data[k] = storageData[k] or v
+            local storageKey = prefix and (prefix .. k) or k
+            data[k] = storageData[storageKey] or v
         end
         return setmetatable(data, {
             __newindex = function(self, k, v)
                 rawset(self, k, v)
-                storageData[k] = v
+                local storageKey = prefix and (prefix .. k) or k
+                storageData[storageKey] = v
             end
         })
     end

@@ -1,6 +1,13 @@
 -- test_ui_utils.lua - Tests for ui_utils.lua speed display functions
 -- Note: Only tests functions that don't require CSP UI APIs
 
+-- Clear cached modules to ensure fresh load with mock environment
+package.loaded['app_settings'] = nil
+package.loaded['ui_utils'] = nil
+package.loaded['lap_picker'] = nil
+package.loaded['file_utils'] = nil
+package.loaded['theme'] = nil
+
 local ui_utils = require('ui_utils')
 local settings = require('app_settings')
 
@@ -11,15 +18,15 @@ local settings = require('app_settings')
 suite("ui_utils.speed")
 
 test("converts km/h to display units (km/h mode)", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speed(100), 100)
 end)
 
 test("converts km/h to mph when useKMH is false", function()
-    settings.useKMH = false
+    settings.setUseKMH(false)
     local mph = ui_utils.speed(100)
     assert_near(mph, 62.14, 0.1, "100 km/h should be ~62 mph")
-    settings.useKMH = true  -- Restore
+    settings.setUseKMH(true)  -- Restore
 end)
 
 test("handles nil input", function()
@@ -30,26 +37,26 @@ end)
 suite("ui_utils.speedUnit")
 
 test("returns km/h when useKMH is true", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedUnit(), "km/h")
 end)
 
 test("returns mph when useKMH is false", function()
-    settings.useKMH = false
+    settings.setUseKMH(false)
     assert_equal(ui_utils.speedUnit(), "mph")
-    settings.useKMH = true  -- Restore
+    settings.setUseKMH(true)  -- Restore
 end)
 
 
 suite("ui_utils.speedDisplay")
 
 test("formats speed with unit", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDisplay(150), "150 km/h")
 end)
 
 test("formats speed without unit", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDisplay(150, false), "150")
 end)
 
@@ -58,33 +65,33 @@ test("handles nil speed", function()
 end)
 
 test("converts to mph when useKMH is false", function()
-    settings.useKMH = false
+    settings.setUseKMH(false)
     local result = ui_utils.speedDisplay(100)
     assert_true(result:match("62"), "Should show ~62 mph")
     assert_true(result:match("mph"), "Should include mph unit")
-    settings.useKMH = true  -- Restore
+    settings.setUseKMH(true)  -- Restore
 end)
 
 
 suite("ui_utils.speedDeltaDisplay")
 
 test("formats positive delta with sign", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDeltaDisplay(5), "+5")
 end)
 
 test("formats negative delta with sign", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDeltaDisplay(-3), "-3")
 end)
 
 test("formats zero delta", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDeltaDisplay(0), "+0")
 end)
 
 test("includes unit when requested", function()
-    settings.useKMH = true
+    settings.setUseKMH(true)
     assert_equal(ui_utils.speedDeltaDisplay(5, true), "+5 km/h")
 end)
 

@@ -1,145 +1,266 @@
 -- Settings module for AC Tracer
 -- Uses ac.storage for automatic persistence (no manual save needed)
+-- All settings accessed via accessor functions for live updates
 
 local lap_picker = require('lap_picker')
-local ui_utils = require('ui_utils')
+local theme = require('theme')
+
+-- Deferred require to avoid circular dependency (ui_utils requires settings)
+local ui_utils = nil
+local function getUiUtils()
+    if not ui_utils then
+        ui_utils = require('ui_utils')
+    end
+    return ui_utils
+end
 
 local M = {}
 
--- Persistent settings using ac.storage (auto-saves on assignment)
--- Uses "ac_tracer/" prefix for all keys
+--------------------------------------------------------------------------------
+-- Persistent Config (ac.storage auto-saves on assignment)
+--------------------------------------------------------------------------------
+
 local config = ac.storage({
-    -- Display toggles
+    -- Display toggles (which traces to show)
     displayThrottle = true,
     displayBrake = true,
     displayClutch = false,
     displaySteering = false,
     displaySpeed = false,
+    displayGear = false,  -- TODO: implement gear trace rendering
+
+    -- Units
+    useKMH = true,
+
+    -- Trace display (rolling buffer in main window)
+    timeWindow = 12,      -- seconds of history to show
+    sampleRate = 20,      -- Hz for trace display (visual only, not lap recording)
+
+    -- History
+    maxHistoryLaps = 50,  -- max laps to retain in memory
 
     -- Telemetry window
     telemetryAutoHide = true,
     telemetryAutoHideSpeed = 20,
 
-    -- Flag annotations (telemetry window markers)
+    -- Flag markers (shown in trace window and telemetry)
     showTCMarkers = true,
     showLockupMarkers = true,
     showWheelSlipMarkers = false,
     showOverlapMarkers = false,
 
-    -- General
-    useKMH = true,
-
-    -- Detection thresholds
-    brakeThreshold = 5,
-    throttleThreshold = 0.98,
-    speedDropThreshold = 0.05,
-
-    -- Trace settings
-    timeWindow = 12,
-    sampleRate = 15,
-    thickness = 2,
-    steeringCapDeg = 180,
+    -- Detection thresholds (hidden from UI - advanced tuning)
+    brakeThreshold = 5,        -- bar - when to consider "braking"
+    throttleThreshold = 0.98,  -- 0-1 - when to consider "full throttle"
+    speedDropThreshold = 0.05, -- fraction - corner detection sensitivity
 }, "ac_tracer/")
 
--- Export settings as module properties (for compatibility)
-M.useKMH = config.useKMH
-M.telemetryAutoHide = config.telemetryAutoHide
-M.telemetryAutoHideSpeed = config.telemetryAutoHideSpeed
-M.brakeThreshold = config.brakeThreshold
-M.throttleThreshold = config.throttleThreshold
-M.speedDropThreshold = config.speedDropThreshold
-M.timeWindow = config.timeWindow
-M.sampleRate = config.sampleRate
-M.thickness = config.thickness
-M.steeringCap = config.steeringCapDeg * math.pi / 180
+--------------------------------------------------------------------------------
+-- Accessor Functions (always return current value from config)
+--------------------------------------------------------------------------------
 
--- Flag annotation settings (direct access via config)
-M.flagMarkers = {
-    tc = function() return config.showTCMarkers end,
-    lockup = function() return config.showLockupMarkers end,
-    wheelSlip = function() return config.showWheelSlipMarkers end,
-    overlap = function() return config.showOverlapMarkers end,
-}
+-- Display toggles
+function M.displayThrottle() return config.displayThrottle end
+function M.displayBrake() return config.displayBrake end
+function M.displayClutch() return config.displayClutch end
+function M.displaySteering() return config.displaySteering end
+function M.displaySpeed() return config.displaySpeed end
+function M.displayGear() return config.displayGear end
 
--- Toggle flag marker setting
+-- Units
+function M.useKMH() return config.useKMH end
+function M.setUseKMH(v) config.useKMH = v end
+
+-- Trace display
+function M.timeWindow() return config.timeWindow end
+function M.sampleRate() return config.sampleRate end
+
+-- History
+function M.maxHistoryLaps() return config.maxHistoryLaps end
+
+-- Telemetry window
+function M.telemetryAutoHide() return config.telemetryAutoHide end
+function M.telemetryAutoHideSpeed() return config.telemetryAutoHideSpeed end
+
+-- Detection thresholds
+function M.brakeThreshold() return config.brakeThreshold end
+function M.throttleThreshold() return config.throttleThreshold end
+function M.speedDropThreshold() return config.speedDropThreshold end
+
+--------------------------------------------------------------------------------
+-- Flag Marker Accessors
+--------------------------------------------------------------------------------
+
+--- Check if a flag marker type is enabled
+---@param flag string Flag type: 'TC', 'Lockup', 'WheelSlip', 'Overlap'
+---@return boolean
+function M.showFlagMarker(flag)
+    local key = 'show' .. flag .. 'Markers'
+    return config[key] or false
+end
+
+--- Toggle a flag marker type
+---@param flag string Flag type: 'TC', 'Lockup', 'WheelSlip', 'Overlap'
 function M.toggleFlagMarker(flag)
-    local key = 'show' .. flag:sub(1,1):upper() .. flag:sub(2) .. 'Markers'
+    local key = 'show' .. flag .. 'Markers'
     config[key] = not config[key]
 end
 
--- Get flag marker setting
-function M.showFlagMarker(flag)
-    local key = 'show' .. flag:sub(1,1):upper() .. flag:sub(2) .. 'Markers'
-    return config[key]
+--------------------------------------------------------------------------------
+-- Settings Window UI
+--------------------------------------------------------------------------------
+
+local function sectionHeader(text)
+    ui.pushFont(ui.Font.Small)
+    ui.textColored(text, theme.text.muted)
+    ui.popFont()
+    ui.offsetCursorY(4)
 end
 
--- Display table (for compatibility with existing code)
-M.display = {
-    throttle = config.displayThrottle,
-    brake = config.displayBrake,
-    clutch = config.displayClutch,
-    steering = config.displaySteering,
-    speed = config.displaySpeed,
-}
-
--- UI helper: toggle checkbox that auto-saves
-function M.checkbox(label, key)
-    local configKey = 'display' .. key:sub(1, 1):upper() .. key:sub(2)
-    if ui.checkbox(label, config[configKey]) then
-        config[configKey] = not config[configKey]
-        M.display[key] = config[configKey]
+local function checkbox(label, getter, setter)
+    if ui.checkbox(label, getter()) then
+        setter(not getter())
     end
 end
 
--- Settings window UI (simplified)
 function M.windowSettings()
-    ui.text("Display Traces")
-    ui.offsetCursorY(5)
-
-    M.checkbox("Throttle", "throttle")
-    ui.sameLine(120)
-    M.checkbox("Brake", "brake")
-    ui.sameLine(200)
-    M.checkbox("Steering", "steering")
-
-    M.checkbox("Clutch", "clutch")
-    ui.sameLine(120)
-    M.checkbox("Speed", "speed")
+    local windowWidth = ui.availableSpaceX()
+    
+    -- TRACES section
+    sectionHeader("TRACES")
+    
+    -- Row 1: Throttle, Brake, Clutch
+    if ui.checkbox("Throttle", config.displayThrottle) then
+        config.displayThrottle = not config.displayThrottle
+    end
+    ui.sameLine(100)
+    if ui.checkbox("Brake", config.displayBrake) then
+        config.displayBrake = not config.displayBrake
+    end
+    ui.sameLine(180)
+    if ui.checkbox("Clutch", config.displayClutch) then
+        config.displayClutch = not config.displayClutch
+    end
+    
+    -- Row 2: Steering, Speed, Gear
+    if ui.checkbox("Steering", config.displaySteering) then
+        config.displaySteering = not config.displaySteering
+    end
+    ui.sameLine(100)
+    if ui.checkbox("Speed", config.displaySpeed) then
+        config.displaySpeed = not config.displaySpeed
+    end
+    ui.sameLine(180)
+    if ui.checkbox("Gear", config.displayGear) then
+        config.displayGear = not config.displayGear
+    end
+    
+    ui.offsetCursorY(6)
+    
+    -- Trace parameters
+    ui.text("Window:")
+    ui.sameLine(60)
+    ui.setNextItemWidth(50)
+    local newWindow = ui.slider("##timewindow", config.timeWindow, 5, 30, "%.0f s")
+    if newWindow ~= config.timeWindow then
+        config.timeWindow = newWindow
+    end
+    
+    ui.sameLine(140)
+    ui.text("Rate:")
+    ui.sameLine(175)
+    ui.setNextItemWidth(50)
+    local newRate = ui.slider("##samplerate", config.sampleRate, 10, 60, "%.0f Hz")
+    if newRate ~= config.sampleRate then
+        config.sampleRate = newRate
+    end
+    
     ui.offsetCursorY(10)
-
     ui.separator()
     ui.offsetCursorY(10)
-
-    -- Telemetry auto-hide settings
-    ui.text("Telemetry Window")
-    ui.offsetCursorY(5)
-
-    if ui.checkbox("Auto-hide above speed", config.telemetryAutoHide) then
-        config.telemetryAutoHide = not config.telemetryAutoHide
-        M.telemetryAutoHide = config.telemetryAutoHide
+    
+    -- UNITS section
+    sectionHeader("UNITS")
+    
+    ui.text("Speed:")
+    ui.sameLine(60)
+    if ui.radioButton("km/h", config.useKMH) then
+        config.useKMH = true
     end
-
-    ui.sameLine(180)
-    ui.pushItemWidth(60)
-    local newSpeed = ui.slider("##autohidespeed", config.telemetryAutoHideSpeed, 5, 100, "%.0f km/h")
+    ui.sameLine(120)
+    if ui.radioButton("mph", not config.useKMH) then
+        config.useKMH = false
+    end
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- HISTORY section
+    sectionHeader("HISTORY")
+    
+    ui.text("Max laps:")
+    ui.sameLine(70)
+    ui.setNextItemWidth(60)
+    local newMax = ui.slider("##maxlaps", config.maxHistoryLaps, 10, 100, "%.0f")
+    if newMax ~= config.maxHistoryLaps then
+        config.maxHistoryLaps = math.floor(newMax)
+    end
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- MARKERS section
+    sectionHeader("MARKERS")
+    
+    if ui.checkbox("Traction Control", config.showTCMarkers) then
+        config.showTCMarkers = not config.showTCMarkers
+    end
+    ui.sameLine(140)
+    if ui.checkbox("Lockups", config.showLockupMarkers) then
+        config.showLockupMarkers = not config.showLockupMarkers
+    end
+    
+    if ui.checkbox("Wheel Slip", config.showWheelSlipMarkers) then
+        config.showWheelSlipMarkers = not config.showWheelSlipMarkers
+    end
+    ui.sameLine(140)
+    if ui.checkbox("Pedal Overlap", config.showOverlapMarkers) then
+        config.showOverlapMarkers = not config.showOverlapMarkers
+    end
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- TELEMETRY WINDOW section
+    sectionHeader("TELEMETRY WINDOW")
+    
+    if ui.checkbox("Auto-hide above", config.telemetryAutoHide) then
+        config.telemetryAutoHide = not config.telemetryAutoHide
+    end
+    ui.sameLine(130)
+    ui.setNextItemWidth(50)
+    local newSpeed = ui.slider("##autohidespeed", config.telemetryAutoHideSpeed, 5, 100, "%.0f")
     if newSpeed ~= config.telemetryAutoHideSpeed then
         config.telemetryAutoHideSpeed = newSpeed
-        M.telemetryAutoHideSpeed = config.telemetryAutoHideSpeed
     end
-    ui.popItemWidth()
+    ui.sameLine()
+    ui.text(config.useKMH and "km/h" or "mph")
+    
     ui.offsetCursorY(10)
-
     ui.separator()
     ui.offsetCursorY(10)
-
-    -- Reference lap section
-    ui.text("Reference Lap")
-    ui.offsetCursorY(5)
+    
+    -- REFERENCE LAP section
+    sectionHeader("REFERENCE LAP")
+    
     lap_picker.drawCompact()
-
+    
     ui.offsetCursorY(5)
     if ui.button("Load Reference Lap...", vec2(150, 0)) then
-        ui_utils.openWindow("referencelap")
+        getUiUtils().openWindow("referencelap")
     end
 end
 

@@ -495,20 +495,32 @@ This pattern:
    - Reads completed laps from `state.history`
    - Uses `state` and `settings` directly via require
 
-8. **`app_settings.lua`** - Settings UI
-   - CSV loading via `lap.fromCSV()` and `state.setBestLap()`
-   - Uses `state` directly via require
+8. **`app_settings.lua`** - Settings with accessor functions
+   - Uses `ac.storage()` for auto-persistence (no manual save)
+   - All settings accessed via functions: `settings.useKMH()`, `settings.setUseKMH(v)`
+   - Configurable: trace display, units, history limits, flag markers, detection thresholds
+   - Settings UI with organized sections (Traces, Units, History, Markers, Telemetry, Reference Lap)
 
 9. **`scoring.lua`** - Corner score calculation
    - Pure functions, no state dependency
+
+10. **`history_storage.lua`** - Lap history persistence
+    - Uses `settings.maxHistoryLaps()` for configurable history size
+    - Serializes laps to `ac.storage` with stringify
+
+11. **`theme.lua`** - Centralized colors and styles
+    - Includes flag marker colors: `theme.flags.tc`, `theme.flags.lockup`, etc.
+    - Gear trace colors: `theme.trace.gear`, `theme.ghost.gear`
 
 ### Deleted
 
 - `load_csv.lua` - Functionality merged into `lap.fromCSV()`
 - `ghost.lua` - Functionality merged into `state.lua`
+- `settings.ini` - Replaced by `ac.storage()` in `app_settings.lua`
 
 ### Future Improvements
 
+- Implement gear trace rendering in trace window (settings toggle exists, rendering TODO)
 - Add lap comparison helpers: `lap.compare(lap1, lap2)`
 - Add lap validation helpers
 

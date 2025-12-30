@@ -17,7 +17,7 @@ local KMH_TO_MPH = 0.621371
 ---@return number Speed in display units
 function ui_utils.speed(kmh)
     if not kmh then return 0 end
-    if settings.useKMH then
+    if settings.useKMH() then
         return kmh
     else
         return kmh * KMH_TO_MPH
@@ -27,7 +27,7 @@ end
 --- Get the current speed unit string
 ---@return string "km/h" or "mph"
 function ui_utils.speedUnit()
-    return settings.useKMH and "km/h" or "mph"
+    return settings.useKMH() and "km/h" or "mph"
 end
 
 --- Format speed for display (converts and adds unit)

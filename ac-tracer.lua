@@ -12,25 +12,29 @@ local delta_bar = require('delta_bar')
 local theme = require('theme')
 local ui_utils = require('ui_utils')
 
--- Display settings
-local display = settings.display or {
-    throttle = true,
-    brake = true,
-    clutch = false,
-    steering = false,
-    speed = false,
-}
-
-
 -- History for trace display (rolling window)
-local maxPoints = math.ceil(settings.timeWindow * settings.sampleRate)
-local history = { throttle = {}, brake = {}, clutch = {}, steering = {}, speed = {}, pos = {} }
+-- Note: maxPoints is recalculated each frame to support live settings changes
+local history = { 
+    throttle = {}, brake = {}, clutch = {}, steering = {}, 
+    speed = {}, gear = {}, pos = {}, flags = {} 
+}
 local updateTimer = 0
+
+-- Flag detection thresholds (same as lap.lua)
+local SLIP_THRESHOLD = 0.15
+local LOCKUP_SPEED_MIN = 20
+local LOCKUP_SLIP_THRESHOLD = -0.5
+local OVERLAP_THROTTLE_THRESHOLD = 0.1
+local OVERLAP_BRAKE_THRESHOLD_BAR = 10
+local OVERLAP_MIN_DURATION = 0.1
+local overlapStartTime = nil
 
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
 
 local function updateHistory(car)
+    local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
+    
     table.insert(history.throttle, car.gas)
     -- Use extended brake pressure if available, otherwise fall back to pedal position
     table.insert(history.brake, extended_brake.getNormalizedBrake(car))
@@ -38,15 +42,83 @@ local function updateHistory(car)
     local s = lap.normalizeSteer(car.steer)
     table.insert(history.steering, s)
     table.insert(history.speed, car.speedKmh)
+    table.insert(history.gear, car.gear)
     table.insert(history.pos, car.splinePosition)
+    
+    -- Build flags bitmask (same logic as lap:addSample)
+    local flagBits = 0
+    
+    -- TC active
+    if car.tractionControlInAction then
+        flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
+    end
+    
+    -- Rev limiter
+    if car.isEngineLimiterOn then
+        flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
+    end
+    
+    -- Wheel slip detection
+    if car.wheels then
+        local hasSlip = false
+        for i = 0, 3 do
+            local wheel = car.wheels[i]
+            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
+                hasSlip = true
+                break
+            end
+        end
+        if hasSlip then
+            flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
+        end
+        
+        -- Lockup detection
+        if car.speedKmh > LOCKUP_SPEED_MIN then
+            local function isLocked(wheel)
+                if not wheel then return false end
+                local slip = wheel.ndSlip or wheel.slip
+                return slip and slip < LOCKUP_SLIP_THRESHOLD
+            end
+            
+            if isLocked(car.wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
+            if isLocked(car.wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
+            if isLocked(car.wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
+            if isLocked(car.wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
+        end
+    end
+    
+    -- Overlap detection
+    local currentTime = car.lapTimeMs / 1000
+    local throttle = car.gas
+    local brakeBar = extended_brake.getBrakePressureBar(car)
+    
+    if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
+        if not overlapStartTime then
+            overlapStartTime = currentTime
+        elseif currentTime - overlapStartTime >= OVERLAP_MIN_DURATION then
+            flagBits = bit.bor(flagBits, lap.FLAGS.OVERLAP)
+        end
+    else
+        overlapStartTime = nil
+    end
+    
+    -- Offtrack detection
+    if car.wheelsOutside and car.wheelsOutside >= 2 then
+        flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
+    end
+    
+    table.insert(history.flags, flagBits)
 
-    if #history.throttle > maxPoints then
+    -- Prune all arrays to maxPoints
+    while #history.throttle > maxPoints do
         table.remove(history.throttle, 1)
         table.remove(history.brake, 1)
         table.remove(history.clutch, 1)
         table.remove(history.steering, 1)
         table.remove(history.speed, 1)
+        table.remove(history.gear, 1)
         table.remove(history.pos, 1)
+        table.remove(history.flags, 1)
     end
 end
 
@@ -78,8 +150,9 @@ function script.update(dt)
 
     -- Update history for trace display
     updateTimer = updateTimer + dt
-    if updateTimer >= 1 / settings.sampleRate then
-        updateTimer = updateTimer - 1 / settings.sampleRate
+    local sampleInterval = 1 / settings.sampleRate()
+    if updateTimer >= sampleInterval then
+        updateTimer = updateTimer - sampleInterval
         updateHistory(currentCar)
     end
 
@@ -87,17 +160,17 @@ function script.update(dt)
     corner_analysis.update(currentCar, state.currentLap, state.bestLap, state.trackCorners)
 
     -- Auto-hide telemetry window when above speed threshold (traces always visible)
-    if settings.telemetryAutoHide then
-        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed, {"telemetry"})
+    if settings.telemetryAutoHide() then
+        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed(), {"telemetry"})
     end
 end
 
 -- Drawing helpers
-local function drawTrace(origin, x, y, w, h, data, color, thickness)
+local function drawTrace(origin, x, y, w, h, data, color, thickness, maxPts)
     if #data < 2 then return end
     thickness = thickness or theme.style.traceThickness
-    local step = w / (maxPoints - 1)
-    local start = maxPoints - #data
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
     ui.pathClear()
     for i = 1, #data do
         ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - data[i] * h))
@@ -105,11 +178,11 @@ local function drawTrace(origin, x, y, w, h, data, color, thickness)
     ui.pathStroke(color, false, thickness)
 end
 
-local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickness)
+local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickness, maxPts)
     if #data < 2 then return end
     thickness = thickness or theme.style.traceThickness
-    local step = w / (maxPoints - 1)
-    local start = maxPoints - #data
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
     ui.pathClear()
     for i = 1, #data do
         local normalized = math.clamp(data[i] / maxSpeed, 0, 1)
@@ -118,7 +191,45 @@ local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickne
     ui.pathStroke(color, false, thickness)
 end
 
-local function drawGrid(origin, x, y, w, h, positions, trackLength)
+-- Draw flag markers as background highlights
+local function drawFlagMarkers(origin, x, y, w, h, flags, maxPts)
+    if not flags or #flags < 2 then return end
+    local step = w / (maxPts - 1)
+    local start = maxPts - #flags
+    
+    -- Any lockup flag (FL, FR, RL, RR)
+    local LOCKUP_ANY = bit.bor(lap.FLAGS.LOCKUP_FL, lap.FLAGS.LOCKUP_FR, 
+                               lap.FLAGS.LOCKUP_RL, lap.FLAGS.LOCKUP_RR)
+    
+    for i = 1, #flags do
+        local f = flags[i]
+        if f > 0 then
+            local px = x + (start + i - 1) * step
+            local color = nil
+            
+            -- Priority: lockup > TC > wheel slip > overlap
+            if settings.showFlagMarker('Lockup') and bit.band(f, LOCKUP_ANY) > 0 then
+                color = theme.flags.lockup
+            elseif settings.showFlagMarker('TC') and bit.band(f, lap.FLAGS.TC_ACTIVE) > 0 then
+                color = theme.flags.tc
+            elseif settings.showFlagMarker('WheelSlip') and bit.band(f, lap.FLAGS.WHEEL_SLIP) > 0 then
+                color = theme.flags.wheelSlip
+            elseif settings.showFlagMarker('Overlap') and bit.band(f, lap.FLAGS.OVERLAP) > 0 then
+                color = theme.flags.overlap
+            end
+            
+            if color then
+                ui.drawRectFilled(
+                    origin + vec2(px, y),
+                    origin + vec2(px + step, y + h),
+                    color, 0
+                )
+            end
+        end
+    end
+end
+
+local function drawGrid(origin, x, y, w, h)
     -- Border
     ui.drawLine(origin + vec2(x, y), origin + vec2(x + w, y), theme.grid.line, 1)
     ui.drawLine(origin + vec2(x + w, y), origin + vec2(x + w, y + h), theme.grid.line, 1)
@@ -128,44 +239,6 @@ local function drawGrid(origin, x, y, w, h, positions, trackLength)
     -- Horizontal line at 50%
     local ly = y + h / 2
     ui.drawLine(origin + vec2(x, ly), origin + vec2(x + w, ly), theme.grid.line, 1)
-    
-    -- 50m vertical markers
-    if positions and #positions >= 2 and trackLength and trackLength > 0 then
-        local startPos = positions[1]
-        local endPos = positions[#positions]
-        local startM = startPos * trackLength
-        local endM = endPos * trackLength
-        
-        -- Handle wrap-around (crossing start/finish)
-        if endM < startM then endM = endM + trackLength end
-        
-        -- Find first 50m mark after start
-        local firstMark = math.ceil(startM / 50) * 50
-        local markerColor = rgbm(0.3, 0.3, 0.3, 0.4)
-        
-        for m = firstMark, endM, 50 do
-            local actualM = m % trackLength
-            local markerPos = actualM / trackLength
-            
-            -- Find X position for this marker
-            for i = 1, #positions - 1 do
-                local p1, p2 = positions[i], positions[i + 1]
-                local checkPos = markerPos
-                
-                -- Handle wrap-around
-                if p2 < p1 then p2 = p2 + 1 end
-                if checkPos < p1 and p1 > 0.5 then checkPos = checkPos + 1 end
-                
-                if checkPos >= p1 and checkPos <= p2 then
-                    local t = (checkPos - p1) / (p2 - p1)
-                    local step = w / (#positions - 1)
-                    local lx = x + (i - 1 + t) * step
-                    ui.drawLine(origin + vec2(lx, y), origin + vec2(lx, y + h), markerColor, 1)
-                    break
-                end
-            end
-        end
-    end
 end
 
 local function drawBar(origin, x, y, w, h, val, color)
@@ -382,7 +455,6 @@ function script.windowMain(dt)
 
     local origin = vec2(L.contentX, L.contentY)
     local traceOrigin = origin
-    local trackLength = ac.getSim().trackLengthM
     
     if L.traceW > 10 then
         -- Dark background behind trace lines
@@ -391,7 +463,7 @@ function script.windowMain(dt)
         -- Use layout for inner dimensions
         local innerX, innerY, innerW, innerH = L.innerX, L.innerY, L.innerW, L.innerH
         
-        drawGrid(traceOrigin, innerX, innerY, innerW, innerH, history.pos, trackLength)
+        drawGrid(traceOrigin, innerX, innerY, innerW, innerH)
 
         -- Draw corner zones (faint gray with white borders, labels scroll with zone)
         local corners = state.trackCorners
@@ -542,22 +614,30 @@ function script.windowMain(dt)
         local maxSpeed = getMaxSpeed(ghostTraces)
         local ghostThickness = theme.style.ghostThickness
         local traceThickness = theme.style.traceThickness
+        local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
+        
+        -- Draw flag markers as background highlights (before traces)
+        drawFlagMarkers(traceOrigin, innerX, innerY, innerW, innerH, history.flags, maxPoints)
         
         -- Ghost traces (reference) - drawn first so current traces render on top
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if display.speed and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness) end
-            if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness) end
-            if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness) end
-            if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness) end
-            if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness) end
+            if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints) end
+            if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints) end
+            if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints) end
+            if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints) end
+            if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints) end
+            -- TODO: Add ghost gear trace when gear display is implemented
         end
 
         -- Current traces - drawn on top of ghost traces
-        if display.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness) end
-        if display.steering then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness) end
-        if display.clutch then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch, traceThickness) end
-        if display.throttle then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle, traceThickness) end
-        if display.brake then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake, traceThickness) end
+        if settings.displaySpeed() then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness, maxPoints) end
+        if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness, maxPoints) end
+        if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch, traceThickness, maxPoints) end
+        if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle, traceThickness, maxPoints) end
+        if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake, traceThickness, maxPoints) end
+        -- TODO: Implement gear trace display
+        -- Gear is discrete (0-8+), needs different rendering than 0-1 normalized traces
+        -- if settings.displayGear() then drawGearTrace(...) end
     end
 
     -- Use extended brake pressure for the brake bar

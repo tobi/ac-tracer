@@ -14,8 +14,9 @@ local corner_analysis = {}
 -- Constants
 --------------------------------------------------------------------------------
 
-local BRAKE_THRESHOLD = settings.brakeThreshold
-local THROTTLE_ON_THRESHOLD = settings.throttleThreshold
+-- Thresholds accessed via settings accessors (live values)
+local function getBrakeThreshold() return settings.brakeThreshold() end
+local function getThrottleOnThreshold() return settings.throttleThreshold() end
 local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 
 --------------------------------------------------------------------------------
@@ -248,8 +249,8 @@ local function analyzeBadBrakeZoneThrottle(currentLap, data)
         end
     end
 
-    -- Convert max consecutive to duration (60 Hz)
-    local maxDuration = maxConsecutive / 60
+    -- Convert max consecutive to duration (using lap sample rate)
+    local maxDuration = maxConsecutive / lap.SAMPLE_RATE
 
     -- If the longest throttle period during heavy braking exceeds blip duration, it's bad
     if maxDuration > BLIP_DURATION then
@@ -305,8 +306,8 @@ local function analyzeTractionControl(currentLap, data)
     local tcCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.TC_ACTIVE)
     if tcCount == 0 then return nil end
 
-    -- Convert samples to approximate duration (60 Hz sampling)
-    local tcDuration = tcCount / 60
+    -- Convert samples to approximate duration (using lap sample rate)
+    local tcDuration = tcCount / lap.SAMPLE_RATE
     if tcDuration < 1.0 then return nil end  -- Only warn for excessive TC (> 1 second)
 
     return { text = string.format("TC active %.1fs", tcDuration), severity = "info" }
@@ -322,8 +323,8 @@ local function analyzeOfftrack(currentLap, data)
     local offtrackCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.OFFTRACK)
     if offtrackCount == 0 then return nil end
 
-    -- Convert samples to approximate duration (60 Hz sampling)
-    local offtrackDuration = offtrackCount / 60
+    -- Convert samples to approximate duration
+    local offtrackDuration = offtrackCount / lap.SAMPLE_RATE
     if offtrackDuration < 0.1 then return nil end  -- Ignore very brief excursions
 
     return { text = string.format("off track %.1fs", offtrackDuration), severity = "error" }
@@ -339,8 +340,8 @@ local function analyzeLimiter(currentLap, data)
     local limiterCount = currentLap:countFlagInRange(data.refStartPos, data.refEndPos, lap.FLAGS.LIMITER_HIT)
     if limiterCount == 0 then return nil end
 
-    -- Convert samples to approximate duration (60 Hz sampling)
-    local limiterDuration = limiterCount / 60
+    -- Convert samples to approximate duration
+    local limiterDuration = limiterCount / lap.SAMPLE_RATE
     if limiterDuration < 0.05 then return nil end  -- Ignore very brief hits
 
     return { text = "hit rev limiter", severity = "info" }
@@ -752,8 +753,8 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     
     local currentPos = car.splinePosition
     local currentSpeed = car.speedKmh
-     local isBraking = extended_brake.getBrakePressureBar(car) >= BRAKE_THRESHOLD
-    local isFullThrottle = car.gas >= THROTTLE_ON_THRESHOLD
+    local isBraking = extended_brake.getBrakePressureBar(car) >= getBrakeThreshold()
+    local isFullThrottle = car.gas >= getThrottleOnThreshold()
     
     local normalizedSteering = lap.normalizeSteer(car.steer)
     local isCentered = isSteeringCentered(normalizedSteering)

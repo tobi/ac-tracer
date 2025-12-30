@@ -65,6 +65,7 @@ theme.trace = {
     clutch = rgbm(0, 0.4, 1, 0.85),
     steering = rgbm(0.7, 0.7, 0.7, 0.85),
     speed = rgbm(0.7, 0.7, 1, 0.85),
+    gear = rgbm(0.9, 0.7, 0.3, 0.85),  -- Gold/amber for gear
     delta = rgbm(1, 1, 0, 1),
     fuel = rgbm(1, 0.8, 0.3, 1),
 }
@@ -76,6 +77,15 @@ theme.ghost = {
     clutch = rgbm(0, 0.4, 1, 0.25),
     steering = rgbm(0.7, 0.7, 0.7, 0.25),
     speed = rgbm(0.5, 0.5, 0.7, 0.4),
+    gear = rgbm(0.9, 0.7, 0.3, 0.25),
+}
+
+-- Flag markers (background highlights in trace window)
+theme.flags = {
+    tc = rgbm(1, 0.5, 0, 0.15),           -- Orange tint for traction control
+    lockup = rgbm(1, 0.2, 0.2, 0.2),      -- Red tint for lockups
+    wheelSlip = rgbm(1, 1, 0, 0.1),       -- Yellow tint for wheel slip
+    overlap = rgbm(0.5, 0, 1, 0.15),      -- Purple tint for pedal overlap
 }
 
 -- Delta/comparison (positive = good/green, negative = bad/red)

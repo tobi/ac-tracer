@@ -2,10 +2,10 @@
 -- Handles lap history persistence using ac.storage with stringify for complex data
 
 local lap = require('lap')
+local settings = require('app_settings')
 
 local M = {}
 
-local MAX_HISTORY = 10
 local STORAGE_KEY = 'ac_tracer/history'
 
 -- In-memory history
@@ -20,8 +20,9 @@ function M.save()
     end
 
     local serialized = {}
+    local maxLaps = settings.maxHistoryLaps()
     for i, lapData in ipairs(M.laps) do
-        if i <= MAX_HISTORY then
+        if i <= maxLaps then
             local ser = lapData:serialize()
             if ser then
                 table.insert(serialized, ser)
@@ -75,7 +76,8 @@ end
 function M.add(lapData)
     if not lapData then return end
     table.insert(M.laps, 1, lapData)
-    while #M.laps > MAX_HISTORY do
+    local maxLaps = settings.maxHistoryLaps()
+    while #M.laps > maxLaps do
         table.remove(M.laps)
     end
     M.save()

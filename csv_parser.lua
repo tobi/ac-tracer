@@ -7,8 +7,8 @@ local csv_parser = {}
 -- Constants
 --------------------------------------------------------------------------------
 
-local TARGET_SAMPLE_RATE = 60  -- Hz - must match lap.SAMPLE_RATE
-local TARGET_SAMPLE_INTERVAL = 1 / TARGET_SAMPLE_RATE
+-- Note: We can't require lap.lua here due to circular dependency (lap requires csv_parser)
+-- The target sample rate is passed in as a required parameter from the caller
 
 -- Column mapping configurations for different CSV sources
 -- Priority order: first entry in list is preferred
@@ -242,13 +242,15 @@ local function interpolateAtTime(times, values, targetTime)
     return lerp(v1, v2, t)
 end
 
---- Normalize lap data to exactly TARGET_SAMPLE_RATE Hz
+--- Normalize lap data to a target sample rate
 --- Takes raw parsed data and resamples to evenly-spaced samples
 --- Finds the actual lap start (first crossing of position 0) and trims data
 ---@param rawData table Raw data with times array
 ---@param lapTime number Lap duration in milliseconds
----@return table Normalized data at TARGET_SAMPLE_RATE Hz
-local function normalizeToSampleRate(rawData, lapTime)
+---@param targetSampleRate number Target Hz for output
+---@return table Normalized data at target sample rate
+local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
+    local targetSampleInterval = 1 / targetSampleRate
     local times = rawData.times
     if not times or #times < 2 then
         return rawData  -- Not enough data to normalize
@@ -332,7 +334,7 @@ local function normalizeToSampleRate(rawData, lapTime)
 
     -- Calculate number of output samples based on trimmed data
     local effectiveLapDurationS = times[#times] or (lapTime / 1000)
-    local numSamples = math.floor(effectiveLapDurationS * TARGET_SAMPLE_RATE) + 1
+    local numSamples = math.floor(effectiveLapDurationS * targetSampleRate) + 1
 
     -- Create new evenly-spaced time points
     local normalized = {
@@ -350,7 +352,7 @@ local function normalizeToSampleRate(rawData, lapTime)
     }
 
     for i = 1, numSamples do
-        local t = (i - 1) * TARGET_SAMPLE_INTERVAL
+        local t = (i - 1) * targetSampleInterval
 
         -- Make sure we're within the data range
         if t >= times[1] and t <= times[#times] then
@@ -376,12 +378,12 @@ local function normalizeToSampleRate(rawData, lapTime)
 end
 
 --- Parse a single lap from CSV data starting at a given position
---- Collects all samples at native resolution, then normalizes to TARGET_SAMPLE_RATE
+--- Collects all samples at native resolution, then normalizes to target sample rate
 --- Skips initial garbage data until a lap start is detected (position near 0)
 ---@param lines table All lines from CSV file
 ---@param startIdx number Starting line index
 ---@param indices table Column indices
----@param config table Parsing configuration
+---@param config table Parsing configuration (must include targetSampleRate)
 ---@return table lapData Raw lap data tables
 ---@return number endIdx Ending line index
 ---@return boolean completed Whether lap crossed finish line
@@ -566,8 +568,8 @@ local function parseSingleLap(lines, startIdx, indices, config)
     local endTime = finishTime or (data.times[#data.times] and (firstTime + data.times[#data.times]) or firstTime)
     local lapTime = (endTime - (firstTime or 0)) * 1000  -- ms
 
-    -- Normalize to TARGET_SAMPLE_RATE Hz
-    local normalizedData = normalizeToSampleRate(data, lapTime)
+    -- Normalize to target sample rate
+    local normalizedData = normalizeToSampleRate(data, lapTime, config.targetSampleRate)
 
     return {
         data = normalizedData,
@@ -594,9 +596,10 @@ end
 --- For multi-lap files, automatically selects the fastest complete lap
 ---@param filePath string Path to CSV file
 ---@param trackLength number|nil Track length in meters (required for distance-based CSVs)
+---@param targetSampleRate number Target Hz for output (required)
 ---@return CSVParseResult|nil result Parsed lap data
 ---@return table|nil warnings Array of warning messages
-function csv_parser.parseFile(filePath, trackLength)
+function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
     local warnings = {}
 
     local f = io.open(filePath, "r")
@@ -687,13 +690,13 @@ function csv_parser.parseFile(filePath, trackLength)
 
     -- Log sample rate info
     if sampleRate then
-        if sampleRate ~= TARGET_SAMPLE_RATE then
+        if sampleRate ~= targetSampleRate then
             table.insert(warnings, string.format(
-                "INFO: CSV sample rate (%.1f Hz) - normalizing to %d Hz", sampleRate, TARGET_SAMPLE_RATE))
+                "INFO: CSV sample rate (%.1f Hz) - normalizing to %d Hz", sampleRate, targetSampleRate))
         end
     else
         table.insert(warnings, string.format(
-            "INFO: Unknown CSV sample rate - normalizing to %d Hz", TARGET_SAMPLE_RATE))
+            "INFO: Unknown CSV sample rate - normalizing to %d Hz", targetSampleRate))
     end
 
     -- Determine brake source (front and rear) - output is always in BAR
@@ -781,6 +784,7 @@ function csv_parser.parseFile(filePath, trackLength)
         gLatFactor = gLatFactor,
         gLongFactor = gLongFactor,
         posIsPercentage = posIsPercentage,
+        targetSampleRate = targetSampleRate,
     }
 
     -- Parse all laps
@@ -851,10 +855,10 @@ function csv_parser.parseFile(filePath, trackLength)
     end
 
     ac.log(string.format("csv_parser: Loaded lap: %d samples at %d Hz (%.3fs)",
-        #bestLap.data.pos, TARGET_SAMPLE_RATE, bestLap.time / 1000))
+        #bestLap.data.pos, targetSampleRate, bestLap.time / 1000))
 
     -- Add normalized sample rate to returned result for debugging
-    bestLap.sampleRate = TARGET_SAMPLE_RATE
+    bestLap.sampleRate = targetSampleRate
 
     return bestLap, #warnings > 0 and warnings or nil
 end

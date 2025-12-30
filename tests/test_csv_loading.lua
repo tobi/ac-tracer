@@ -284,26 +284,28 @@ end)
 
 suite("CSV Sample Rate Normalization")
 
-test("barcelona is normalized to 60 Hz", function()
+test("barcelona is normalized to target sample rate", function()
     assert_not_nil(barcelonaLap, "Lap should be loaded")
-    -- Original CSV is 10 Hz, should be upsampled to 60 Hz
-    -- ~93s at 60 Hz = ~5580 samples
-    local expectedMin = 5000
-    local expectedMax = 7000
+    -- Original CSV is 10 Hz, should be resampled to lap.SAMPLE_RATE
+    -- ~93s at 30 Hz = ~2790 samples
+    local sampleRate = require('lap').SAMPLE_RATE
+    local expectedMin = math.floor(90 * sampleRate * 0.9)
+    local expectedMax = math.ceil(100 * sampleRate * 1.1)
     assert_true(barcelonaLap:length() >= expectedMin and barcelonaLap:length() <= expectedMax,
-        string.format("Sample count should be %d-%d for 60 Hz, got %d", 
-            expectedMin, expectedMax, barcelonaLap:length()))
+        string.format("Sample count should be %d-%d for %d Hz, got %d", 
+            expectedMin, expectedMax, sampleRate, barcelonaLap:length()))
 end)
 
-test("daytona is normalized to 60 Hz", function()
+test("daytona is normalized to target sample rate", function()
     assert_not_nil(daytonaLap, "Lap should be loaded")
-    -- Original CSV is 10 Hz, should be upsampled to 60 Hz
-    -- ~100s at 60 Hz = ~6000 samples
-    local expectedMin = 5500
-    local expectedMax = 7000
+    -- Original CSV is 10 Hz, should be resampled to lap.SAMPLE_RATE
+    -- ~100s at 30 Hz = ~3000 samples
+    local sampleRate = require('lap').SAMPLE_RATE
+    local expectedMin = math.floor(95 * sampleRate * 0.9)
+    local expectedMax = math.ceil(110 * sampleRate * 1.1)
     assert_true(daytonaLap:length() >= expectedMin and daytonaLap:length() <= expectedMax,
-        string.format("Sample count should be %d-%d for 60 Hz, got %d", 
-            expectedMin, expectedMax, daytonaLap:length()))
+        string.format("Sample count should be %d-%d for %d Hz, got %d", 
+            expectedMin, expectedMax, sampleRate, daytonaLap:length()))
 end)
 
 test("time delta calculation works with CSV laps", function()
