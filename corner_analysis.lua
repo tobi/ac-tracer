@@ -51,6 +51,7 @@ local currentLapTime = 0
 -- Display state (last completed corner)
 local displayData = nil
 local displayScore = 0
+local displayLap = nil      -- The lap data at time of corner exit (for flag analysis)
 
 -- Frozen corner state (when viewing from telemetry)
 local frozenCorner = {
@@ -373,6 +374,9 @@ local function collectCornerNotes(data, currentLap, refLap, speedUnit)
         if note then table.insert(notes, note) end
     end
 
+    -- DEBUG: Test note to verify rendering works
+    addNote({ text = "DEBUG: Notes working!", severity = "info" })
+
     -- Basic comparisons (data only)
     addNote(analyzeSteeringInput(data))
     addNote(analyzeGearUsage(data))
@@ -636,8 +640,12 @@ local function onCornerExit()
         exitSpeedDelta = (liveCorner.exitSpeed or liveCorner.apexSpeed or 0) - ghostExitSpeed,
         steeringDelta = liveCorner.maxSteeringDeg - ghostMaxSteeringDeg,
     }
-    
+
     displayScore = scoring.calculate(displayData)
+
+    -- Store reference to current lap for flag analysis
+    -- This captures the lap state at corner exit, before it might be cleared on new lap
+    displayLap = state.currentLap
 end
 
 --------------------------------------------------------------------------------
@@ -661,6 +669,7 @@ function corner_analysis.update(car)
         -- Clear displayed corner data from previous lap
         displayData = nil
         displayScore = 0
+        displayLap = nil
     end
     
     currentLapTime = car.lapTimeMs / 1000
@@ -1370,13 +1379,15 @@ function corner_analysis.draw(dt, useKmh)
             drawStatRow("Apex", string.format("%.0fm %s", math.abs(apexMeters), dir), theme.text.primary)
         end
 
-        -- Get lap data (use frozen lap data if viewing from telemetry)
+        -- Get lap data (use frozen lap data if viewing from telemetry, or displayLap for live)
         local currentLap, refLap
         if frozenCorner.active then
             currentLap = frozenCorner.currentLap
             refLap = frozenCorner.referenceLap
         else
-            currentLap = state.currentLap
+            -- Use displayLap which was captured at corner exit time
+            -- This ensures we have the correct lap data even if a new lap started
+            currentLap = displayLap or state.currentLap
             refLap = state.bestLap
         end
 
@@ -1447,6 +1458,7 @@ end
 function corner_analysis.reset()
     displayData = nil
     displayScore = 0
+    displayLap = nil
     resetLiveCorner()
     corner_analysis.clearFrozenCorner()
 end
