@@ -10,6 +10,7 @@ local extended_brake = require('extended-brake')
 local lap_picker = require('lap_picker')
 local delta_bar = require('delta_bar')
 local theme = require('theme')
+local ui_utils = require('ui_utils')
 
 -- Display settings
 local display = settings.display or {
@@ -67,20 +68,23 @@ function script.update(dt)
     currentCar = ac.getCar(0)
     if not currentCar then return end
 
-    if not ac.getSim().isPaused then
-        -- Update centralized state (handles lap recording, completion, best lap)
-        state.update(dt, currentCar)
+    local sim = ac.getSim()
 
-        -- Update history for trace display
-        updateTimer = updateTimer + dt
-        if updateTimer >= 1 / settings.sampleRate then
-            updateTimer = updateTimer - 1 / settings.sampleRate
-            updateHistory(currentCar)
-        end
+    -- Skip all updates during pause or replay (TimeShift rewind)
+    if sim.isPaused or sim.isReplayActive then return end
 
-        -- Update corner analysis (live tracking)
-        corner_analysis.update(currentCar)
+    -- Update centralized state (handles lap recording, completion, best lap)
+    state.update(dt, currentCar)
+
+    -- Update history for trace display
+    updateTimer = updateTimer + dt
+    if updateTimer >= 1 / settings.sampleRate then
+        updateTimer = updateTimer - 1 / settings.sampleRate
+        updateHistory(currentCar)
     end
+
+    -- Update corner analysis (live tracking)
+    corner_analysis.update(currentCar)
 end
 
 -- Drawing helpers
@@ -251,16 +255,7 @@ local function isWindowVisible(windowId)
 end
 
 local function toggleWindow(windowId)
-    local windowName = getWindowName(windowId)
-    local acc = ac.accessAppWindow(windowName)
-    
-    if acc and acc:valid() then
-        local newVisible = not acc:visible()
-        acc:setVisible(newVisible)
-        ac.setMessage(windowId, newVisible and "Opened" or "Closed")
-    else
-        ac.setMessage("Error", "Window not found: " .. windowName)
-    end
+    ui_utils.toggleWindow(windowId)
 end
 
 local function drawToggleButton(localPos, icon, tooltip, windowId)

@@ -2,6 +2,7 @@
 -- Uses ac.storage for automatic persistence (no manual save needed)
 
 local lap_picker = require('lap_picker')
+local ui_utils = require('ui_utils')
 
 local M = {}
 
@@ -18,6 +19,12 @@ local config = ac.storage({
     -- Telemetry window
     telemetryAutoHide = true,
     telemetryAutoHideSpeed = 20,
+
+    -- Flag annotations (telemetry window markers)
+    showTCMarkers = true,
+    showLockupMarkers = true,
+    showWheelSlipMarkers = false,
+    showOverlapMarkers = false,
 
     -- General
     useKMH = true,
@@ -45,6 +52,26 @@ M.timeWindow = config.timeWindow
 M.sampleRate = config.sampleRate
 M.thickness = config.thickness
 M.steeringCap = config.steeringCapDeg * math.pi / 180
+
+-- Flag annotation settings (direct access via config)
+M.flagMarkers = {
+    tc = function() return config.showTCMarkers end,
+    lockup = function() return config.showLockupMarkers end,
+    wheelSlip = function() return config.showWheelSlipMarkers end,
+    overlap = function() return config.showOverlapMarkers end,
+}
+
+-- Toggle flag marker setting
+function M.toggleFlagMarker(flag)
+    local key = 'show' .. flag:sub(1,1):upper() .. flag:sub(2) .. 'Markers'
+    config[key] = not config[key]
+end
+
+-- Get flag marker setting
+function M.showFlagMarker(flag)
+    local key = 'show' .. flag:sub(1,1):upper() .. flag:sub(2) .. 'Markers'
+    return config[key]
+end
 
 -- Display table (for compatibility with existing code)
 M.display = {
@@ -112,11 +139,7 @@ function M.windowSettings()
 
     ui.offsetCursorY(5)
     if ui.button("Load Reference Lap...", vec2(150, 0)) then
-        -- Open the reference lap picker window
-        local acc = ac.accessAppWindow("IMGUI_LUA_AC Tracer_referencelap")
-        if acc and acc:valid() then
-            acc:setVisible(true)
-        end
+        ui_utils.openWindow("referencelap")
     end
 end
 

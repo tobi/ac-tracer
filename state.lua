@@ -52,6 +52,12 @@ state.history = history_storage.laps
 local sampleTimer = 0
 local initialized = false
 
+-- TimeShift/Rewind detection
+local lastRewindTime = 0       -- os.preciseClock() when last rewind occurred
+local REWIND_GRACE_PERIOD = 1.0  -- Seconds to consider a jump as rewind-related
+local preRewindLapCount = 0    -- Lap count before entering rewind
+local preRewindPosition = 0    -- Spline position before entering rewind
+
 --------------------------------------------------------------------------------
 -- Storage Keys
 --------------------------------------------------------------------------------
@@ -543,7 +549,61 @@ function state.init(car)
     -- Initialize current lap
     state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = car.fuel
-    
+
+    -- Register TimeShift/rewind detection callback
+    -- This fires when the car teleports (including during rewind)
+    ac.onCarJumped(0, function()
+        local now = os.preciseClock()
+        local timeSinceLastRewind = now - lastRewindTime
+        local car = ac.getCar(0)
+        if not car then return end
+
+        -- If enough time has passed since last rewind, this is likely a teleport (pit, reset)
+        -- and we should discard the lap. But if it's within the grace period, it's a rewind
+        -- and we should prune data instead.
+        if timeSinceLastRewind > REWIND_GRACE_PERIOD then
+            -- Long gap = new teleport event, discard lap
+            discardCurrentLap()
+            ac.log("AC Tracer: Car jumped (teleport), discarding lap")
+        else
+            -- Short gap = rewind in progress
+            local carPos = car.splinePosition
+            local carLapCount = car.lapCount
+
+            -- Detect rewind past start/finish:
+            -- 1. Lap count decremented (most reliable)
+            -- 2. Position jumped from <0.2 to >0.8 (backwards over line)
+            local lapDecremented = carLapCount < preRewindLapCount
+            local positionJumpedBack = preRewindPosition < 0.2 and carPos > 0.8
+
+            if (lapDecremented or positionJumpedBack) and #state.history > 0 then
+                -- Pop the most recent lap from history
+                local restoredLap = table.remove(state.history, 1)
+                history_storage.laps = state.history  -- Keep in sync
+
+                -- Restore it as current lap and prune to current position
+                state.currentLap = restoredLap
+                state.currentLap.completed = false  -- No longer completed
+                local pruned = state.currentLap:pruneToPosition(carPos)
+
+                -- Update lap count to match
+                state.lapNumber = carLapCount
+
+                ac.log(string.format("AC Tracer: Rewind past start/finish (lap %d->%d), restored lap, pruned %d samples to pos %.3f",
+                    preRewindLapCount, carLapCount, pruned, carPos))
+            elseif state.currentLap then
+                -- Normal rewind within the lap
+                local pruned = state.currentLap:pruneToPosition(carPos)
+                if pruned > 0 then
+                    ac.log(string.format("AC Tracer: Rewind detected, pruned %d samples to pos %.3f",
+                        pruned, carPos))
+                end
+            end
+        end
+
+        lastRewindTime = now
+    end)
+
     initialized = true
     ac.log('Traces: State initialized for ' .. state.track)
 end
@@ -580,12 +640,21 @@ end
 ---@param car table Car state from ac.getCar()
 function state.update(dt, car)
     if not car then return end
-    
+
     -- Initialize on first run
     state.init(car)
-    
-    -- Skip if paused
-    if ac.getSim().isPaused then return end
+
+    local sim = ac.getSim()
+
+    -- Skip if paused or in replay mode (TimeShift rewind)
+    if sim.isPaused then return end
+    if sim.isReplayActive then
+        -- During replay/rewind, track state so we can detect rewind past start/finish
+        lastRewindTime = os.preciseClock()
+        preRewindLapCount = car.lapCount
+        preRewindPosition = car.splinePosition
+        return
+    end
     
     -- Detect state for teleport/pit checks
     local inPit = car.isInPitlane or car.isInPit

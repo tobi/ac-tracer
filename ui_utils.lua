@@ -483,4 +483,55 @@ function ui_utils.formatPositionMeters(pos)
     return string.format("%dm", math.floor(pos * ui_utils.getTrackLength()))
 end
 
+--------------------------------------------------------------------------------
+-- Window Management
+--------------------------------------------------------------------------------
+
+--- Open a window, bringing it to foreground if already visible (no alert)
+---@param windowId string Window ID (e.g., "corners", "telemetry")
+---@param appName string|nil App name (default "AC Tracer")
+function ui_utils.openWindow(windowId, appName)
+    appName = appName or "AC Tracer"
+    local windowName = "IMGUI_LUA_" .. appName .. "_" .. windowId
+    local acc = ac.accessAppWindow(windowName)
+
+    if acc and acc:valid() then
+        if acc:visible() then
+            -- Already visible - just bring to front
+            acc:focus()
+        else
+            -- Not visible - make visible
+            acc:setVisible(true)
+        end
+    end
+end
+
+--- Toggle a window's visibility (no alert message)
+---@param windowId string Window ID
+---@param appName string|nil App name (default "AC Tracer")
+---@return boolean New visibility state
+function ui_utils.toggleWindow(windowId, appName)
+    appName = appName or "AC Tracer"
+    local windowName = "IMGUI_LUA_" .. appName .. "_" .. windowId
+    local acc = ac.accessAppWindow(windowName)
+
+    if acc and acc:valid() then
+        local newVisible = not acc:visible()
+        acc:setVisible(newVisible)
+        return newVisible
+    end
+    return false
+end
+
+--- Check if a window is visible
+---@param windowId string Window ID
+---@param appName string|nil App name (default "AC Tracer")
+---@return boolean
+function ui_utils.isWindowVisible(windowId, appName)
+    appName = appName or "AC Tracer"
+    local windowName = "IMGUI_LUA_" .. appName .. "_" .. windowId
+    local acc = ac.accessAppWindow(windowName)
+    return acc and acc:valid() and acc:visible()
+end
+
 return ui_utils

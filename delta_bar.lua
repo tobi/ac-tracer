@@ -1,5 +1,5 @@
 -- delta_bar.lua - iRacing-style delta bar window
--- Shows time delta vs reference lap with color-coded speed comparison
+-- Shows lap time, delta vs reference lap with color-coded bar
 
 local state = require('state')
 local theme = require('theme')
@@ -12,15 +12,28 @@ local delta_bar = {}
 
 local config = {
     maxDelta = 2.0,        -- Max delta shown (seconds) - bar is full at this value
-    barHeight = 20,        -- Height of the delta bar
-    smoothing = 0.15,      -- Smoothing factor for color transitions (0-1)
-    displayUpdateRate = 0.1, -- Update display every 100ms (10 Hz)
+    barHeight = 24,        -- Height of the delta bar
+    barSmoothing = 0.08,   -- Smoothing factor for bar position (lower = smoother)
+    textSmoothing = 0.06,  -- Smoothing factor for text delta (lower = smoother)
 }
 
--- Runtime state
-local lastSpeedDiff = 0
-local lastDisplayDelta = 0
-local displayUpdateTimer = 0
+-- Runtime state for smooth animations
+local smoothedBarWidth = 0
+local smoothedDelta = 0
+local displayDelta = 0
+local smoothedDeltaRate = 0  -- Rate of change of delta (negative = gaining, positive = losing)
+
+-- Lap completion display
+local lastLapCount = 0
+local lastLapTime = 0       -- The completed lap time in ms
+local lastLapDelta = 0      -- Delta at lap completion
+local lapCompleteTimer = 0  -- Seconds since lap completed
+
+-- Update throttling (2 Hz)
+local updateInterval = 1 / 2
+local updateTimer = 0
+local lastDelta = 0
+local prevDelta = 0         -- Previous delta for rate calculation
 
 --------------------------------------------------------------------------------
 -- Drawing
@@ -32,165 +45,210 @@ function delta_bar.draw(dt)
     local car = ac.getCar(0)
     if not car then return end
 
+    local sim = ac.getSim()
     local windowSize = ui.availableSpace()
     local centerX = windowSize.x / 2
-    local centerY = windowSize.y / 2
+    local padding = 10
 
-    -- Get delta vs best lap
-    local delta = state.getDelta()  -- positive = behind/slower
-    local currentPos = car.splinePosition
-    local currentSpeed = car.speedKmh
+    -- Skip updates during replay/rewind (keep showing last known values)
+    if not sim.isReplayActive and not sim.isPaused then
+        -- Throttle updates to 2 Hz
+        updateTimer = updateTimer + dt
+        if updateTimer >= updateInterval then
+            updateTimer = updateTimer - updateInterval
 
-    -- Throttle display updates to reduce jitter (10 Hz)
-    displayUpdateTimer = displayUpdateTimer + dt
-    if displayUpdateTimer >= config.displayUpdateRate then
-        displayUpdateTimer = 0
-        lastDisplayDelta = delta
-    end
-    local displayDelta = lastDisplayDelta
-
-    -- Get ghost speed at same position for relative speed comparison
-    local ghostSpeed = state.getGhostValueAt('speed', currentPos)
-    local speedDiff = 0
-    if ghostSpeed and ghostSpeed > 0 then
-        speedDiff = currentSpeed - ghostSpeed  -- positive = gaining
+            -- Store previous delta before updating
+            prevDelta = lastDelta
+            lastDelta = state.getDelta()  -- positive = behind/slower
+        end
     end
 
-    -- Smooth the speed difference for less jittery colors
-    lastSpeedDiff = lastSpeedDiff + (speedDiff - lastSpeedDiff) * config.smoothing
-    local smoothedSpeedDiff = lastSpeedDiff
+    -- Smooth values for display
+    smoothedDelta = smoothedDelta + (lastDelta - smoothedDelta) * config.textSmoothing
+    displayDelta = math.floor(smoothedDelta * 100 + 0.5) / 100  -- 2 decimal places
 
-    -- Calculate bar width based on delta time
-    local maxBarWidth = (windowSize.x / 2) - 40  -- Leave room for text
-    local normalizedDelta = math.clamp(math.abs(delta) / config.maxDelta, 0, 1)
-    local barWidth = normalizedDelta * maxBarWidth
+    -- Calculate delta rate of change (how fast delta is changing)
+    -- Negative = gaining time (good), Positive = losing time (bad)
+    local deltaRate = lastDelta - prevDelta
+    smoothedDeltaRate = smoothedDeltaRate + (deltaRate - smoothedDeltaRate) * 0.2
 
-    -- Determine color based on relative speed
-    local speedThreshold = 5  -- km/h difference for full saturation
-    local colorIntensity = math.clamp(math.abs(smoothedSpeedDiff) / speedThreshold, 0.3, 1)
+    -- Calculate bar width
+    local barWidth = windowSize.x - padding * 2
+    local maxBarHalf = barWidth / 2 - 2
+    local normalizedDelta = math.clamp(math.abs(smoothedDelta) / config.maxDelta, 0, 1)
+    local targetFillWidth = normalizedDelta * maxBarHalf
+    smoothedBarWidth = smoothedBarWidth + (targetFillWidth - smoothedBarWidth) * config.barSmoothing
 
+    -- Bar color based on delta rate of change (like iRacing)
+    -- Negative rate = delta decreasing = gaining time = GREEN
+    -- Positive rate = delta increasing = losing time = RED
+    local rateThreshold = 0.005  -- Threshold to consider as gaining/losing
     local barColor
-    if smoothedSpeedDiff > 0.5 then
-        -- Gaining time (faster than ghost) - GREEN
-        barColor = rgbm(0.1, 0.9 * colorIntensity, 0.1, 0.9)
-    elseif smoothedSpeedDiff < -0.5 then
-        -- Losing time (slower than ghost) - RED
-        barColor = rgbm(0.9 * colorIntensity, 0.1, 0.1, 0.9)
+    if smoothedDeltaRate < -rateThreshold then
+        -- Delta decreasing = gaining time - GREEN
+        barColor = theme.delta.positive
+    elseif smoothedDeltaRate > rateThreshold then
+        -- Delta increasing = losing time - RED
+        barColor = theme.delta.negative
     else
-        -- Neutral (same speed) - use delta to determine base color
-        if delta < 0 then
-            barColor = theme.withAlpha(theme.delta.positive, 0.7)
-        else
-            barColor = theme.withAlpha(theme.delta.negative, 0.7)
-        end
+        -- Neutral - use overall delta for color
+        barColor = smoothedDelta < 0 and theme.delta.positive or theme.delta.negative
     end
 
-    -- Draw the delta bar
-    local barY = centerY - config.barHeight / 2
-    local barTop = barY
-    local barBottom = barY + config.barHeight
-
-    -- Center line (subtle)
-    ui.drawLine(
-        vec2(centerX, barTop - 5),
-        vec2(centerX, barBottom + 5),
-        rgbm(1, 1, 1, 0.4), 2
-    )
-
-    if state.hasBestLap() and math.abs(delta) > 0.001 then
-        if delta < 0 then
-            -- Ahead: bar goes LEFT from center
-            ui.drawRectFilled(
-                vec2(centerX - barWidth, barTop),
-                vec2(centerX, barBottom),
-                barColor, 2
-            )
-            ui.drawRect(
-                vec2(centerX - barWidth, barTop),
-                vec2(centerX, barBottom),
-                rgbm(1, 1, 1, 0.3), 2, 1
-            )
-        else
-            -- Behind: bar goes RIGHT from center
-            ui.drawRectFilled(
-                vec2(centerX, barTop),
-                vec2(centerX + barWidth, barBottom),
-                barColor, 2
-            )
-            ui.drawRect(
-                vec2(centerX, barTop),
-                vec2(centerX + barWidth, barBottom),
-                rgbm(1, 1, 1, 0.3), 2, 1
-            )
-        end
-    end
-
-    -- Delta time text (centered below bar)
-    local textY = barBottom + 8
-    local sign = displayDelta >= 0 and "+" or ""
-    local deltaText = string.format("%s%.1f", sign, displayDelta)
-
-    -- Text color
     local textColor
     if not state.hasBestLap() then
         textColor = theme.text.muted
-        deltaText = "NO REF"
-    elseif displayDelta < -0.05 then
+    elseif displayDelta < -0.01 then
         textColor = theme.delta.positive
-    elseif displayDelta > 0.05 then
+    elseif displayDelta > 0.01 then
         textColor = theme.delta.negative
     else
         textColor = theme.text.primary
     end
 
-    -- Draw delta text with shadow
+    -- Detect lap completion
+    local currentLapCount = car.lapCount
+    if currentLapCount > lastLapCount and lastLapCount > 0 then
+        -- Lap just completed - store the time and delta
+        lastLapTime = car.previousLapTimeMs or 0
+        lastLapDelta = displayDelta
+        lapCompleteTimer = 5.0  -- Show for 5 seconds
+    end
+    lastLapCount = currentLapCount
+
+    -- Update lap complete timer
+    if lapCompleteTimer > 0 then
+        lapCompleteTimer = lapCompleteTimer - dt
+    end
+
+    -- Layout
+    local topRowY = 4
+    local barY = lapCompleteTimer > 0 and 28 or 8  -- Move bar up when no lap time shown
+    local bottomBoxY = barY + config.barHeight + 6
+
+    ----------------------------------------
+    -- Top row: Lap time + delta (only for 5s after completion)
+    ----------------------------------------
+    if lapCompleteTimer > 0 and lastLapTime > 0 then
+        local lapTimeS = lastLapTime / 1000
+        local mins = math.floor(lapTimeS / 60)
+        local secs = lapTimeS - mins * 60
+
+        -- Lap time text
+        local lapTimeText = string.format("%d:%06.3f", mins, secs)
+        ui.pushFont(ui.Font.Title)
+        local lapTimeSize = ui.measureText(lapTimeText)
+
+        -- Small delta text for top row
+        local smallDeltaText = string.format("%+.2f", lastLapDelta)
+        ui.pushFont(ui.Font.Main)
+        local smallDeltaSize = ui.measureText(smallDeltaText)
+        ui.popFont()
+        ui.popFont()
+
+        local totalTopWidth = lapTimeSize.x + 10 + smallDeltaSize.x
+        local topStartX = centerX - totalTopWidth / 2
+
+        -- Fade out in last second
+        local alpha = lapCompleteTimer < 1 and lapCompleteTimer or 1
+
+        -- Draw lap time (yellow/white)
+        ui.pushFont(ui.Font.Title)
+        ui.setCursor(vec2(topStartX, topRowY))
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(1, 0.9, 0.2, alpha))
+        ui.text(lapTimeText)
+        ui.popStyleColor()
+        ui.popFont()
+
+        -- Draw small delta (colored)
+        local topDeltaColor = lastLapDelta < -0.01 and theme.delta.positive or
+                             (lastLapDelta > 0.01 and theme.delta.negative or theme.text.primary)
+        ui.pushFont(ui.Font.Main)
+        ui.setCursor(vec2(topStartX + lapTimeSize.x + 10, topRowY + 4))
+        ui.pushStyleColor(ui.StyleColor.Text, rgbm(topDeltaColor.r, topDeltaColor.g, topDeltaColor.b, alpha))
+        ui.text(smallDeltaText)
+        ui.popStyleColor()
+        ui.popFont()
+    end
+
+    ----------------------------------------
+    -- Middle: Dark bar with fill
+    ----------------------------------------
+    local barLeft = padding
+    local barRight = windowSize.x - padding
+
+    -- Dark background bar
+    ui.drawRectFilled(
+        vec2(barLeft, barY),
+        vec2(barRight, barY + config.barHeight),
+        rgbm(0.08, 0.08, 0.12, 0.95), 6
+    )
+
+    -- Fill bar from center
+    if state.hasBestLap() and smoothedBarWidth > 0.5 then
+        if smoothedDelta < 0 then
+            -- Ahead: green bar goes LEFT
+            ui.drawRectFilled(
+                vec2(centerX - smoothedBarWidth, barY + 2),
+                vec2(centerX, barY + config.barHeight - 2),
+                barColor, 1
+            )
+        else
+            -- Behind: red bar goes RIGHT
+            ui.drawRectFilled(
+                vec2(centerX, barY + 2),
+                vec2(centerX + smoothedBarWidth, barY + config.barHeight - 2),
+                barColor, 1
+            )
+        end
+    end
+
+    -- Center line marker (thin, subtle)
+    ui.drawRectFilled(
+        vec2(centerX - 1, barY),
+        vec2(centerX + 1, barY + config.barHeight),
+        rgbm(0.8, 0.7, 0.7, 0.6), 0
+    )
+
+    ----------------------------------------
+    -- Bottom: Large delta in dark box
+    ----------------------------------------
+    local sign = displayDelta >= 0 and "+" or ""
+    local deltaText = state.hasBestLap() and string.format("%s%.2f", sign, displayDelta) or "NO REF"
+
     ui.pushFont(ui.Font.Title)
-    local textSize = ui.measureText(deltaText)
-    local textX = centerX - textSize.x / 2
+    local deltaSize = ui.measureText(deltaText)
+    local boxPadX = 16
+    local boxPadY = 4
+    local boxW = deltaSize.x + boxPadX * 2
+    local boxH = deltaSize.y + boxPadY * 2
+    local boxX = centerX - boxW / 2
+    local boxY = bottomBoxY
 
-    -- Shadow
-    ui.setCursor(vec2(textX + 1, textY + 1))
-    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0, 0, 0, 0.7))
-    ui.text(deltaText)
-    ui.popStyleColor()
+    -- Dark rounded box
+    ui.drawRectFilled(
+        vec2(boxX, boxY),
+        vec2(boxX + boxW, boxY + boxH),
+        rgbm(0.08, 0.08, 0.12, 0.95), 8
+    )
 
-    -- Main text
-    ui.setCursor(vec2(textX, textY))
+    -- Delta text
+    ui.setCursor(vec2(boxX + boxPadX, boxY + boxPadY))
     ui.pushStyleColor(ui.StyleColor.Text, textColor)
     ui.text(deltaText)
     ui.popStyleColor()
     ui.popFont()
-
-    -- Speed difference indicator (above bar)
-    if state.hasBestLap() and ghostSpeed then
-        local speedText = string.format("%+.0f", smoothedSpeedDiff)
-        ui.pushFont(ui.Font.Small)
-        local speedTextSize = ui.measureText(speedText)
-        local speedTextX = centerX - speedTextSize.x / 2
-        local speedTextY = barTop - 15
-
-        local speedTextColor
-        if smoothedSpeedDiff > 1 then
-            speedTextColor = theme.withAlpha(theme.delta.positive, 0.8)
-        elseif smoothedSpeedDiff < -1 then
-            speedTextColor = theme.withAlpha(theme.delta.negative, 0.8)
-        else
-            speedTextColor = theme.withAlpha(theme.text.secondary, 0.5)
-        end
-
-        ui.setCursor(vec2(speedTextX, speedTextY))
-        ui.pushStyleColor(ui.StyleColor.Text, speedTextColor)
-        ui.text(speedText)
-        ui.popStyleColor()
-        ui.popFont()
-    end
 end
 
 --- Reset smoothing state (call on lap reset)
 function delta_bar.reset()
-    lastSpeedDiff = 0
-    lastDisplayDelta = 0
-    displayUpdateTimer = 0
+    smoothedBarWidth = 0
+    smoothedDelta = 0
+    displayDelta = 0
+    smoothedDeltaRate = 0
+    updateTimer = 0
+    lastDelta = 0
+    prevDelta = 0
 end
 
 return delta_bar

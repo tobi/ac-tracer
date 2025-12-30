@@ -207,6 +207,45 @@ function lap:isEmpty()
     return not self.pos or #self.pos == 0
 end
 
+--- Prune lap data to a specific position (for TimeShift rewind support)
+--- Removes all samples after the given position
+---@param targetPos number Spline position to prune to (0.0 to 1.0)
+---@return number Number of samples removed
+function lap:pruneToPosition(targetPos)
+    if self:isEmpty() then return 0 end
+
+    -- Find the last sample at or before targetPos
+    local pruneIdx = nil
+    for i = #self.pos, 1, -1 do
+        if self.pos[i] <= targetPos then
+            pruneIdx = i
+            break
+        end
+    end
+
+    if not pruneIdx then
+        -- All samples are past targetPos, clear everything
+        pruneIdx = 0
+    end
+
+    local originalLength = self:length()
+    local samplesToRemove = originalLength - pruneIdx
+
+    if samplesToRemove <= 0 then return 0 end
+
+    -- Prune all arrays to pruneIdx length
+    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'flags'}
+    for _, field in ipairs(arrays) do
+        if self[field] then
+            for i = originalLength, pruneIdx + 1, -1 do
+                self[field][i] = nil
+            end
+        end
+    end
+
+    return samplesToRemove
+end
+
 --------------------------------------------------------------------------------
 -- Interpolation (Position-Based)
 --------------------------------------------------------------------------------

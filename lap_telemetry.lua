@@ -15,6 +15,8 @@ local lap_telemetry = {}
 
 -- View state
 local selectedLap = nil    -- Direct lap reference (can be CSV or session lap)
+local autoMode = true      -- Auto mode: automatically select best lap
+local lastManualSelectLapCount = 0  -- Lap count when user last manually selected
 local viewStartTime = 0  -- Start time of visible window (seconds)
 local viewDuration = 0   -- Duration of visible window (seconds, 0 = full lap)
 local cursorTime = nil   -- Cursor time position (nil = no cursor)
@@ -34,26 +36,51 @@ local draggingHandle = nil  -- "start", "end", or nil
 local nameInputBuffer = ""
 local lastEditedCorner = nil  -- Track which corner we're editing to reset buffer
 
+-- Markers dropdown state
+local showMarkersDropdown = false
+local markersButtonPos = vec2(0, 0)
+
 --------------------------------------------------------------------------------
 -- Lap Selection Helpers
 --------------------------------------------------------------------------------
 
--- Get selected lap (direct reference, or auto-select fastest from session)
+-- Check if we should switch to auto mode (new lap completed since manual selection)
+local function checkAutoMode()
+    local history = state.history or {}
+    local currentLapCount = #history
+
+    -- If a lap was completed since last manual selection, switch to auto mode
+    if currentLapCount > lastManualSelectLapCount then
+        autoMode = true
+    end
+end
+
+-- Get selected lap (manual selection or auto-select best)
 local function getSelectedLap()
-    -- If we have a direct lap reference, use it
-    if selectedLap and selectedLap:length() > 0 then
+    checkAutoMode()
+
+    -- Manual mode: use the manually selected lap if valid
+    if not autoMode and selectedLap and selectedLap:length() > 0 then
         return selectedLap
     end
 
-    -- Auto-select fastest from current session
+    -- Auto mode: select best lap automatically
+    -- First, try fastest from current session
     local fastest = state.getFastestSessionLap()
     if fastest then
         return fastest
     end
 
-    -- Fallback to first history lap
+    -- Fallback to first history lap (which should be most recent)
     local history = state.history or {}
     return history[1]
+end
+
+-- Set the selected lap manually (disables auto mode)
+local function setSelectedLap(lapData)
+    selectedLap = lapData
+    autoMode = false
+    lastManualSelectLapCount = #(state.history or {})
 end
 
 -- Get reference lap (defaults to state.bestLap)
@@ -942,8 +969,13 @@ function lap_telemetry.draw(dt)
         local lapTimeS = viewingLap.time / 1000
         local mins = math.floor(lapTimeS / 60)
         local secs = lapTimeS - mins * 60
-        -- Show (CSV) label if viewing a CSV lap
-        local label = (viewingLap and viewingLap.csvSource) and " (CSV)" or ""
+        -- Show label based on mode: (Auto), (CSV), or nothing for manual
+        local label = ""
+        if viewingLap.csvSource then
+            label = " (CSV)"
+        elseif autoMode then
+            label = " (Auto)"
+        end
         ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, label))
         ui.popStyleColor()
 
@@ -958,7 +990,7 @@ function lap_telemetry.draw(dt)
             end
 
             if ui.button("<", vec2(30, 0)) and currentIdx > 1 then
-                selectedLap = history[currentIdx - 1]
+                setSelectedLap(history[currentIdx - 1])
                 viewStartTime = 0
                 viewDuration = 0
             end
@@ -968,7 +1000,7 @@ function lap_telemetry.draw(dt)
             ui.popStyleColor()
             ui.sameLine()
             if ui.button(">", vec2(30, 0)) and currentIdx < #history then
-                selectedLap = history[currentIdx + 1]
+                setSelectedLap(history[currentIdx + 1])
                 viewStartTime = 0
                 viewDuration = 0
             end
@@ -1037,6 +1069,13 @@ function lap_telemetry.draw(dt)
             end
         end
 
+        -- Markers dropdown button
+        ui.sameLine()
+        markersButtonPos = ui.getCursor()
+        if ui.button("Markers", vec2(70, 0)) then
+            showMarkersDropdown = not showMarkersDropdown
+        end
+
         -- Copy as Markdown button
         ui.sameLine()
         if ui.button("Copy as Markdown", vec2(120, 0)) then
@@ -1085,7 +1124,9 @@ function lap_telemetry.draw(dt)
     local panelW = 180
     local graphW = windowSize.x - padding * 2 - labelW - panelW - 10
 
-    if selectedLap then
+    if viewingLap then
+        -- Use viewingLap for all drawing (handles both manual and auto mode)
+        local selectedLap = viewingLap
         local startTime, endTime, lapTime = getTimeRange(selectedLap)
         if viewDuration == 0 then endTime = lapTime end
 
@@ -1182,7 +1223,7 @@ function lap_telemetry.draw(dt)
         drawTimeTrace(graphX, y, graphW, throttleH, startTime, endTime, selectedLap, referenceLap, "throttle", theme.trace.throttle, theme.ghost.throttle, 0, 1, "Throttle", "")
 
         -- Draw TC markers on throttle trace (current session laps only)
-        if selectedLap.tcActive and #selectedLap.tcActive > 0 then
+        if settings.showFlagMarker('TC') and selectedLap.tcActive and #selectedLap.tcActive > 0 then
             for i = 1, selectedLap:length() do
                 if selectedLap.tcActive[i] then
                     local sampleTime
@@ -1282,7 +1323,7 @@ function lap_telemetry.draw(dt)
 
         -- Callbacks for lap picker
         local function onSelectCurrent(lapData, idx)
-            selectedLap = lapData
+            setSelectedLap(lapData)
             viewStartTime = 0
             viewDuration = 0
             showRefPicker = false
@@ -1304,6 +1345,64 @@ function lap_telemetry.draw(dt)
             onSelectReference = onSelectReference,
             onClose = onClose,
         })
+    end
+
+    -- Markers dropdown (drawn last to be on top)
+    if showMarkersDropdown then
+        local dropW = 160
+        local dropH = 120
+        local dropX = markersButtonPos.x
+        local dropY = markersButtonPos.y + 22
+
+        -- Background
+        ui.drawRectFilled(vec2(dropX, dropY), vec2(dropX + dropW, dropY + dropH), theme.bg.panel, 4)
+        ui.drawRect(vec2(dropX, dropY), vec2(dropX + dropW, dropY + dropH), theme.border.panel, 4, 1)
+
+        ui.setCursor(vec2(dropX + 10, dropY + 8))
+        ui.pushFont(ui.Font.Small)
+
+        -- TC checkbox
+        if ui.checkbox("Traction Control", settings.showFlagMarker('TC')) then
+            settings.toggleFlagMarker('TC')
+        end
+
+        ui.setCursor(vec2(dropX + 10, dropY + 28))
+        if ui.checkbox("Lockups", settings.showFlagMarker('Lockup')) then
+            settings.toggleFlagMarker('Lockup')
+        end
+
+        ui.setCursor(vec2(dropX + 10, dropY + 48))
+        if ui.checkbox("Wheel Slip", settings.showFlagMarker('WheelSlip')) then
+            settings.toggleFlagMarker('WheelSlip')
+        end
+
+        ui.setCursor(vec2(dropX + 10, dropY + 68))
+        if ui.checkbox("Pedal Overlap", settings.showFlagMarker('Overlap')) then
+            settings.toggleFlagMarker('Overlap')
+        end
+
+        ui.popFont()
+
+        -- Close button
+        ui.setCursor(vec2(dropX + dropW - 25, dropY + 5))
+        if ui.button("X", vec2(20, 16)) then
+            showMarkersDropdown = false
+        end
+
+        -- Close if clicked outside
+        local mousePos = ui.mousePos()
+        local windowPos = ui.windowPos()
+        local localX = mousePos.x - windowPos.x
+        local localY = mousePos.y - windowPos.y
+        if ui.mouseClicked(ui.MouseButton.Left) then
+            if localX < dropX or localX > dropX + dropW or localY < dropY or localY > dropY + dropH then
+                -- Check if not clicking on the markers button itself
+                if localX < markersButtonPos.x or localX > markersButtonPos.x + 70 or
+                   localY < markersButtonPos.y or localY > markersButtonPos.y + 20 then
+                    showMarkersDropdown = false
+                end
+            end
+        end
     end
 end
 
