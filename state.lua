@@ -61,6 +61,9 @@ local REWIND_GRACE_PERIOD = 1.0  -- Seconds to consider a jump as rewind-related
 local preRewindLapCount = 0    -- Lap count before entering rewind
 local preRewindPosition = 0    -- Spline position before entering rewind
 
+-- Rewind callbacks - modules can register to be notified on rewind
+local rewindCallbacks = {}
+
 -- Global time tracking (for rewind-aware timing)
 local sessionTime = 0          -- Accumulated session time (affected by rewind)
 local lastRawDt = 0            -- Last raw dt received
@@ -765,6 +768,7 @@ function state.init(car)
             local lapDecremented = carLapCount < preRewindLapCount
             local positionJumpedBack = preRewindPosition < 0.2 and carPos > 0.8
 
+            local pruned = 0
             if (lapDecremented or positionJumpedBack) and #state.history > 0 then
                 -- Pop the most recent lap from history
                 local restoredLap = table.remove(state.history, 1)
@@ -773,7 +777,7 @@ function state.init(car)
                 -- Restore it as current lap and prune to current position
                 state.currentLap = restoredLap
                 state.currentLap.completed = false  -- No longer completed
-                local pruned = state.currentLap:pruneToPosition(carPos)
+                pruned = state.currentLap:pruneToPosition(carPos)
 
                 -- Estimate time offset based on pruned samples (60Hz sample rate)
                 -- Also account for the time from the restored lap that was removed
@@ -791,7 +795,7 @@ function state.init(car)
                     preRewindLapCount, carLapCount, pruned, carPos))
             elseif state.currentLap then
                 -- Normal rewind within the lap
-                local pruned = state.currentLap:pruneToPosition(carPos)
+                pruned = state.currentLap:pruneToPosition(carPos)
                 if pruned > 0 then
                     -- Estimate and apply time offset based on pruned samples
                     local estimatedTimeOffset = pruned / lap.SAMPLE_RATE
@@ -801,6 +805,12 @@ function state.init(car)
                         pruned, carPos))
                 end
             end
+            
+            -- Reset overlap tracking state (time-based detection breaks on rewind)
+            lap.resetOverlapTracking()
+            
+            -- Notify all registered rewind callbacks
+            notifyRewindCallbacks(carPos, pruned)
         end
 
         lastRewindTime = now
@@ -903,6 +913,10 @@ function state.update(dt, car)
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
     -- Only if we didn't just complete a lap (lap number already updated above)
+    -- Also skip during rewind grace period to avoid false triggers
+    local now = os.preciseClock()
+    local inRewindGrace = (now - lastRewindTime) < REWIND_GRACE_PERIOD
+    
     local lapTimeReset = car.lapTimeMs < prevLapTimeMs - 1000 and car.lapTimeMs < 1000  -- Lap time went backwards significantly
     
     -- Entering pits (wasn't in pit, now in pit)
@@ -911,13 +925,15 @@ function state.update(dt, car)
     end
     
     -- Teleport detection (big position jump without crossing start/finish)
-    if bigPositionJump and not crossingStartFinish and not resetDetected then
+    -- Skip during rewind grace period - rewind naturally causes position jumps
+    if bigPositionJump and not crossingStartFinish and not resetDetected and not inRewindGrace then
         discardCurrentLap()
     end
     
     -- Session/lap reset detection: lap time went to 0 but lap count didn't increment
     -- This happens on session restart, ESC to pits, etc.
-    if lapTimeReset and car.lapCount == state.lapNumber and not resetDetected then
+    -- Skip during rewind grace period - lap time naturally goes backwards on rewind
+    if lapTimeReset and car.lapCount == state.lapNumber and not resetDetected and not inRewindGrace then
         discardCurrentLap()
     end
     
@@ -1119,6 +1135,26 @@ function state.resetTime()
     lastUpdateClock = os.preciseClock()
     timeFrozen = false
     ac.log("AC Tracer: Time tracking reset")
+end
+
+--- Register a callback to be called when rewind is detected
+--- Callback receives (targetPos, pruned) where targetPos is the position rewound to
+--- and pruned is the number of samples removed from the current lap
+---@param callback function Callback function(targetPos, pruned)
+function state.onRewind(callback)
+    if type(callback) == 'function' then
+        table.insert(rewindCallbacks, callback)
+    end
+end
+
+--- Internal: notify all rewind callbacks
+local function notifyRewindCallbacks(targetPos, pruned)
+    for _, cb in ipairs(rewindCallbacks) do
+        local ok, err = pcall(cb, targetPos, pruned)
+        if not ok then
+            ac.log("AC Tracer: Rewind callback error: " .. tostring(err))
+        end
+    end
 end
 
 --------------------------------------------------------------------------------

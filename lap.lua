@@ -411,17 +411,62 @@ end
 
 --- Prune lap data to a specific position (for TimeShift rewind support)
 --- Removes all samples after the given position
+--- Handles wrap-around near start/finish line correctly
 ---@param targetPos number Spline position to prune to (0.0 to 1.0)
 ---@return number Number of samples removed
 function lap:pruneToPosition(targetPos)
     if self:isEmpty() then return 0 end
 
-    -- Find the last sample at or before targetPos
+    -- Find the last sample that should be kept
+    -- We need to handle wrap-around: if lap crosses 0 (e.g., 0.98, 0.99, 0.01, 0.02)
+    -- and we rewind to 0.95, we need to prune everything after position wrapped
+    
     local pruneIdx = nil
-    for i = #self.pos, 1, -1 do
-        if self.pos[i] <= targetPos then
-            pruneIdx = i
+    local n = #self.pos
+    
+    -- First, check if the lap data wraps around (crosses start/finish)
+    local hasWrapAround = false
+    local wrapIdx = nil
+    for i = 1, n - 1 do
+        if self.pos[i] > 0.9 and self.pos[i + 1] < 0.1 then
+            hasWrapAround = true
+            wrapIdx = i
             break
+        end
+    end
+    
+    if hasWrapAround and wrapIdx then
+        -- Lap wraps around at wrapIdx
+        if targetPos > 0.5 then
+            -- Target is in the "before wrap" portion (e.g., 0.95)
+            -- Only keep samples before the wrap that are <= targetPos
+            for i = wrapIdx, 1, -1 do
+                if self.pos[i] <= targetPos then
+                    pruneIdx = i
+                    break
+                end
+            end
+        else
+            -- Target is in the "after wrap" portion (e.g., 0.05)
+            -- Keep all samples before wrap, plus samples after wrap that are <= targetPos
+            for i = n, wrapIdx + 1, -1 do
+                if self.pos[i] <= targetPos then
+                    pruneIdx = i
+                    break
+                end
+            end
+            -- If not found after wrap, target might be before wrap point
+            if not pruneIdx then
+                pruneIdx = wrapIdx
+            end
+        end
+    else
+        -- No wrap-around: simple linear search from end
+        for i = n, 1, -1 do
+            if self.pos[i] <= targetPos then
+                pruneIdx = i
+                break
+            end
         end
     end
 

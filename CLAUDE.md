@@ -670,6 +670,33 @@ All modules use `state` and `lap` directly via `require()`. No init functions, n
 
 ---
 
+## Testing
+
+### Running Tests Locally
+
+Tests use LuaJIT via nix-shell (CSP uses LuaJIT internally):
+
+```bash
+# Run all tests
+nix-shell -p luajit --command "luajit tests/test_runner.lua"
+
+# Check syntax of specific files
+nix-shell -p luajit --command "luajit -bl state.lua > /dev/null && echo OK"
+```
+
+### Test Files
+
+- `tests/test_runner.lua` - Main test runner, loads all test files
+- `tests/test_lap.lua` - Lap data structure tests
+- `tests/test_csv_loading.lua` - CSV import tests
+- `tests/test_corner_detection.lua` - Auto corner detection
+- `tests/test_corner_notes.lua` - Corner analysis and flags
+- `tests/test_scoring.lua` - Corner scoring
+- `tests/test_ui_utils.lua` - UI helper functions
+- `tests/mock_ac.lua` - Mock AC/CSP APIs for testing
+
+---
+
 ## Debugging & Logs
 
 ### CSP Log Location
