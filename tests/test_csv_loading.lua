@@ -44,14 +44,14 @@ test("barcelona positions span 0 to 1", function()
 end)
 
 test("barcelona interpolation works at all positions", function()
-    assert_not_nil(barcelonaLap, "Lap should be loaded")
-    for pos = 0.1, 0.9, 0.1 do
-        local speed = barcelonaLap:getValueAtPos('speed', pos)
-        assert_not_nil(speed, "Should interpolate speed at pos " .. pos)
-        assert_true(speed >= 0 and speed <= 400, 
-            string.format("Speed at pos %.1f should be 0-400 km/h, got %.1f", pos, speed))
-    end
-end)
+     assert_not_nil(barcelonaLap, "Lap should be loaded")
+     for pos = 0.1, 0.9, 0.1 do
+         local speed = barcelonaLap:speedAt(pos)
+         assert_not_nil(speed, "Should interpolate speed at pos " .. pos)
+         assert_true(speed >= 0 and speed <= 400, 
+             string.format("Speed at pos %.1f should be 0-400 km/h, got %.1f", pos, speed))
+     end
+ end)
 
 test("barcelona speed values are in realistic range", function()
     assert_not_nil(barcelonaLap, "Lap should be loaded")
@@ -193,14 +193,14 @@ test("daytona positions span 0 to 1", function()
 end)
 
 test("daytona interpolation works at all positions", function()
-    assert_not_nil(daytonaLap, "Lap should be loaded")
-    for pos = 0.1, 0.9, 0.1 do
-        local speed = daytonaLap:getValueAtPos('speed', pos)
-        assert_not_nil(speed, "Should interpolate speed at pos " .. pos)
-        assert_true(speed >= 0 and speed <= 400, 
-            string.format("Speed at pos %.1f should be 0-400 km/h, got %.1f", pos, speed))
-    end
-end)
+     assert_not_nil(daytonaLap, "Lap should be loaded")
+     for pos = 0.1, 0.9, 0.1 do
+         local speed = daytonaLap:speedAt(pos)
+         assert_not_nil(speed, "Should interpolate speed at pos " .. pos)
+         assert_true(speed >= 0 and speed <= 400, 
+             string.format("Speed at pos %.1f should be 0-400 km/h, got %.1f", pos, speed))
+     end
+ end)
 
 test("daytona speed values are in realistic range", function()
     assert_not_nil(daytonaLap, "Lap should be loaded")

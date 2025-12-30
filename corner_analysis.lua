@@ -183,8 +183,8 @@ local function samplePedalTraces(lapData, startPos, endPos, numSamples)
     for i = 0, numSamples do
         local pos = startPos + (i / numSamples) * posRange
         if pos > 1 then pos = pos - 1 end
-        local throttle = lapData:getValueAtPos('throttle', pos) or 0
-        local brake = lapData:getValueAtPos('brake', pos) or 0
+        local throttle = lapData:throttleAt(pos) or 0
+        local brake = lapData:brakeAt(pos) or 0
         table.insert(traces.throttle, throttle)
         table.insert(traces.brake, brake)
     end
@@ -200,7 +200,7 @@ local function sampleSpeedTrace(lapData, startPos, endPos, numSamples)
     for i = 0, numSamples do
         local pos = startPos + (i / numSamples) * posRange
         if pos > 1 then pos = pos - 1 end
-        local spd = lapData:getValueAtPos('speed', pos)
+        local spd = lapData:speedAt(pos)
         if spd then
             table.insert(speeds, { pos = pos, speed = spd })
         end
@@ -217,7 +217,7 @@ local function analyzeBadBrakeZoneThrottle(currentLap, data)
     if not currentLap or not data.refStartPos or not data.refEndPos then return nil end
     if not data.currentBrakePos then return nil end  -- No brake point recorded
 
-    local HEAVY_BRAKE_THRESHOLD = 0.5  -- 50% brake = heavy braking
+    local HEAVY_BRAKE_THRESHOLD = 30  -- 30 bar = heavy braking
     local THROTTLE_THRESHOLD = 0.3     -- 30% throttle = not just a blip
     local BLIP_DURATION = 0.5          -- 500ms = allow for heel-toe blips (longer threshold)
 
@@ -678,7 +678,7 @@ end
 captureRefSpeeds = function(referenceLap, positions)
     local refSpeeds = {}
     for _, s in ipairs(positions) do
-        local refSpd = referenceLap and referenceLap:getValueAtPos('speed', s.pos) or nil
+        local refSpd = referenceLap and referenceLap:speedAt(s.pos) or nil
         table.insert(refSpeeds, { pos = s.pos, speed = refSpd or s.speed })
     end
     return refSpeeds
@@ -872,10 +872,10 @@ function corner_analysis.getCurrentCornerData(referenceLap, corners)
         end
     end
     
-    local ghostEntrySpeed = referenceLap and referenceLap:getValueAtPos('speed', cornerInfo.startPos) or 0
+    local ghostEntrySpeed = referenceLap and referenceLap:speedAt(cornerInfo.startPos) or 0
     local ghostApexPos, ghostApexSpeed = referenceLap and referenceLap:findApex(cornerInfo.startPos, cornerInfo.endPos) or nil
     ghostApexSpeed = ghostApexSpeed or 0
-    local ghostExitSpeed = referenceLap and referenceLap:getValueAtPos('speed', cornerInfo.endPos) or 0
+    local ghostExitSpeed = referenceLap and referenceLap:speedAt(cornerInfo.endPos) or 0
 
     return {
         number = liveCorner.cornerNum,

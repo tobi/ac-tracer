@@ -30,7 +30,7 @@ local config = ac.storage({
     useKMH = true,
 
     -- Detection thresholds
-    brakeThreshold = 0.05,
+    brakeThreshold = 5,
     throttleThreshold = 0.98,
     speedDropThreshold = 0.05,
 

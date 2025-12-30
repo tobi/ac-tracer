@@ -154,15 +154,31 @@ Where `steeringCap` = 180° (π radians) by default.
 
 ### Position-Based Indexing
 
-All lap comparisons use **position-based matching**, not time-based. This ensures accurate trace overlay even when lap times differ:
+All lap comparisons use **position-based matching**, not time-based. This ensures accurate trace overlay even when lap times differ.
+
+### Telemetry Accessors
+
+All values are accessed via direct accessor methods that interpolate at any track position:
 
 ```lua
--- Get value at specific track position (interpolates between samples)
-function lap:getValueAtPos(field, targetPos)
-    -- Binary search for surrounding samples
-    -- Linear interpolation between them
-end
+-- Direct accessors (all return interpolated value at position)
+lap:throttleAt(pos)              -- Returns 0.0-1.0
+lap:brakeAt(pos)                 -- Returns bar (0-150+)
+lap:brakeRearAt(pos)             -- Returns bar for rear brake
+lap:brakePercentAt(pos, maxBar)  -- Returns 0-1 normalized to maxBar
+lap:clutchAt(pos)                -- Returns 0.0-1.0 (inverted)
+lap:steeringAt(pos)              -- Returns 0.0-1.0 (normalized)
+lap:steeringDegAt(pos)           -- Returns steering in degrees
+lap:speedAt(pos)                 -- Returns km/h
+lap:gearAt(pos)                  -- Returns gear number
+lap:fuelAt(pos)                  -- Returns liters (sparse field)
+lap:brakeBalanceAt(pos)          -- Returns 0.0-1.0 (sparse field)
+lap:tcSlipAt(pos)                -- Returns TC slip value (sparse field)
+lap:tcGainAt(pos)                -- Returns TC gain value (sparse field)
+lap:timeAt(pos)                  -- Returns elapsed time in seconds
 ```
+
+All accessors use binary search + linear interpolation for smooth values at any position between samples.
 
 ---
 
@@ -440,7 +456,7 @@ This pattern:
 1. **`lap.lua` module** - Complete lap data structure
    - `lap.new(track, car)` - constructor
    - `lap:addSample(car)` - record from car state
-   - `lap:getValueAtPos(field, pos)` - interpolate at position
+   - `lap:throttleAt(pos)`, `lap:speedAt(pos)`, `lap:brakeAt(pos)`, etc. - direct accessors
    - `lap:getTimeAtPos(pos)` - time at position
    - `lap:getDeltaVs(refLap, pos)` - delta calculation
    - `lap:getTracesAt(positions)` - bulk trace extraction
@@ -598,7 +614,7 @@ This ensures:
 
 ```lua
 -- Get brake value at position (returns bar)
-local brakeBar = lap:getValueAtPos('brake', pos)
+local brakeBar = lap:brakeAt(pos)
 
 -- For chart rendering, normalize to 0-1 using state scale
 local brakeNorm = brakeBar / state.brakeScaleBar

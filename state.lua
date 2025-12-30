@@ -856,9 +856,7 @@ end
 ---@return number|nil Steering in degrees
 function state.getGhostSteering()
     if not state.bestLap then return nil end
-    local steerNorm = state.bestLap:getValueAtPos('steering', state.trackPosition)
-    if not steerNorm then return nil end
-    return lap.steerToDegrees(steerNorm)
+    return state.bestLap:steeringDegAt(state.trackPosition)
 end
 
 --- Get ghost traces for display positions
@@ -928,12 +926,6 @@ end
 --- Get ghost value at position (for corner analysis)
 ---@param field string Field name
 ---@param pos number Spline position
----@return number|nil
-function state.getGhostValueAt(field, pos)
-    if not state.bestLap then return nil end
-    return state.bestLap:getValueAtPos(field, pos)
-end
-
 --- Get ghost time at position
 ---@param pos number Spline position
 ---@return number|nil Time in seconds
@@ -1037,10 +1029,10 @@ function state.analyzeCorners(lapData)
             -- Find apex dynamically for this lap
             local apexPos, apexSpeed = lapData:findApex(corner.startPos, corner.endPos)
             analysis[corner.number] = {
-                entrySpeed = lapData:getValueAtPos('speed', corner.startPos),
+                entrySpeed = lapData:speedAt(corner.startPos),
                 apexPos = apexPos,
                 apexSpeed = apexSpeed,
-                exitSpeed = lapData:getValueAtPos('speed', corner.endPos),
+                exitSpeed = lapData:speedAt(corner.endPos),
                 brakePos = lapData:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold),
                 liftOffPos = lapData:findLiftPoint(corner.startPos, corner.endPos, settings.throttleThreshold),
                 maxSteeringDeg = lapData:findMaxSteering(corner.startPos, corner.endPos)

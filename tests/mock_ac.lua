@@ -340,7 +340,7 @@ package.loaded['extended-brake'] = {
 
 -- Mock app_settings module
 package.loaded['app_settings'] = {
-    brakeThreshold = 0.1,
+    brakeThreshold = 5,
     throttleThreshold = 0.98,
     useKMH = true,
 }

@@ -140,13 +140,13 @@ local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
         }
 
         -- Add reference lap data at same position (if available)
-        if refLap and refLap:length() > 0 then
-            sample.ref_time = refLap:getTimeAtPos(pos)
-            sample.ref_speed = refLap:getValueAtPos('speed', pos)
-            sample.ref_gear = refLap:getValueAtPos('gear', pos)
-            sample.ref_throttle = refLap:getValueAtPos('throttle', pos)
-            sample.ref_brake = refLap:getValueAtPos('brake', pos)
-        end
+         if refLap and refLap:length() > 0 then
+             sample.ref_time = refLap:getTimeAtPos(pos)
+             sample.ref_speed = refLap:speedAt(pos)
+             sample.ref_gear = refLap:gearAt(pos)
+             sample.ref_throttle = refLap:throttleAt(pos)
+             sample.ref_brake = refLap:brakeAt(pos)
+         end
 
         -- Add flags if available (in-sim only data)
         if lapData.flags and lapData.flags[closestIdx] then
@@ -355,14 +355,14 @@ function markdown.generate(currentLap, referenceLap)
     end
     addBlank()
 
-    -- Start line comparison
-    local startSpeed = currentLap:getValueAtPos('speed', 0.001) or currentLap.speed[1]
-    if referenceLap then
-        local refStartSpeed = referenceLap:getValueAtPos('speed', 0.001) or referenceLap.speed[1]
-        add(string.format("**Start:** You %s, Ref %s", formatSpeed(startSpeed), formatSpeed(refStartSpeed)))
-    else
-        add(string.format("**Start:** %s", formatSpeed(startSpeed)))
-    end
+     -- Start line comparison
+     local startSpeed = currentLap:speedAt(0.001) or currentLap.speed[1]
+     if referenceLap then
+         local refStartSpeed = referenceLap:speedAt(0.001) or referenceLap.speed[1]
+         add(string.format("**Start:** You %s, Ref %s", formatSpeed(startSpeed), formatSpeed(refStartSpeed)))
+     else
+         add(string.format("**Start:** %s", formatSpeed(startSpeed)))
+     end
     addBlank()
 
     -- Check if we have flags data (in-sim only) and gear data

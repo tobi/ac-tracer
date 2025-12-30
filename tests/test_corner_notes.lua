@@ -281,19 +281,19 @@ test("brake point and lift point detection", function()
         endPos = 0.2,
     })
     
-    -- Simulate: full throttle -> lift at sample 15 -> brake at sample 25
-    for i = 1, 60 do
-        if i <= 15 then
-            l.throttle[i] = 1.0  -- Full throttle
-            l.brake[i] = 0
-        elseif i <= 25 then
-            l.throttle[i] = 0.5  -- Coasting
-            l.brake[i] = 0
-        else
-            l.throttle[i] = 0
-            l.brake[i] = 0.5  -- Braking
-        end
-    end
+     -- Simulate: full throttle -> lift at sample 15 -> brake at sample 25
+     for i = 1, 60 do
+         if i <= 15 then
+             l.throttle[i] = 1.0  -- Full throttle
+             l.brake[i] = 0
+         elseif i <= 25 then
+             l.throttle[i] = 0.5  -- Coasting
+             l.brake[i] = 0
+         else
+             l.throttle[i] = 0
+             l.brake[i] = 50  -- Braking (50 bar - above 5 bar threshold)
+         end
+     end
     
     local brakePos = l:findBrakePoint(0.1, 0.2)
     local liftPos = l:findLiftPoint(0.1, 0.2)

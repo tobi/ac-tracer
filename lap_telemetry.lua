@@ -243,7 +243,8 @@ end
 
 -- Draw time-based trace with proper scaling
 -- Note: Reference lap is compared by POSITION, not time (for proper alignment)
-local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, field, color, refColor, minVal, maxVal, label, unit)
+-- accessor: function(lapObj, pos) that returns value at position
+local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, accessor, color, refColor, minVal, maxVal, label, unit)
     if not lapObj or lapObj:length() < 2 then return end
     if endTime <= startTime then return end
 
@@ -257,38 +258,40 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
     local actualMax = maxVal or -math.huge
 
     for i = 0, numSamples do
-        local t = startTime + i * timeStep
-        local val = getValueAtTime(lapObj, t, field)
-        local pos = getValueAtTime(lapObj, t, "pos")
+         local t = startTime + i * timeStep
+         local pos = getValueAtTime(lapObj, t, "pos")  -- Get position first
+         
+         -- Use accessor function for the actual value
+         local actualVal = pos and accessor(lapObj, pos) or nil
+         
+         if actualVal ~= nil then
+             table.insert(values, actualVal)
+             table.insert(positions, pos)
+             if not minVal or not maxVal then
+                 actualMin = math.min(actualMin, actualVal)
+                 actualMax = math.max(actualMax, actualVal)
+             end
+         else
+             table.insert(values, 0)
+             table.insert(positions, nil)
+         end
 
-        if val ~= nil then
-            table.insert(values, val)
-            table.insert(positions, pos)
-            if not minVal or not maxVal then
-                actualMin = math.min(actualMin, val)
-                actualMax = math.max(actualMax, val)
-            end
-        else
-            table.insert(values, 0)
-            table.insert(positions, nil)
-        end
-
-        -- Get reference value at SAME POSITION (not same time) for proper alignment
-        if refLapObj and pos then
-            local refVal = refLapObj:getValueAtPos(field, pos)
-            if refVal ~= nil then
-                table.insert(refValues, refVal)
-                if not minVal or not maxVal then
-                    actualMin = math.min(actualMin, refVal)
-                    actualMax = math.max(actualMax, refVal)
-                end
-            else
-                table.insert(refValues, 0)
-            end
-        elseif refLapObj then
-            table.insert(refValues, 0)
-        end
-    end
+         -- Get reference value at SAME POSITION (not same time) for proper alignment
+         if refLapObj and pos then
+             local refVal = accessor(refLapObj, pos)
+             if refVal ~= nil then
+                 table.insert(refValues, refVal)
+                 if not minVal or not maxVal then
+                     actualMin = math.min(actualMin, refVal)
+                     actualMax = math.max(actualMax, refVal)
+                 end
+             else
+                 table.insert(refValues, 0)
+             end
+         elseif refLapObj then
+             table.insert(refValues, 0)
+         end
+     end
 
     if #values < 2 then return end
 
@@ -341,27 +344,27 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
     end
     ui.pathStroke(color, false, 2)
 
-    -- Cursor markers
-    if cursorTime and cursorTime >= startTime and cursorTime <= endTime then
-        local cursorX = x + ((cursorTime - startTime) / (endTime - startTime)) * w
+     -- Cursor markers
+     if cursorTime and cursorTime >= startTime and cursorTime <= endTime then
+         local cursorX = x + ((cursorTime - startTime) / (endTime - startTime)) * w
 
-        local cursorVal = getValueAtTime(lapObj, cursorTime, field)
-        local cursorPos = getValueAtTime(lapObj, cursorTime, "pos")
-        if cursorVal ~= nil then
-            local cursorY = y + h - ((cursorVal - minVal) / range) * h
-            ui.drawCircleFilled(vec2(cursorX, cursorY), 6, color, 16)
-            ui.drawCircle(vec2(cursorX, cursorY), 6, theme.marker.cursor, 16, 2)
-        end
+         local cursorPos = getValueAtTime(lapObj, cursorTime, "pos")
+         local cursorVal = cursorPos and accessor(lapObj, cursorPos) or nil
+         if cursorVal ~= nil then
+             local cursorY = y + h - ((cursorVal - minVal) / range) * h
+             ui.drawCircleFilled(vec2(cursorX, cursorY), 6, color, 16)
+             ui.drawCircle(vec2(cursorX, cursorY), 6, theme.marker.cursor, 16, 2)
+         end
 
-        -- Get reference value at SAME POSITION (not same time)
-        if refLapObj and cursorPos then
-            local refVal = refLapObj:getValueAtPos(field, cursorPos)
-            if refVal ~= nil then
-                local refY = y + h - ((refVal - minVal) / range) * h
-                ui.drawCircleFilled(vec2(cursorX, refY), 5, refColor, 12)
-            end
-        end
-    end
+         -- Get reference value at SAME POSITION (not same time)
+         if refLapObj and cursorPos then
+             local refVal = accessor(refLapObj, cursorPos)
+             if refVal ~= nil then
+                 local refY = y + h - ((refVal - minVal) / range) * h
+                 ui.drawCircleFilled(vec2(cursorX, refY), 5, refColor, 12)
+             end
+         end
+     end
 
     -- Trace label
     ui.setCursor(vec2(x + 5, y + 2))
@@ -834,18 +837,18 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     cursorValues.tc_slip = getValueAtTime(selectedLap, cursorTime, "tc_slip")
     cursorValues.tc_gain = getValueAtTime(selectedLap, cursorTime, "tc_gain")
 
-    if referenceLap and cursorValues.pos then
-        cursorValues.refThrottle = referenceLap:getValueAtPos("throttle", cursorValues.pos)
-        cursorValues.refBrake = referenceLap:getValueAtPos("brake", cursorValues.pos)
-        cursorValues.refBrake_r = referenceLap:getValueAtPos("brake_r", cursorValues.pos)
-        cursorValues.refSpeed = referenceLap:getValueAtPos("speed", cursorValues.pos)
-        cursorValues.refSteering = referenceLap:getValueAtPos("steering", cursorValues.pos)
-        cursorValues.refFuel = referenceLap:getValueAtPos("fuel", cursorValues.pos)
-        cursorValues.refLatG = getGForceAtPos(referenceLap, cursorValues.pos, "x")
-        cursorValues.refBrakeBalance = referenceLap:getValueAtPos("brake_balance", cursorValues.pos)
-        cursorValues.refTcSlip = referenceLap:getValueAtPos("tc_slip", cursorValues.pos)
-        cursorValues.refTcGain = referenceLap:getValueAtPos("tc_gain", cursorValues.pos)
-    end
+     if referenceLap and cursorValues.pos then
+         cursorValues.refThrottle = referenceLap:throttleAt(cursorValues.pos)
+         cursorValues.refBrake = referenceLap:brakeAt(cursorValues.pos)
+         cursorValues.refBrake_r = referenceLap:brakeRearAt(cursorValues.pos)
+         cursorValues.refSpeed = referenceLap:speedAt(cursorValues.pos)
+         cursorValues.refSteering = referenceLap:steeringAt(cursorValues.pos)
+         cursorValues.refFuel = referenceLap:fuelAt(cursorValues.pos)
+         cursorValues.refLatG = getGForceAtPos(referenceLap, cursorValues.pos, "x")
+         cursorValues.refBrakeBalance = referenceLap:brakeBalanceAt(cursorValues.pos)
+         cursorValues.refTcSlip = referenceLap:tcSlipAt(cursorValues.pos)
+         cursorValues.refTcGain = referenceLap:tcGainAt(cursorValues.pos)
+     end
 
     if not cursorValues.throttle then return end
 
@@ -1445,8 +1448,8 @@ function lap_telemetry.draw(dt, context)
 
         -- Throttle
         local throttleY = y
-        local throttleH = traceH - 5
-        drawTimeTrace(graphX, y, graphW, throttleH, startTime, endTime, selectedLap, referenceLap, "throttle", theme.trace.throttle, theme.ghost.throttle, 0, 1, "Throttle", "")
+         local throttleH = traceH - 5
+         drawTimeTrace(graphX, y, graphW, throttleH, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:throttleAt(p) end, theme.trace.throttle, theme.ghost.throttle, 0, 1, "Throttle", "")
 
         -- Draw TC markers on throttle trace (current session laps only)
         if settings.showFlagMarker('TC') and selectedLap.tcActive and #selectedLap.tcActive > 0 then
@@ -1489,8 +1492,8 @@ function lap_telemetry.draw(dt, context)
 
         y = y + traceH + tracePadding
 
-        -- Brake
-        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "brake", theme.trace.brake, theme.ghost.brake, 0, 1, "Brake", "")
+         -- Brake
+         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:brakeAt(p) end, theme.trace.brake, theme.ghost.brake, 0, 1, "Brake", "")
         y = y + traceH + tracePadding
 
         -- Speed
@@ -1503,16 +1506,16 @@ function lap_telemetry.draw(dt, context)
                 maxSpeed = math.max(maxSpeed, referenceLap.speed[i] or 0)
             end
         end
-        maxSpeed = math.max(100, math.ceil(maxSpeed / 50) * 50)
-        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "speed", theme.trace.speed, theme.ghost.speed, 0, maxSpeed, "Speed", " kmh")
+         maxSpeed = math.max(100, math.ceil(maxSpeed / 50) * 50)
+         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:speedAt(p) end, theme.trace.speed, theme.ghost.speed, 0, maxSpeed, "Speed", " kmh")
         y = y + traceH + tracePadding
 
         -- Lateral G
         drawLatGTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap)
         y = y + traceH + tracePadding
 
-        -- Steering
-        drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, "steering", theme.trace.steering, theme.ghost.steering, 0, 1, "Steering", "")
+         -- Steering
+         drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:steeringAt(p) end, theme.trace.steering, theme.ghost.steering, 0, 1, "Steering", "")
 
         -- Global cursor line
         if cursorTime and cursorTime >= startTime and cursorTime <= endTime then

@@ -111,28 +111,28 @@ test("steerToDegrees converts back", function()
 end)
 
 
-suite("lap.getValueAtPos")
+suite("lap.accessors")
 
-test("interpolates between samples", function()
-    local l = lap.new("track", "car")
-    
-    -- Add samples at known positions
-    l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
-    l.speed = { 100, 150, 200, 150, 100 }
-    
-    -- Test exact positions
-    assert_equal(l:getValueAtPos('speed', 0.25), 150)
-    assert_equal(l:getValueAtPos('speed', 0.5), 200)
-    
-    -- Test interpolated position (between 0.25 and 0.5)
-    local interpolated = l:getValueAtPos('speed', 0.375)
-    assert_near(interpolated, 175, 0.1, "Should interpolate to 175")
-end)
-
-test("returns nil for empty lap", function()
-    local l = lap.new("track", "car")
-    assert_nil(l:getValueAtPos('speed', 0.5))
-end)
+test("speedAt interpolates between samples", function()
+     local l = lap.new("track", "car")
+     
+     -- Add samples at known positions
+     l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
+     l.speed = { 100, 150, 200, 150, 100 }
+     
+     -- Test exact positions
+     assert_equal(l:speedAt(0.25), 150)
+     assert_equal(l:speedAt(0.5), 200)
+     
+     -- Test interpolated position (between 0.25 and 0.5)
+     local interpolated = l:speedAt(0.375)
+     assert_near(interpolated, 175, 0.1, "Should interpolate to 175")
+ end)
+ 
+ test("speedAt returns nil for empty lap", function()
+     local l = lap.new("track", "car")
+     assert_nil(l:speedAt(0.5))
+ end)
 
 
 suite("lap.getTimeAtPos")
@@ -182,14 +182,14 @@ test("getSparseAtPos returns last value before position", function()
     assert_equal(l:getSparseAtPos("brake_balance", 0.35), 0.6)
 end)
 
-test("getValueAtPos falls back to sparse for sparse fields", function()
-    local l = lap.new("track", "car")
-    l:addSparseSample("brake_balance", 0.1, 0.4)
-    l:addSparseSample("brake_balance", 0.3, 0.6)
+test("brakeBalanceAt falls back to sparse for sparse fields", function()
+     local l = lap.new("track", "car")
+     l:addSparseSample("brake_balance", 0.1, 0.4)
+     l:addSparseSample("brake_balance", 0.3, 0.6)
 
-    assert_equal(l:getValueAtPos("brake_balance", 0.2), 0.4)
-    assert_equal(l:getValueAtPos("brake_balance", 0.35), 0.6)
-end)
+     assert_equal(l:brakeBalanceAt(0.2), 0.4)
+     assert_equal(l:brakeBalanceAt(0.35), 0.6)
+ end)
 
 
 suite("lap.getDeltaVs")
@@ -212,14 +212,14 @@ end)
 suite("lap.findBrakePoint")
 
 test("finds first brake application", function()
-    local l = lap.new("track", "car")
-    
-    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
-    l.brake = { 0.0, 0.0, 0.05, 0.3, 0.8 }  -- Braking starts at 0.4 (> 0.1 threshold)
-    
-    local brakePos = l:findBrakePoint(0.1, 0.5)
-    assert_equal(brakePos, 0.4, "Should find brake at 0.4")
-end)
+     local l = lap.new("track", "car")
+     
+     l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+     l.brake = { 0.0, 0.0, 3.0, 30.0, 80.0 }  -- Braking starts at 0.4 (> 5 bar threshold)
+     
+     local brakePos = l:findBrakePoint(0.1, 0.5)
+     assert_equal(brakePos, 0.4, "Should find brake at 0.4")
+ end)
 
 test("returns nil if no braking in range", function()
     local l = lap.new("track", "car")
@@ -532,4 +532,202 @@ test("removes samples after position", function()
     assert_equal(removed, 3, "Should remove 3 samples")
     assert_equal(l:length(), 2)
     assert_equal(l.pos[2], 0.2)
+end)
+
+
+--------------------------------------------------------------------------------
+-- Brake in Bar Tests
+--------------------------------------------------------------------------------
+
+suite("lap.brake in bar")
+
+test("maxBrakeBars returns max brake pressure", function()
+    local l = lap.new("track", "car")
+    
+    l.brake = { 0, 20, 50, 80, 30 }  -- Max is 80 bar
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    
+    assert_equal(l:maxBrakeBars(), 80)
+end)
+
+test("maxBrakeBars returns 0 for empty lap", function()
+    local l = lap.new("track", "car")
+    assert_equal(l:maxBrakeBars(), 0)
+end)
+
+test("maxBrakeBars caches value for completed laps", function()
+    local l = lap.new("track", "car")
+    l.brake = { 50, 100, 75 }
+    l.pos = { 0.1, 0.5, 0.9 }
+    l.completed = true
+    
+    -- First call computes and caches
+    assert_equal(l:maxBrakeBars(), 100)
+    
+    -- Modify brake array (shouldn't affect cached value)
+    l.brake[2] = 200
+    
+    -- Should return cached value
+    assert_equal(l:maxBrakeBars(), 100)
+end)
+
+test("maxBrakeBars does not cache for incomplete laps", function()
+    local l = lap.new("track", "car")
+    l.brake = { 50, 100, 75 }
+    l.pos = { 0.1, 0.5, 0.9 }
+    l.completed = false
+    
+    assert_equal(l:maxBrakeBars(), 100)
+    
+    -- Add higher brake value
+    l.brake[4] = 120
+    l.pos[4] = 0.95
+    
+    -- Should recompute for incomplete lap
+    assert_equal(l:maxBrakeBars(), 120)
+end)
+
+test("findBrakePoint works with bar values", function()
+    local l = lap.new("track", "car")
+    
+    -- Brake values in bar (typical race car: 0-120 bar)
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.brake = { 0, 0, 3, 40, 90 }  -- Light touch at 0.3 (3 bar), real braking at 0.4 (40 bar)
+    
+    -- With threshold 5 bar, should find 0.4 (first sample > 5 bar)
+    local brakePos = l:findBrakePoint(0.1, 0.5, 5)
+    assert_equal(brakePos, 0.4, "Should find brake at 0.4 with 5 bar threshold")
+    
+    -- With threshold 2 bar, should find 0.3 (light touch)
+    local brakePos2 = l:findBrakePoint(0.1, 0.5, 2)
+    assert_equal(brakePos2, 0.3, "Should find brake at 0.3 with 2 bar threshold")
+end)
+
+test("findBrakePoint with high threshold ignores light braking", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.brake = { 0, 2, 4, 6, 8 }  -- All light braking (< 10 bar)
+    
+    -- With threshold 10 bar, should find nothing
+    local brakePos = l:findBrakePoint(0.1, 0.5, 10)
+    assert_nil(brakePos, "Should not find brake with 10 bar threshold")
+end)
+
+test("brakeAt returns brake in bar", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.0, 0.5, 1.0 }
+    l.brake = { 0, 80, 0 }  -- Peak braking at mid-corner
+    
+    -- Exact positions
+    assert_equal(l:brakeAt(0.5), 80)
+    
+    -- Interpolated
+    local interpBrake = l:brakeAt(0.25)  -- Between 0 and 80
+    assert_near(interpBrake, 40, 1, "Should interpolate brake to ~40 bar")
+end)
+
+test("brakePercentAt normalizes to maxBar", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.0, 0.5, 1.0 }
+    l.brake = { 0, 80, 0 }
+    
+    -- With default 100 bar scale
+    assert_equal(l:brakePercentAt(0.5), 0.8, "80 bar / 100 = 0.8")
+    assert_equal(l:brakePercentAt(0.0), 0, "0 bar / 100 = 0")
+    
+    -- With custom scale (e.g., road car with 50 bar max)
+    assert_equal(l:brakePercentAt(0.5, 50), 1.0, "80 bar / 50 = clamped to 1.0")
+    
+    -- With race car scale (120 bar)
+    assert_near(l:brakePercentAt(0.5, 120), 0.667, 0.01, "80 bar / 120 = ~0.67")
+end)
+
+test("convenience accessors work", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
+    l.brake = { 0, 30, 90, 60, 0 }
+    l.throttle = { 1, 0.5, 0, 0.5, 1 }
+    l.clutch = { 0, 0.2, 0.5, 0.2, 0 }
+    l.steering = { 0.5, 0.4, 0.3, 0.4, 0.5 }
+    l.speed = { 200, 150, 100, 130, 180 }
+    l.gear = { 5, 4, 3, 4, 5 }
+    
+    -- Test all accessors at 0.5
+    assert_equal(l:brakeAt(0.5), 90)
+    assert_equal(l:throttleAt(0.5), 0)
+    assert_equal(l:clutchAt(0.5), 0.5)
+    assert_equal(l:steeringAt(0.5), 0.3)
+    assert_equal(l:speedAt(0.5), 100)
+    assert_equal(l:gearAt(0.5), 3)
+end)
+
+test("steeringDegAt converts to degrees", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.0, 0.5, 1.0 }
+    l.steering = { 0.5, 0.25, 0.75 }  -- straight, left, right
+    
+    assert_near(l:steeringDegAt(0.0), 0, 1, "0.5 norm = 0 degrees")
+    assert_true(l:steeringDegAt(0.5) > 0, "0.25 norm = positive degrees (left)")
+    assert_true(l:steeringDegAt(1.0) < 0, "0.75 norm = negative degrees (right)")
+end)
+
+test("getTracesAt returns brake in bar", function()
+    local l = lap.new("track", "car")
+    
+    l.pos = { 0.0, 0.25, 0.5, 0.75, 1.0 }
+    l.brake = { 0, 30, 90, 60, 0 }
+    l.throttle = { 1, 0.5, 0, 0.5, 1 }
+    l.clutch = { 0, 0, 0, 0, 0 }
+    l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
+    l.speed = { 200, 150, 100, 130, 180 }
+    
+    local traces = l:getTracesAt({ 0.25, 0.5, 0.75 })
+    
+    assert_equal(traces.brake[1], 30, "Brake at 0.25 should be 30 bar")
+    assert_equal(traces.brake[2], 90, "Brake at 0.5 should be 90 bar")
+    assert_equal(traces.brake[3], 60, "Brake at 0.75 should be 60 bar")
+end)
+
+test("realistic race car braking profile", function()
+    local l = lap.new("track", "car")
+    
+    -- Simulate approach to corner: full throttle -> brake -> apex -> exit
+    l.pos = { 0.10, 0.12, 0.14, 0.16, 0.18, 0.20, 0.22, 0.24, 0.26, 0.28 }
+    l.brake = { 0, 0, 4, 70, 95, 100, 85, 50, 20, 0 }  -- GT3 braking ~100 bar peak (4 bar = trail)
+    l.throttle = { 1.0, 1.0, 0.9, 0, 0, 0, 0, 0.2, 0.5, 0.8 }
+    l.speed = { 280, 275, 260, 220, 180, 150, 130, 125, 135, 160 }
+    
+    -- Find brake point (> 5 bar threshold, ignores 4 bar trail brake)
+    local brakePos = l:findBrakePoint(0.10, 0.28, 5)
+    assert_equal(brakePos, 0.16, "Brake point should be at 0.16 (first > 5 bar)")
+    
+    -- Max brake
+    assert_equal(l:maxBrakeBars(), 100, "Max brake should be 100 bar")
+    
+    -- Brake percentage at peak
+    assert_equal(l:brakePercentAt(0.20, 100), 1.0, "100 bar at 100 bar scale = 100%")
+    assert_near(l:brakePercentAt(0.20, 120), 0.833, 0.01, "100 bar at 120 bar scale = ~83%")
+end)
+
+test("road car braking profile (lower pressure)", function()
+    local l = lap.new("track", "car")
+    
+    -- Road cars have lower brake pressure (typically 30-60 bar max)
+    l.pos = { 0.10, 0.12, 0.14, 0.16, 0.18, 0.20 }
+    l.brake = { 0, 0, 3, 25, 40, 35 }  -- Road car ~40 bar peak
+    
+    -- Find brake point (> 5 bar threshold)
+    local brakePos = l:findBrakePoint(0.10, 0.20, 5)
+    assert_equal(brakePos, 0.16, "Brake point should be at 0.16 (first > 5 bar)")
+    
+    -- Max brake
+    assert_equal(l:maxBrakeBars(), 40, "Max brake should be 40 bar")
+    
+    -- With road car scale (50 bar), 40 bar = 80%
+    assert_equal(l:brakePercentAt(0.18, 50), 0.8)
 end)

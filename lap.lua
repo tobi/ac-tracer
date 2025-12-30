@@ -45,6 +45,7 @@ lap.FLAGS = {
 local SLIP_THRESHOLD = 0.15      -- Wheel slip ratio threshold (15% difference from road speed)
 local LOCKUP_SPEED_MIN = 20      -- Minimum car speed (km/h) for lockup detection
 local OVERLAP_THROTTLE_THRESHOLD = 0.1  -- Throttle must be > 10% for overlap
+lap.BRAKE_THRESHOLD_BAR = 5             -- Minimum brake pressure to count as braking (bar)
 local OVERLAP_BRAKE_THRESHOLD_BAR = 10  -- Brake must be > 10 bar for overlap
 local OVERLAP_MIN_DURATION = 0.1 -- 100ms minimum duration for overlap to be flagged
 
@@ -453,15 +454,11 @@ local function findIndicesAtPos(positions, targetPos)
     return lo, hi
 end
 
---- Get interpolated value at a specific track position
----@param field string Field name ('throttle', 'brake', 'speed', etc.)
+--- Internal: interpolate a dense array at position
+---@param data table Array of values
 ---@param targetPos number Spline position (0.0 to 1.0)
 ---@return number|nil Interpolated value
-function lap:getValueAtPos(field, targetPos)
-    local data = self[field]
-    if (not data or #data < 2) and lap.SPARSE_FIELDS[field] then
-        return self:getSparseAtPos(field, targetPos)
-    end
+local function interpolateAt(self, data, targetPos)
     if not data or #data < 2 then return nil end
     
     local lo, hi = findIndicesAtPos(self.pos, targetPos)
@@ -521,6 +518,95 @@ function lap:getDeltaVs(refLap, currentPos)
 end
 
 --------------------------------------------------------------------------------
+-- Accessors - :fieldAt(pos) for all telemetry fields
+--------------------------------------------------------------------------------
+
+--- Get throttle at position (0-1)
+---@param pos number Spline position
+---@return number|nil
+function lap:throttleAt(pos) return interpolateAt(self, self.throttle, pos) end
+
+--- Get brake pressure at position (in bar)
+---@param pos number Spline position
+---@return number|nil
+function lap:brakeAt(pos) return interpolateAt(self, self.brake, pos) end
+
+--- Get rear brake pressure at position (in bar)
+---@param pos number Spline position
+---@return number|nil
+function lap:brakeRearAt(pos) return interpolateAt(self, self.brake_r, pos) end
+
+--- Get brake as percentage of scale (0-1, for chart rendering)
+---@param pos number Spline position
+---@param maxBar number? Max brake for normalization (default 100 bar)
+---@return number|nil Normalized 0-1 value
+function lap:brakePercentAt(pos, maxBar)
+    local bar = self:brakeAt(pos)
+    if not bar then return nil end
+    maxBar = maxBar or 100
+    return math.min(bar / maxBar, 1.0)
+end
+
+--- Get clutch at position (0-1, inverted: 1 = pressed)
+---@param pos number Spline position
+---@return number|nil
+function lap:clutchAt(pos) return interpolateAt(self, self.clutch, pos) end
+
+--- Get steering at position (0-1 normalized, 0.5 = straight)
+---@param pos number Spline position
+---@return number|nil
+function lap:steeringAt(pos) return interpolateAt(self, self.steering, pos) end
+
+--- Get steering in degrees at position
+---@param pos number Spline position
+---@return number|nil Degrees (negative = left, positive = right)
+function lap:steeringDegAt(pos)
+    local norm = self:steeringAt(pos)
+    if not norm then return nil end
+    return lap.steerToDegrees(norm)
+end
+
+--- Get speed at position (km/h)
+---@param pos number Spline position
+---@return number|nil
+function lap:speedAt(pos) return interpolateAt(self, self.speed, pos) end
+
+--- Get gear at position
+---@param pos number Spline position
+---@return number|nil
+function lap:gearAt(pos) return interpolateAt(self, self.gear, pos) end
+
+--- Get fuel at position (liters) - sparse field
+---@param pos number Spline position
+---@return number|nil
+function lap:fuelAt(pos) 
+    -- Fuel is sparse, try dense first then fall back to sparse
+    local dense = interpolateAt(self, self.fuel, pos)
+    if dense then return dense end
+    return self:getSparseAtPos('fuel', pos)
+end
+
+--- Get brake balance at position - sparse field
+---@param pos number Spline position
+---@return number|nil
+function lap:brakeBalanceAt(pos) return self:getSparseAtPos('brake_balance', pos) end
+
+--- Get TC slip setting at position - sparse field
+---@param pos number Spline position
+---@return number|nil
+function lap:tcSlipAt(pos) return self:getSparseAtPos('tc_slip', pos) end
+
+--- Get TC gain setting at position - sparse field
+---@param pos number Spline position
+---@return number|nil
+function lap:tcGainAt(pos) return self:getSparseAtPos('tc_gain', pos) end
+
+--- Get time at position (seconds)
+---@param pos number Spline position
+---@return number|nil
+function lap:timeAt(pos) return self:getTimeAtPos(pos) end
+
+--------------------------------------------------------------------------------
 -- Trace Extraction
 --------------------------------------------------------------------------------
 
@@ -540,11 +626,11 @@ function lap:getTracesAt(positions)
     
     for i = 1, #positions do
         local pos = positions[i]
-        table.insert(traces.throttle, self:getValueAtPos('throttle', pos) or 0)
-        table.insert(traces.brake, self:getValueAtPos('brake', pos) or 0)
-        table.insert(traces.clutch, self:getValueAtPos('clutch', pos) or 0)
-        table.insert(traces.steering, self:getValueAtPos('steering', pos) or 0.5)
-        table.insert(traces.speed, self:getValueAtPos('speed', pos) or 0)
+        table.insert(traces.throttle, self:throttleAt(pos) or 0)
+        table.insert(traces.brake, self:brakeAt(pos) or 0)
+        table.insert(traces.clutch, self:clutchAt(pos) or 0)
+        table.insert(traces.steering, self:steeringAt(pos) or 0.5)
+        table.insert(traces.speed, self:speedAt(pos) or 0)
     end
     
     return traces
@@ -557,11 +643,11 @@ end
 --- Find brake point in a position range (first significant brake application)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param threshold number Brake threshold (default 0.03)
+---@param threshold number? Brake threshold (default lap.BRAKE_THRESHOLD_BAR)
 ---@return number|nil Spline position of brake point
 function lap:findBrakePoint(startPos, endPos, threshold)
     if not self.pos then return nil end
-    threshold = threshold or 0.1  -- 10% brake pressure
+    threshold = threshold or lap.BRAKE_THRESHOLD_BAR
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
@@ -716,7 +802,7 @@ function lap:findEntrySpeed(startPos, endPos)
     if self:isEmpty() then return nil end
     -- First find the apex (min speed position)
     local apexPos, _ = self:findApex(startPos, endPos)
-    if not apexPos then return self:getValueAtPos('speed', startPos) end
+    if not apexPos then return self:speedAt(startPos) end
 
     -- Find max speed from start to apex
     local maxSpeed = 0
