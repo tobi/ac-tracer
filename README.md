@@ -45,12 +45,13 @@ A high-performance driver input telemetry and analysis app for Assetto Corsa, bu
 
 ## Configuration
 
-The app is highly configurable via `settings.ini` or the in-game settings window:
+The app is highly configurable via the in-game settings window:
 
-- Toggle specific traces (Throttle, Brake, Steering, etc.)
+- Toggle specific traces (Throttle, Brake, Steering, Speed, Gear, Lateral G)
 - Adjust time window and sample rates
 - Customize units (km/h vs mph)
-- Manage reference laps
+- Configure marker visibility (TC, Lockups, Wheel Slip, Pedal Overlap)
+- Manage reference laps with position offset adjustment
 
 ## Hotkeys
 
