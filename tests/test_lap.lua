@@ -668,13 +668,96 @@ end)
 
 test("steeringDegAt converts to degrees", function()
     local l = lap.new("track", "car")
-    
+
     l.pos = { 0.0, 0.5, 1.0 }
     l.steering = { 0.5, 0.25, 0.75 }  -- straight, left, right
-    
+
     assert_near(l:steeringDegAt(0.0), 0, 1, "0.5 norm = 0 degrees")
     assert_true(l:steeringDegAt(0.5) > 0, "0.25 norm = positive degrees (left)")
     assert_true(l:steeringDegAt(1.0) < 0, "0.75 norm = negative degrees (right)")
+end)
+
+
+--------------------------------------------------------------------------------
+-- Gear Shift Filtering for Lift Point Detection
+--------------------------------------------------------------------------------
+
+suite("lap.findLiftPoint gear shift filtering")
+
+test("findLiftPoint ignores throttle dips during gear shifts", function()
+    local l = lap.new("track", "car")
+
+    -- Simulate corner exit with gear shift at pos 0.25
+    -- Full throttle, then brief dip for gear shift (should be ignored), then continues full throttle
+    -- Real lift happens at pos 0.35
+    l.pos = { 0.10, 0.15, 0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40 }
+    l.throttle = { 1.0, 1.0, 1.0, 0.3, 0.5, 1.0, 1.0, 1.0, 1.0, 0.7, 0.3, 0.1, 0.0 }  -- Dip at 0.22-0.24 (gear shift), real lift at 0.34
+    l.gear = { 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4 }  -- Shift from 3rd to 4th at 0.24
+
+    local liftPos = l:findLiftPoint(0.10, 0.40)
+
+    -- Should find the real lift at ~0.34, not the gear shift dip at 0.22
+    assert_not_nil(liftPos, "Should find a lift point")
+    assert_true(liftPos >= 0.30,
+        string.format("Lift point should be >= 0.30 (after gear shift), got %.2f", liftPos))
+end)
+
+test("findLiftPoint detects lift when no gear shift nearby", function()
+    local l = lap.new("track", "car")
+
+    -- Simple throttle lift without gear shifts
+    l.pos = { 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40 }
+    l.throttle = { 1.0, 1.0, 1.0, 0.8, 0.5, 0.2, 0.0 }
+    l.gear = { 4, 4, 4, 4, 4, 4, 4 }  -- Same gear throughout
+
+    local liftPos = l:findLiftPoint(0.10, 0.40)
+
+    assert_not_nil(liftPos, "Should find lift point")
+    assert_near(liftPos, 0.25, 0.05, "Lift should be near 0.25 where throttle drops")
+end)
+
+test("findLiftPoint returns nil when at full throttle throughout", function()
+    local l = lap.new("track", "car")
+
+    -- Full throttle the whole time
+    l.pos = { 0.10, 0.20, 0.30, 0.40, 0.50 }
+    l.throttle = { 1.0, 1.0, 1.0, 1.0, 1.0 }
+    l.gear = { 3, 3, 4, 4, 5 }  -- Multiple gear shifts
+
+    local liftPos = l:findLiftPoint(0.10, 0.50)
+
+    assert_nil(liftPos, "Should return nil when never lifting")
+end)
+
+test("findLiftPoint ignores multiple consecutive gear shifts", function()
+    local l = lap.new("track", "car")
+
+    -- Fast acceleration with rapid gear shifts, real lift at end
+    l.pos = { 0.10, 0.12, 0.14, 0.16, 0.18, 0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40 }
+    l.throttle = { 1.0, 0.4, 1.0, 0.4, 1.0, 0.4, 1.0, 1.0, 1.0, 1.0, 0.7, 0.4, 0.2, 0.1, 0.0, 0.0 }
+    l.gear = { 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 }  -- Shifts at 0.12, 0.16, 0.20
+
+    local liftPos = l:findLiftPoint(0.10, 0.40)
+
+    -- Should find real lift around 0.30, not any of the gear shift dips
+    assert_not_nil(liftPos, "Should find lift point")
+    assert_true(liftPos >= 0.28,
+        string.format("Lift point should be >= 0.28, got %.2f", liftPos))
+end)
+
+test("findLiftPoint works without gear data", function()
+    local l = lap.new("track", "car")
+
+    -- No gear data available
+    l.pos = { 0.10, 0.15, 0.20, 0.25, 0.30 }
+    l.throttle = { 1.0, 1.0, 0.8, 0.3, 0.0 }
+    l.gear = nil  -- No gear data
+
+    local liftPos = l:findLiftPoint(0.10, 0.30)
+
+    -- Should still find lift (falls back to no filtering)
+    assert_not_nil(liftPos, "Should find lift point without gear data")
+    assert_near(liftPos, 0.20, 0.05, "Lift should be near 0.20")
 end)
 
 test("getTracesAt returns normalized brake (0-1) by default", function()

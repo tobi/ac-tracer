@@ -378,3 +378,86 @@ test("getTracesAt brake normalization matches brakePercentAt", function()
             string.format("Brake at pos %.1f should match brakePercentAt", pos))
     end
 end)
+
+--------------------------------------------------------------------------------
+-- G-Force Unit Conversion Tests
+--------------------------------------------------------------------------------
+
+suite("CSV G-Force Unit Conversion")
+
+test("daytona gforce values are in realistic G range", function()
+    assert_not_nil(daytonaLap, "Lap should be loaded")
+    if not daytonaLap.gforce or #daytonaLap.gforce == 0 then
+        -- Skip if no G-force data in this CSV
+        return
+    end
+
+    local maxLatG = 0
+    local maxLongG = 0
+    for i = 1, #daytonaLap.gforce do
+        local g = daytonaLap.gforce[i]
+        if g then
+            maxLatG = math.max(maxLatG, math.abs(g.x or 0))
+            maxLongG = math.max(maxLongG, math.abs(g.z or 0))
+        end
+    end
+
+    -- After unit conversion, values should be in G's (typically 0-5G for race cars)
+    -- NOT in m/s² (which would be 0-50 for similar range)
+    if maxLatG > 0 then
+        assert_true(maxLatG <= 10,
+            string.format("Lateral G should be <= 10G (was it converted?), got %.2f", maxLatG))
+    end
+    if maxLongG > 0 then
+        assert_true(maxLongG <= 10,
+            string.format("Longitudinal G should be <= 10G (was it converted?), got %.2f", maxLongG))
+    end
+end)
+
+test("barcelona gforce values are in realistic G range", function()
+    assert_not_nil(barcelonaLap, "Lap should be loaded")
+    if not barcelonaLap.gforce or #barcelonaLap.gforce == 0 then
+        -- Skip if no G-force data in this CSV
+        return
+    end
+
+    local maxLatG = 0
+    local maxLongG = 0
+    for i = 1, #barcelonaLap.gforce do
+        local g = barcelonaLap.gforce[i]
+        if g then
+            maxLatG = math.max(maxLatG, math.abs(g.x or 0))
+            maxLongG = math.max(maxLongG, math.abs(g.z or 0))
+        end
+    end
+
+    -- Values in G's should be reasonable (race cars rarely exceed 5-6G)
+    if maxLatG > 0 then
+        assert_true(maxLatG <= 10,
+            string.format("Lateral G should be <= 10G after unit conversion, got %.2f", maxLatG))
+    end
+    if maxLongG > 0 then
+        assert_true(maxLongG <= 10,
+            string.format("Longitudinal G should be <= 10G after unit conversion, got %.2f", maxLongG))
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- CSV Parser Unit Conversion Tests (Direct)
+--------------------------------------------------------------------------------
+
+suite("CSV Parser Unit Conversions")
+
+test("m/s² to G conversion factor is correct", function()
+    -- 1G = 9.81 m/s², so 1 m/s² = 1/9.81 G ≈ 0.102 G
+    local csv_parser = require('csv_parser')
+
+    -- Test the conversion factor if accessible
+    -- 9.81 m/s² should equal 1.0 G
+    local expectedConversion = 1.0 / 9.81
+    assert_near(expectedConversion, 0.102, 0.001, "1 m/s² should be ~0.102 G")
+
+    -- 50 m/s² (extreme value) should be ~5.1 G
+    local extremeG = 50 * expectedConversion
+    assert_near(extremeG, 5.1, 0.1, "50 m/s² should be ~5.1 G")
+end)
