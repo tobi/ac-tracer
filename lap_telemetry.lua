@@ -930,8 +930,8 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     drawRow("Speed", string.format("%.1f", cursorValues.speed or 0), theme.trace.speed,
         cursorValues.refSpeed and string.format("(%.1f)", cursorValues.refSpeed))
 
-    -- Lateral G
-    if cursorValues.latG ~= nil then
+    -- Lateral G (only if enabled)
+    if settings.telemetryShowLateralG() and cursorValues.latG ~= nil then
         drawRow("Lat G", string.format("%.2fg", cursorValues.latG), theme.trace.speed,
             cursorValues.refLatG and string.format("(%.2fg)", cursorValues.refLatG))
     end
@@ -1192,14 +1192,47 @@ function lap_telemetry.draw(dt, context)
     ui.popStyleColor()
     ui.popFont()
 
+    -- Title bar buttons (right side)
+    local viewingLap = getSelectedLap()
+    local referenceLap = getReferenceLap()
+
+    ui.pushFont(ui.Font.Small)
+
+    -- Load Lap button (far right)
+    ui.setCursor(vec2(windowSize.x - 100, 4))
+    loadLapButtonPos = ui.getCursor()
+    if ui.button("Load Lap...", vec2(90, 22)) then
+        showRefPicker = not showRefPicker
+    end
+
+    -- Copy as Markdown button
+    ui.setCursor(vec2(windowSize.x - 230, 4))
+    if ui.button("Copy as Markdown", vec2(120, 22)) then
+        local success, msg = markdown.copyToClipboard(viewingLap, referenceLap)
+        if success then
+            ac.setMessage("Copied", msg)
+        else
+            ac.setMessage("Error", msg)
+        end
+    end
+    if ui.itemHovered() then
+        ui.setTooltip("Copy lap telemetry as Markdown for AI coaching")
+    end
+
+    -- Markers dropdown button
+    ui.setCursor(vec2(windowSize.x - 310, 4))
+    markersButtonPos = ui.getCursor()
+    if ui.button("Markers", vec2(70, 22)) then
+        showMarkersDropdown = not showMarkersDropdown
+    end
+
+    ui.popFont()
+
     -- Controls bar
     local controlsY = headerH + 5
     local controlsH = 25
     ui.setCursor(vec2(padding, controlsY))
     ui.pushFont(ui.Font.Small)
-
-    local viewingLap = getSelectedLap()
-    local referenceLap = getReferenceLap()
 
     if viewingLap then
         ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
@@ -1307,87 +1340,20 @@ function lap_telemetry.draw(dt, context)
                 selectedCorner = nil
             end
         end
-
-        -- Markers dropdown button
-        ui.sameLine()
-        markersButtonPos = ui.getCursor()
-        if ui.button("Markers", vec2(70, 0)) then
-            showMarkersDropdown = not showMarkersDropdown
-        end
-
-        -- Copy as Markdown button
-        ui.sameLine()
-        if ui.button("Copy as Markdown", vec2(120, 0)) then
-            local success, msg = markdown.copyToClipboard(selectedLap, referenceLap)
-            if success then
-                ac.setMessage("Copied", msg)
-            else
-                ac.setMessage("Error", msg)
-            end
-        end
-        if ui.itemHovered() then
-            ui.setTooltip("Copy lap telemetry as Markdown for AI coaching")
-        end
-
-        -- Load Lap button (far right)
-        ui.sameLine(windowSize.x - 110)
-        loadLapButtonPos = ui.getCursor()  -- Track button position
-        if ui.button("Load Lap...", vec2(90, 0)) then
-            showRefPicker = not showRefPicker
-        end
     else
         ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
         ui.text("No laps recorded")
         ui.popStyleColor()
-
-        -- Load Lap button (always available)
-        ui.sameLine(windowSize.x - 110)
-        loadLapButtonPos = ui.getCursor()  -- Track button position
-        if ui.button("Load Lap...", vec2(90, 0)) then
-            showRefPicker = not showRefPicker
-        end
     end
 
     ui.popFont()
 
-    -- Second controls row: Position offset slider (only when reference lap exists)
-    local controls2Y = controlsY + controlsH + 2
-    local controls2H = 0
-    if referenceLap then
-        controls2H = 22
-        ui.setCursor(vec2(padding, controls2Y))
-        ui.pushFont(ui.Font.Small)
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        ui.text("Ref Offset:")
-        ui.popStyleColor()
-        
-        ui.sameLine(80)
-        ui.pushItemWidth(150)
-        local newOffset = ui.slider("##refOffset", refPosOffset * 1000, -50, 50, "%.1f m")
-        if newOffset then
-            refPosOffset = newOffset / 1000  -- Convert back to position (0-1 scale)
-        end
-        ui.popItemWidth()
-        
-        ui.sameLine()
-        if ui.button("Reset", vec2(50, 0)) then
-            refPosOffset = 0
-        end
-        
-        -- Show current offset in meters
-        ui.sameLine()
-        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-        local trackLength = ui_utils.getTrackLength()
-        local offsetMeters = refPosOffset * trackLength
-        ui.text(string.format("(%.1f m / %.3f pos)", offsetMeters, refPosOffset))
-        ui.popStyleColor()
-        
-        ui.popFont()
-    end
+    -- Bottom bar height for ref offset slider
+    local bottomBarH = referenceLap and 28 or 0
 
-    -- Content area
-    local contentY = headerH + controlsH + controls2H + 8
-    local contentH = windowSize.y - contentY - 30
+    -- Content area (reserve space at bottom for ref offset slider)
+    local contentY = headerH + controlsH + 8
+    local contentH = windowSize.y - contentY - 30 - bottomBarH
     if contentH < 100 then return end
 
     -- Add 10px padding between traces (5 gaps for 6 traces)
@@ -1560,9 +1526,11 @@ function lap_telemetry.draw(dt, context)
          drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:speedAt(p) end, theme.trace.speed, theme.ghost.speed, 0, maxSpeed, "Speed", " kmh")
         y = y + traceH + tracePadding
 
-        -- Lateral G
-        drawLatGTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap)
-        y = y + traceH + tracePadding
+        -- Lateral G (optional)
+        if settings.telemetryShowLateralG() then
+            drawLatGTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap)
+            y = y + traceH + tracePadding
+        end
 
          -- Steering
          drawTimeTrace(graphX, y, graphW, traceH - 5, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:steeringAt(p) end, theme.trace.steering, theme.ghost.steering, 0, 1, "Steering", "")
@@ -1574,8 +1542,8 @@ function lap_telemetry.draw(dt, context)
             ui.drawRectFilled(vec2(cursorX - 3, contentY - 2), vec2(cursorX + 3, contentY + 2), theme.marker.cursor, 0)
         end
 
-        -- Time axis
-        drawTimeAxis(graphX, windowSize.y - 20, graphW, startTime, endTime)
+        -- Time axis (above bottom bar if present)
+        drawTimeAxis(graphX, windowSize.y - 20 - bottomBarH, graphW, startTime, endTime)
 
         -- Value display panel
         local panelX = windowSize.x - panelW - padding
@@ -1593,6 +1561,41 @@ function lap_telemetry.draw(dt, context)
         ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
         ui.text("Complete a lap to see telemetry")
         ui.popStyleColor()
+    end
+
+    -- Bottom bar: Reference offset slider (drawn at bottom of window)
+    if referenceLap then
+        local bottomY = windowSize.y - bottomBarH
+        ui.drawRectFilled(vec2(0, bottomY), vec2(windowSize.x, windowSize.y), theme.bg.header, 0)
+
+        ui.setCursor(vec2(padding, bottomY + 5))
+        ui.pushFont(ui.Font.Small)
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        ui.text("Ref Offset:")
+        ui.popStyleColor()
+
+        ui.sameLine(80)
+        ui.pushItemWidth(200)
+        local newOffset = ui.slider("##refOffset", refPosOffset * 1000, -50, 50, "%.1f m")
+        if newOffset then
+            refPosOffset = newOffset / 1000  -- Convert back to position (0-1 scale)
+        end
+        ui.popItemWidth()
+
+        ui.sameLine()
+        if ui.button("Reset", vec2(50, 0)) then
+            refPosOffset = 0
+        end
+
+        -- Show current offset in meters
+        ui.sameLine()
+        ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+        local trackLength = ui_utils.getTrackLength()
+        local offsetMeters = refPosOffset * trackLength
+        ui.text(string.format("(%.1f m / %.3f pos)", offsetMeters, refPosOffset))
+        ui.popStyleColor()
+
+        ui.popFont()
     end
 
     -- Lap picker popover (drawn last to be on top)
