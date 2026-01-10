@@ -119,7 +119,7 @@ theme.corner = {
 -- Marker lines
 theme.marker = {
     apex = rgbm(1, 1, 0, 1),                 -- Current apex
-    apexRef = rgbm(0.7, 0.7, 0.5, 0.6),      -- Reference apex
+    apexRef = rgbm(1, 1, 1, 0.8),            -- Reference apex (white, matches ref speed line)
     brake = rgbm(1, 0.2, 0.2, 1),            -- Current brake point
     brakeRef = rgbm(1, 0.4, 0.4, 0.6),       -- Reference brake
     lift = rgbm(0.2, 1, 0.2, 1),             -- Current lift point

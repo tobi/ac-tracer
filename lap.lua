@@ -752,7 +752,7 @@ function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
     if not self.pos then return nil end
     fullThrottleThreshold = fullThrottleThreshold or 0.98  -- 98% = full throttle
 
-    local GEAR_SHIFT_WINDOW = 5  -- Samples to ignore around gear shifts (~167ms at 30Hz)
+    local GEAR_SHIFT_WINDOW = 30  -- Samples to ignore around gear shifts (~0.5s at 60Hz)
 
     -- Helper to check if a gear shift occurred near index i
     local function isNearGearShift(i)

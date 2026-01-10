@@ -24,7 +24,7 @@ local STEERING_CENTER_THRESHOLD = 0.042  -- ~15°
 -- Live Corner Tracking State
 --------------------------------------------------------------------------------
 
-local GEAR_SHIFT_IGNORE_TIME = 0.15  -- Seconds to ignore throttle after gear shift
+local GEAR_SHIFT_IGNORE_TIME = 0.5  -- Seconds to ignore throttle around gear shifts (covers heel-toe blips)
 
 local liveCorner = {
     cornerNum = 0,
@@ -369,19 +369,50 @@ local function analyzeThrottleTiming(currentLap, refLap, data)
     if not data.refStartPos or not data.refEndPos then return nil end
 
     local THROTTLE_THRESHOLD = 0.9  -- Consider "on throttle" at 90%
+    local GEAR_SHIFT_WINDOW = 15    -- Samples to ignore around gear shifts (~0.5s at 30Hz)
+    local SUSTAINED_SAMPLES = 6     -- Require throttle to stay high for ~200ms to count
+
+    -- Helper to check if a gear shift occurred near index i in a lap
+    local function isNearGearShift(lapData, i)
+        if not lapData.gear or #lapData.gear < 2 then return false end
+        local currentGear = lapData.gear[i]
+        if not currentGear then return false end
+
+        -- Check samples before and after for gear changes
+        for j = math.max(1, i - GEAR_SHIFT_WINDOW), math.min(#lapData.gear, i + GEAR_SHIFT_WINDOW) do
+            if lapData.gear[j] and lapData.gear[j] ~= currentGear then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Helper to check if throttle is sustained (not just a blip)
+    local function isThrottleSustained(lapData, startIdx)
+        local count = 0
+        for i = startIdx, math.min(startIdx + SUSTAINED_SAMPLES - 1, #lapData.throttle) do
+            if lapData.throttle[i] and lapData.throttle[i] >= THROTTLE_THRESHOLD then
+                count = count + 1
+            end
+        end
+        return count >= SUSTAINED_SAMPLES
+    end
 
     -- Find throttle application point in current lap (after apex)
     local apexPos = data.currentApexPos or ((data.refStartPos + data.refEndPos) / 2)
     local currentThrottlePos = nil
     local refThrottlePos = nil
 
-    -- Search from apex to corner end for throttle application
+    -- Search from apex to corner end for sustained throttle application (ignoring gear shift blips)
     for i = 1, #currentLap.pos do
         local pos = currentLap.pos[i]
         if pos >= apexPos and pos <= data.refEndPos then
             if currentLap.throttle[i] and currentLap.throttle[i] >= THROTTLE_THRESHOLD then
-                currentThrottlePos = pos
-                break
+                -- Skip if this is near a gear shift (likely a blip for rev matching)
+                if not isNearGearShift(currentLap, i) and isThrottleSustained(currentLap, i) then
+                    currentThrottlePos = pos
+                    break
+                end
             end
         end
     end
@@ -390,8 +421,11 @@ local function analyzeThrottleTiming(currentLap, refLap, data)
         local pos = refLap.pos[i]
         if pos >= apexPos and pos <= data.refEndPos then
             if refLap.throttle[i] and refLap.throttle[i] >= THROTTLE_THRESHOLD then
-                refThrottlePos = pos
-                break
+                -- Skip if this is near a gear shift (likely a blip for rev matching)
+                if not isNearGearShift(refLap, i) and isThrottleSustained(refLap, i) then
+                    refThrottlePos = pos
+                    break
+                end
             end
         end
     end
@@ -1071,12 +1105,28 @@ local function drawDirectionArrows(x1, x2, y, color)
     ui.pathFillConvex(theme.withAlpha(color, 0.8))
 end
 
-local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
+local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
     if not currentSpeeds or #currentSpeeds < 2 then return end
     local startPos = currentSpeeds[1].pos
     local endPos = currentSpeeds[#currentSpeeds].pos
     local posRange = endPos - startPos
     if posRange <= 0 then posRange = 1 end
+
+    -- Calculate speed range for Y positioning (same as drawFilledComparison)
+    local minSpeed, maxSpeed = math.huge, 0
+    for i, s in ipairs(currentSpeeds) do
+        minSpeed = math.min(minSpeed, s.speed)
+        maxSpeed = math.max(maxSpeed, s.speed)
+        if refSpeeds and refSpeeds[i] then
+            minSpeed = math.min(minSpeed, refSpeeds[i].speed)
+            maxSpeed = math.max(maxSpeed, refSpeeds[i].speed)
+        end
+    end
+    local speedRange = maxSpeed - minSpeed
+    minSpeed = minSpeed - speedRange * 0.15
+    maxSpeed = maxSpeed + speedRange * 0.08
+    speedRange = maxSpeed - minSpeed
+    if speedRange <= 0 then speedRange = 1 end
 
     local function posToX(pos)
         if not pos then return nil end
@@ -1085,10 +1135,35 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         return nil
     end
 
-    -- Reference apex line (dashed yellow) - slowest speed point
+    local function speedToY(speed)
+        return y + h - ((speed - minSpeed) / speedRange) * h
+    end
+
+    -- Find reference speed at reference apex position
+    local function getRefSpeedAtPos(pos)
+        if not refSpeeds or #refSpeeds < 2 or not pos then return nil end
+        -- Find the index that corresponds to this position
+        for i, s in ipairs(refSpeeds) do
+            if math.abs(s.pos - pos) < 0.001 then
+                return s.speed
+            end
+        end
+        -- Interpolate if exact match not found
+        for i = 1, #refSpeeds - 1 do
+            if refSpeeds[i].pos <= pos and refSpeeds[i + 1].pos >= pos then
+                local t = (pos - refSpeeds[i].pos) / (refSpeeds[i + 1].pos - refSpeeds[i].pos)
+                return refSpeeds[i].speed + t * (refSpeeds[i + 1].speed - refSpeeds[i].speed)
+            end
+        end
+        return nil
+    end
+
+    -- Reference apex line (dashed yellow) - extends down to the white ref speed line
     local refApexX = posToX(data.refApexPos)
     if refApexX then
-        ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, y + h), theme.marker.apexRef, 2, 5, 3)
+        local refApexSpeed = getRefSpeedAtPos(data.refApexPos)
+        local lineEndY = refApexSpeed and speedToY(refApexSpeed) or (y + h)
+        ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, lineEndY), theme.marker.apexRef, 2, 5, 3)
     end
 
     -- Current apex line (solid yellow) - slowest speed point
@@ -1097,8 +1172,6 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
         ui.drawLine(vec2(curApexX, y), vec2(curApexX, y + h), theme.marker.apex, 3)
     end
 
-    -- Draw direction arrow at top border (between solid and dashed lines)
-    drawDirectionArrows(curApexX, refApexX, y, theme.marker.apex)
 end
 
 -- drawScoreGauge removed - now using wedge.drawGauge
@@ -1177,8 +1250,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
     local graphHeight = windowSize.y - padding - graphY - meterLabelHeight - pedalTraceHeight - pedalTracePadding
     
     -- Fixed layout constants
-    local topSectionH = 100  -- First 100px for delta time and score
-    local gaugeRadius = 25
+    local topSectionH = 46  -- Compact top section for score card
     local lineH = 18
 
     -- Right panel dimensions
@@ -1202,28 +1274,67 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         ui.drawRectFilled(vec2(panelX, panelTopY), vec2(panelX + panelW, panelTopY + panelH), theme.bg.panel, 4)
         ui.drawRect(vec2(panelX, panelTopY), vec2(panelX + panelW, panelTopY + panelH), theme.grid.major, 4, 1)
 
-        -- Top section: Delta time and Score gauge, evenly spaced and centered
-        local topCenterY = panelTopY + topSectionH / 2
-        local quarterW = panelW / 4
-
-        -- Delta time (centered in left half of right panel)
+        -- Unified score card (score + delta together) - compact design
+        local cardPadding = 6
+        local cardX = panelX + cardPadding
+        local cardY = panelTopY + cardPadding
+        local cardW = panelW - cardPadding * 2
+        local cardH = topSectionH - cardPadding * 2
+        
+        -- Determine colors based on score
+        local scoreColor, cardBg
+        if displayScore >= 80 then
+            scoreColor = theme.delta.positive
+            cardBg = rgbm(0.06, 0.15, 0.06, 0.9)
+        elseif displayScore >= 60 then
+            scoreColor = theme.score.fill
+            cardBg = rgbm(0.15, 0.12, 0.02, 0.9)
+        else
+            scoreColor = theme.delta.negative
+            cardBg = rgbm(0.15, 0.06, 0.06, 0.9)
+        end
+        
+        -- Card background
+        ui.drawRectFilled(vec2(cardX, cardY), vec2(cardX + cardW, cardY + cardH), cardBg, 6)
+        ui.drawRect(vec2(cardX, cardY), vec2(cardX + cardW, cardY + cardH), theme.withAlpha(scoreColor, 0.5), 6, 1)
+        
+        -- Score fill bar at bottom of card
+        local barH = 3
+        local barY = cardY + cardH - barH - 3
+        local barW = cardW - 12
+        local fillW = (displayScore / 100) * barW
+        ui.drawRectFilled(vec2(cardX + 6, barY), vec2(cardX + 6 + barW, barY + barH), theme.withAlpha(theme.score.bg, 0.3), 1)
+        if fillW > 0 then
+            ui.drawRectFilled(vec2(cardX + 6, barY), vec2(cardX + 6 + fillW, barY + barH), theme.withAlpha(scoreColor, 0.8), 1)
+        end
+        
+        -- Score (left side, smaller font)
+        local scoreText = tostring(math.floor(displayScore))
+        ui.pushFont(ui.Font.Title)
+        local scoreSize = ui.measureText(scoreText)
+        local scoreX = cardX + 8
+        local scoreY = cardY + (cardH - barH - 6 - scoreSize.y) / 2
+        ui.setCursor(vec2(scoreX, scoreY))
+        ui.pushStyleColor(ui.StyleColor.Text, scoreColor)
+        ui.text(scoreText)
+        ui.popStyleColor()
+        ui.popFont()
+        
+        -- Delta time (right side, smaller, vertically centered above bar)
         if displayData.timeDelta then
-            local deltaCenterX = panelX + quarterW
             local sign = displayData.timeDelta >= 0 and "+" or ""
             local deltaColor = displayData.timeDelta >= 0 and theme.delta.negative or theme.delta.positive
             local deltaText = string.format("%s%.2fs", sign, displayData.timeDelta)
-            ui.pushFont(ui.Font.Title)
-            local textSize = ui.measureText(deltaText)
-            ui.setCursor(vec2(deltaCenterX - textSize.x / 2, topCenterY - textSize.y / 2))
+            ui.pushFont(ui.Font.Small)
+            local deltaSize = ui.measureText(deltaText)
+            local deltaX = cardX + cardW - deltaSize.x - 8
+            local deltaY = cardY + (cardH - barH - 6 - deltaSize.y) / 2
+            ui.setCursor(vec2(deltaX, deltaY))
             ui.pushStyleColor(ui.StyleColor.Text, deltaColor)
             ui.text(deltaText)
             ui.popStyleColor()
             ui.popFont()
         end
-
-        -- Score gauge (centered in right half of right panel)
-        local gaugeCenterX = panelX + quarterW * 3
-        wedge.drawGauge(gaugeCenterX, topCenterY, gaugeRadius, displayScore)
 
         -- Header text
         ui.setCursor(vec2(padding, 4))
@@ -1249,19 +1360,19 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             outlineColor, 4, 2
         )
 
-        -- Draw marker lines FIRST (behind other graphics)
-        drawMarkerLines(
-            padding + 4, graphY + 4,
-            graphWidth - 8, graphHeight - 8,
-            displayData.currentSpeeds, displayData
-        )
-
-        -- Graph content (filled comparison on top of markers) - uses captured snapshot data
+        -- Graph content (filled comparison first, behind marker lines)
         drawFilledComparison(
             padding + 4, graphY + 4,
             graphWidth - 8, graphHeight - 8,
             displayData.currentSpeeds,
             displayData.refSpeeds
+        )
+
+        -- Draw marker lines AFTER filled comparison so they appear on top
+        drawMarkerLines(
+            padding + 4, graphY + 4,
+            graphWidth - 8, graphHeight - 8,
+            displayData.currentSpeeds, displayData.refSpeeds, displayData
         )
 
         -- Meter annotations at bottom
@@ -1360,46 +1471,99 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             return meters > 0 and theme.delta.positive or theme.delta.negative
         end
 
-        -- SPEED section header
-        ui.setCursor(vec2(panelInnerX, statsY))
-        ui_utils.textFont("Speed", ui.Font.Main, theme.text.primary)
-        statsY = statsY + 20
-        ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
+        -- Shared bar visualization helper
+        local barMaxSpeed = 15  -- Max delta shown (km/h)
+        local barMaxPos = 30    -- Max delta shown (meters)
+        local barTotalW = panelW - panelPadding * 2 - 4
+        local barH = 14
+        local barSpacing = 2
+        local labelW = 32
+        local valueW = 50  -- Width for value text with unit
+        
+        local function drawDeltaBar(label, delta, maxDelta, unit, invertColor)
+            if delta == nil then return end
+            
+            local barW = barTotalW - labelW - valueW - 8
+            local barStartX = panelInnerX + labelW + 4
+            local centerX = barStartX + barW / 2
+            
+            -- Label
+            ui.pushFont(ui.Font.Small)
+            ui.setCursor(vec2(panelInnerX, statsY + 1))
+            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+            ui.text(label)
+            ui.popStyleColor()
+            ui.popFont()
+            
+            -- Bar background
+            ui.drawRectFilled(
+                vec2(barStartX, statsY),
+                vec2(barStartX + barW, statsY + barH),
+                rgbm(0.15, 0.15, 0.15, 0.8), 2
+            )
+            
+            -- Center line
+            ui.drawRectFilled(
+                vec2(centerX - 0.5, statsY + 2),
+                vec2(centerX + 0.5, statsY + barH - 2),
+                rgbm(0.4, 0.4, 0.4, 0.6), 0
+            )
+            
+            -- Delta fill
+            if delta ~= 0 then
+                local normalized = math.clamp(math.abs(delta) / maxDelta, 0, 1)
+                local fillW = normalized * (barW / 2 - 2)
+                local isPositive = invertColor and (delta < 0) or (delta > 0)
+                local fillColor = isPositive and theme.delta.positive or theme.delta.negative
+                
+                if delta > 0 then
+                    ui.drawRectFilled(
+                        vec2(centerX, statsY + 2),
+                        vec2(centerX + fillW, statsY + barH - 2),
+                        fillColor, 1
+                    )
+                else
+                    ui.drawRectFilled(
+                        vec2(centerX - fillW, statsY + 2),
+                        vec2(centerX, statsY + barH - 2),
+                        fillColor, 1
+                    )
+                end
+            end
+            
+            -- Value text with unit (right side)
+            local sign = delta >= 0 and "+" or ""
+            local valueText = string.format("%s%.0f %s", sign, delta, unit)
+            local valueColor = delta > 0 and theme.delta.positive or (delta < 0 and theme.delta.negative or theme.text.muted)
+            if invertColor then
+                valueColor = delta < 0 and theme.delta.positive or (delta > 0 and theme.delta.negative or theme.text.muted)
+            end
+            ui.pushFont(ui.Font.Small)
+            ui.setCursor(vec2(barStartX + barW + 4, statsY + 1))
+            ui.pushStyleColor(ui.StyleColor.Text, valueColor)
+            ui.text(valueText)
+            ui.popStyleColor()
+            ui.popFont()
+            
+            statsY = statsY + barH + barSpacing
+        end
+        
+        -- SPEED section
+        drawDeltaBar("Entry", displayData.entrySpeedDelta, barMaxSpeed, "km/h", false)
+        drawDeltaBar("Apex", displayData.apexSpeedDelta, barMaxSpeed, "km/h", false)
+        drawDeltaBar("Exit", displayData.exitSpeedDelta, barMaxSpeed, "km/h", false)
+        
         statsY = statsY + 6
-
-        -- Speed deltas
-        local entryDelta = displayData.entrySpeedDelta
-        local apexDelta = displayData.apexSpeedDelta
-        local exitDelta = displayData.exitSpeedDelta
-
-        drawStatRow("Entry", entryDelta and ui_utils.speedDeltaDisplay(entryDelta, true) or "—", getSpeedDeltaColor(entryDelta))
-        drawStatRow("Apex", apexDelta and ui_utils.speedDeltaDisplay(apexDelta, true) or "—", getSpeedDeltaColor(apexDelta))
-        drawStatRow("Exit", exitDelta and ui_utils.speedDeltaDisplay(exitDelta, true) or "—", getSpeedDeltaColor(exitDelta))
-
-        statsY = statsY + 8
-
-        -- POSITION section header
-        ui.setCursor(vec2(panelInnerX, statsY))
-        ui_utils.textFont("Position", ui.Font.Main, theme.text.primary)
-        statsY = statsY + 20
-        ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
-        statsY = statsY + 6
-
-        -- Position deltas
+        
+        -- POSITION section (later = green for brake/lift, earlier = red)
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-
-        if brakeMeters then
-            local dir = brakeMeters >= 0 and "later" or "earlier"
-            drawStatRow("Brake", string.format("%.0fm %s", math.abs(brakeMeters), dir), getPositionDeltaColor(brakeMeters))
-        end
-        if liftOffMeters then
-            local dir = liftOffMeters >= 0 and "later" or "earlier"
-            drawStatRow("Lift", string.format("%.0fm %s", math.abs(liftOffMeters), dir), getPositionDeltaColor(liftOffMeters))
-        end
+        drawDeltaBar("Brake", brakeMeters, barMaxPos, "m", false)
+        drawDeltaBar("Lift", liftOffMeters, barMaxPos, "m", false)
+        
+        -- Apex position delta
         if displayData.currentApexPos and displayData.refApexPos then
             local apexMeters = (displayData.currentApexPos - displayData.refApexPos) * (ac.getSim().trackLengthM or 5000)
-            local dir = apexMeters >= 0 and "later" or "earlier"
-            drawStatRow("Apex", string.format("%.0fm %s", math.abs(apexMeters), dir), theme.text.primary)
+            drawDeltaBar("Apex", apexMeters, barMaxPos, "m", false)
         end
 
         -- Get lap data (use frozen lap data if viewing from telemetry, or displayLap for live)
@@ -1416,6 +1580,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
 
         -- NOTES section (only shown if there are significant observations)
         local notes = collectCornerNotes(displayData, liveLap, refLap)
+        local maxNotes = 3  -- Limit to prevent overflow
 
         -- Draw notes section if we have any valid notes
         if notes and #notes > 0 then
@@ -1424,18 +1589,19 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             for _, note in ipairs(notes) do
                 if note and note.text and note.text ~= "" then
                     table.insert(validNotes, note)
+                    if #validNotes >= maxNotes then break end  -- Limit notes
                 end
             end
 
             -- Only draw section if there are valid notes
             if #validNotes > 0 then
-                -- NOTES section header
+                statsY = statsY + 6
+                
+                -- Notes header
                 ui.setCursor(vec2(panelInnerX, statsY))
                 ui_utils.textFont("Notes", ui.Font.Main, theme.text.primary)
-                statsY = statsY + 20
-                ui.drawLine(vec2(panelX + 4, statsY), vec2(panelX + panelW - 4, statsY), theme.grid.line, 1)
-                statsY = statsY + 6
-
+                statsY = statsY + 18
+                
                 for _, note in ipairs(validNotes) do
                     drawNote(note)
                 end
