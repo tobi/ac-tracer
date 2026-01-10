@@ -40,6 +40,12 @@ state.cornerRecording = false
 state.cornerRecordStart = nil
 state.cornerRecordTime = nil
 
+-- Checkpoint system (session-only, not persisted)
+state.checkpoint = nil  -- { carState, lapSnapshot, pos, lapCount }
+local checkpointCallbacks = {}  -- Callbacks to notify on checkpoint load
+local isLoadingCheckpoint = false  -- Flag to prevent onCarJumped from discarding lap during our restore
+local lastCheckpointLoadTime = 0  -- Time when checkpoint was last loaded (for grace period)
+
 --------------------------------------------------------------------------------
 -- Constants
 --------------------------------------------------------------------------------
@@ -54,22 +60,6 @@ state.history = history_storage.laps
 -- Timing
 local sampleTimer = 0
 local initialized = false
-
--- TimeShift/Rewind detection
-local lastRewindTime = 0       -- os.preciseClock() when last rewind occurred
-local REWIND_GRACE_PERIOD = 1.0  -- Seconds to consider a jump as rewind-related
-local preRewindLapCount = 0    -- Lap count before entering rewind
-local preRewindPosition = 0    -- Spline position before entering rewind
-
--- Rewind callbacks - modules can register to be notified on rewind
-local rewindCallbacks = {}
-
--- Global time tracking (for rewind-aware timing)
-local sessionTime = 0          -- Accumulated session time (affected by rewind)
-local lastRawDt = 0            -- Last raw dt received
-local timeOffset = 0           -- Accumulated offset from rewinds
-local lastUpdateClock = 0      -- os.preciseClock() at last update
-local timeFrozen = false       -- True when time is frozen (car stopped, engine off)
 
 --------------------------------------------------------------------------------
 -- Storage Keys
@@ -742,78 +732,21 @@ function state.init(car)
     state.currentLap = lap.new(state.track, state.car, state.sessionId)
     state.currentLap.fuelLeftAtStart = car.fuel
 
-    -- Register TimeShift/rewind detection callback
-    -- This fires when the car teleports (including during rewind)
+    -- Register car jump callback
+    -- This fires when the car teleports (pit entry, reset, ESC to pits, etc.)
+    -- Skip if this is our own checkpoint restore
     ac.onCarJumped(0, function()
+        -- Skip if we're in the process of loading a checkpoint
+        -- Use a time-based grace period since the callback might fire slightly after
         local now = os.preciseClock()
-        local timeSinceLastRewind = now - lastRewindTime
-        local car = ac.getCar(0)
-        if not car then return end
-
-        -- If enough time has passed since last rewind, this is likely a teleport (pit, reset)
-        -- and we should discard the lap. But if it's within the grace period, it's a rewind
-        -- and we should prune data instead.
-        if timeSinceLastRewind > REWIND_GRACE_PERIOD then
-            -- Long gap = new teleport event, discard lap
-            discardCurrentLap()
-            ac.log("AC Tracer: Car jumped (teleport), discarding lap")
-        else
-            -- Short gap = rewind in progress
-            local carPos = car.splinePosition
-            local carLapCount = car.lapCount
-
-            -- Detect rewind past start/finish:
-            -- 1. Lap count decremented (most reliable)
-            -- 2. Position jumped from <0.2 to >0.8 (backwards over line)
-            local lapDecremented = carLapCount < preRewindLapCount
-            local positionJumpedBack = preRewindPosition < 0.2 and carPos > 0.8
-
-            local pruned = 0
-            if (lapDecremented or positionJumpedBack) and #state.history > 0 then
-                -- Pop the most recent lap from history
-                local restoredLap = table.remove(state.history, 1)
-                history_storage.laps = state.history  -- Keep in sync
-
-                -- Restore it as current lap and prune to current position
-                state.currentLap = restoredLap
-                state.currentLap.completed = false  -- No longer completed
-                pruned = state.currentLap:pruneToPosition(carPos)
-
-                -- Estimate time offset based on pruned samples (60Hz sample rate)
-                -- Also account for the time from the restored lap that was removed
-                local estimatedTimeOffset = pruned / lap.SAMPLE_RATE
-                if restoredLap.time and restoredLap.time > 0 then
-                    -- Add the full lap time that was "un-completed"
-                    estimatedTimeOffset = estimatedTimeOffset + (restoredLap.time / 1000)
-                end
-                state.applyTimeOffset(estimatedTimeOffset)
-
-                -- Update lap count to match
-                state.lapNumber = carLapCount
-
-                ac.log(string.format("AC Tracer: Rewind past start/finish (lap %d->%d), restored lap, pruned %d samples to pos %.3f",
-                    preRewindLapCount, carLapCount, pruned, carPos))
-            elseif state.currentLap then
-                -- Normal rewind within the lap
-                pruned = state.currentLap:pruneToPosition(carPos)
-                if pruned > 0 then
-                    -- Estimate and apply time offset based on pruned samples
-                    local estimatedTimeOffset = pruned / lap.SAMPLE_RATE
-                    state.applyTimeOffset(estimatedTimeOffset)
-
-                    ac.log(string.format("AC Tracer: Rewind detected, pruned %d samples to pos %.3f",
-                        pruned, carPos))
-                end
-            end
-            
-            -- Reset overlap tracking state (time-based detection breaks on rewind)
-            lap.resetOverlapTracking()
-            
-            -- Notify all registered rewind callbacks
-            notifyRewindCallbacks(carPos, pruned)
+        if isLoadingCheckpoint or (now - lastCheckpointLoadTime) < 0.5 then
+            ac.log("AC Tracer: Car jumped during checkpoint load - ignoring")
+            return
         end
 
-        lastRewindTime = now
+        -- Any external jump should discard current lap
+        discardCurrentLap()
+        ac.log("AC Tracer: Car jumped (teleport/reset), discarding lap")
     end)
 
     initialized = true
@@ -835,30 +768,8 @@ function state.update(dt, car)
 
     local sim = ac.getSim()
 
-    -- Skip if paused or in replay mode (TimeShift rewind)
-    if sim.isPaused then return end
-    if sim.isReplayActive then
-        -- During replay/rewind, track state so we can detect rewind past start/finish
-        lastRewindTime = os.preciseClock()
-        preRewindLapCount = car.lapCount
-        preRewindPosition = car.splinePosition
-        return
-    end
-
-    -- Update global time tracking
-    lastRawDt = dt
-
-    -- Optionally freeze time when car is stationary
-    local shouldFreezeTime = car.speedKmh < 1
-    if shouldFreezeTime then
-        timeFrozen = true
-        -- Don't increment sessionTime when frozen
-    else
-        timeFrozen = false
-        sessionTime = sessionTime + dt
-    end
-
-    lastUpdateClock = os.preciseClock()
+    -- Skip if paused or in replay mode
+    if sim.isPaused or sim.isReplayActive then return end
 
     -- Detect state for teleport/pit checks
     local inPit = car.isInPitlane or car.isInPit
@@ -913,10 +824,6 @@ function state.update(dt, car)
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
     -- Only if we didn't just complete a lap (lap number already updated above)
-    -- Also skip during rewind grace period to avoid false triggers
-    local now = os.preciseClock()
-    local inRewindGrace = (now - lastRewindTime) < REWIND_GRACE_PERIOD
-    
     local lapTimeReset = car.lapTimeMs < prevLapTimeMs - 1000 and car.lapTimeMs < 1000  -- Lap time went backwards significantly
     
     -- Entering pits (wasn't in pit, now in pit)
@@ -925,15 +832,13 @@ function state.update(dt, car)
     end
     
     -- Teleport detection (big position jump without crossing start/finish)
-    -- Skip during rewind grace period - rewind naturally causes position jumps
-    if bigPositionJump and not crossingStartFinish and not resetDetected and not inRewindGrace then
+    if bigPositionJump and not crossingStartFinish and not resetDetected then
         discardCurrentLap()
     end
     
     -- Session/lap reset detection: lap time went to 0 but lap count didn't increment
     -- This happens on session restart, ESC to pits, etc.
-    -- Skip during rewind grace period - lap time naturally goes backwards on rewind
-    if lapTimeReset and car.lapCount == state.lapNumber and not resetDetected and not inRewindGrace then
+    if lapTimeReset and car.lapCount == state.lapNumber and not resetDetected then
         discardCurrentLap()
     end
     
@@ -1094,68 +999,6 @@ end
 function state.getGhostApexInRange(startPos, endPos)
     if not state.bestLap then return nil, nil end
     return state.bestLap:findApex(startPos, endPos)
-end
-
---------------------------------------------------------------------------------
--- Time Management (rewind-aware)
---------------------------------------------------------------------------------
-
---- Get the current session time (affected by rewinds)
---- This time is continuous and doesn't jump backwards on rewind
----@return number Session time in seconds
-function state.time()
-    return sessionTime
-end
-
---- Get the last dt value (adjusted for any time corrections)
----@return number Delta time in seconds
-function state.dt()
-    return lastRawDt
-end
-
---- Check if time is currently frozen
----@return boolean
-function state.isTimeFrozen()
-    return timeFrozen
-end
-
---- Apply a time offset (used when rewind is detected)
---- This adjusts the session time backwards
----@param offset number Time to subtract (positive = rewind)
-function state.applyTimeOffset(offset)
-    timeOffset = timeOffset + offset
-    sessionTime = math.max(0, sessionTime - offset)
-    ac.log(string.format("AC Tracer: Applied time offset %.3fs, new sessionTime: %.3fs", offset, sessionTime))
-end
-
---- Reset time tracking (called on session change or major reset)
-function state.resetTime()
-    sessionTime = 0
-    lastRawDt = 0
-    timeOffset = 0
-    lastUpdateClock = os.preciseClock()
-    timeFrozen = false
-    ac.log("AC Tracer: Time tracking reset")
-end
-
---- Register a callback to be called when rewind is detected
---- Callback receives (targetPos, pruned) where targetPos is the position rewound to
---- and pruned is the number of samples removed from the current lap
----@param callback function Callback function(targetPos, pruned)
-function state.onRewind(callback)
-    if type(callback) == 'function' then
-        table.insert(rewindCallbacks, callback)
-    end
-end
-
---- Internal: notify all rewind callbacks
-local function notifyRewindCallbacks(targetPos, pruned)
-    for _, cb in ipairs(rewindCallbacks) do
-        local ok, err = pcall(cb, targetPos, pruned)
-        if not ok then
-            ac.log("AC Tracer: Rewind callback error: " .. tostring(err))
-        end
-    end
 end
 
 --------------------------------------------------------------------------------
@@ -1389,6 +1232,148 @@ end
 ---@return boolean
 function state.isRecordingCorner()
     return state.cornerRecording
+end
+
+--------------------------------------------------------------------------------
+-- Checkpoint System (Save/Load State)
+--------------------------------------------------------------------------------
+
+--- Register a callback to be called when checkpoint is loaded
+--- Callback receives (pos) where pos is the restored track position
+---@param callback function Callback function(pos)
+function state.onCheckpointLoad(callback)
+    if type(callback) == 'function' then
+        table.insert(checkpointCallbacks, callback)
+    end
+end
+
+--- Internal: notify all checkpoint callbacks
+local function notifyCheckpointCallbacks(pos)
+    for _, cb in ipairs(checkpointCallbacks) do
+        local ok, err = pcall(cb, pos)
+        if not ok then
+            ac.log("AC Tracer: Checkpoint callback error: " .. tostring(err))
+        end
+    end
+end
+
+--- Save current state as a checkpoint (async car state capture)
+--- Call this when save checkpoint button is pressed
+function state.saveCheckpoint()
+    if not ac.isCarResetAllowed() then
+        ac.log("AC Tracer: Cannot save checkpoint - car reset not allowed in this session")
+        return false
+    end
+
+    -- Capture car state asynchronously
+    ac.saveCarStateAsync(function(err, carStateBlob)
+        if err or not carStateBlob then
+            ac.log("AC Tracer: Failed to save car state: " .. tostring(err))
+            return
+        end
+
+        local car = ac.getCar(0)
+        if not car then return end
+
+        -- Store checkpoint data
+        state.checkpoint = {
+            carState = carStateBlob,
+            lapSnapshot = state.currentLap and state.currentLap:clone() or nil,
+            pos = car.splinePosition,
+            lapCount = car.lapCount,
+        }
+
+        ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f, lap %d",
+            state.checkpoint.pos, state.checkpoint.lapCount))
+    end)
+
+    return true
+end
+
+--- Load checkpoint and restore state
+--- Call this when load checkpoint button is pressed
+---@return boolean success True if checkpoint was loaded
+function state.loadCheckpoint()
+    if not state.checkpoint then
+        ac.log("AC Tracer: No checkpoint to load")
+        return false
+    end
+
+    if not ac.isCarResetAllowed() then
+        ac.log("AC Tracer: Cannot load checkpoint - car reset not allowed in this session")
+        return false
+    end
+
+    -- Set flags to prevent onCarJumped from discarding our restored state
+    isLoadingCheckpoint = true
+    lastCheckpointLoadTime = os.preciseClock()
+
+    local carState = state.checkpoint.carState
+
+    -- Restore car state using TimeShift-style API
+    -- ac.loadCarState(state0, state1, interpolation, flags)
+    -- With same state for both and interpolation=0, this is a point restore
+    -- Flag 30 is used by TimeShift (seems to work best)
+    ac.loadCarState(carState, carState, 0, 30)
+
+    -- Clear the flag
+    isLoadingCheckpoint = false
+
+    -- Restore plugin state
+    if state.checkpoint.lapSnapshot then
+        state.currentLap = state.checkpoint.lapSnapshot:clone()
+    end
+
+    -- Update lap tracking
+    state.lapNumber = state.checkpoint.lapCount
+    state.trackPosition = state.checkpoint.pos
+
+    -- Reset overlap tracking
+    lap.resetOverlapTracking()
+
+    -- Notify registered callbacks (corner_analysis, etc.)
+    notifyCheckpointCallbacks(state.checkpoint.pos)
+
+    ac.log(string.format("AC Tracer: Checkpoint loaded at pos %.3f, lap %d",
+        state.checkpoint.pos, state.checkpoint.lapCount))
+
+    return true
+end
+
+--- Check if a checkpoint exists
+---@return boolean
+function state.hasCheckpoint()
+    return state.checkpoint ~= nil and state.checkpoint.carState ~= nil
+end
+
+--- Clear the current checkpoint
+function state.clearCheckpoint()
+    state.checkpoint = nil
+    ac.log("AC Tracer: Checkpoint cleared")
+end
+
+--- Set trace history snapshot for checkpoint (called from ac-tracer.lua)
+---@param traceHistory table The trace history to snapshot
+function state.setCheckpointTraceHistory(traceHistory)
+    if state.checkpoint then
+        -- Deep copy trace history
+        state.checkpoint.traceSnapshot = {}
+        for field, arr in pairs(traceHistory) do
+            state.checkpoint.traceSnapshot[field] = {}
+            for i = 1, #arr do
+                state.checkpoint.traceSnapshot[field][i] = arr[i]
+            end
+        end
+    end
+end
+
+--- Get trace history snapshot from checkpoint
+---@return table|nil The trace history snapshot, or nil if no checkpoint
+function state.getCheckpointTraceHistory()
+    if state.checkpoint and state.checkpoint.traceSnapshot then
+        return state.checkpoint.traceSnapshot
+    end
+    return nil
 end
 
 --------------------------------------------------------------------------------

@@ -26,98 +26,6 @@ local overlapStartTime = nil
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
 
--- Prune trace history to a specific position (for rewind support)
-local function pruneHistoryToPosition(targetPos)
-    if not history.pos or #history.pos == 0 then return 0 end
-    
-    -- Find the last sample at or before targetPos
-    -- Handle wrap-around: if we're at 0.95 and history has 0.01, 0.02..., prune all
-    local pruneIdx = nil
-    local n = #history.pos
-    
-    -- Check if history wraps around
-    local hasWrapAround = false
-    local wrapIdx = nil
-    for i = 1, n - 1 do
-        if history.pos[i] > 0.9 and history.pos[i + 1] < 0.1 then
-            hasWrapAround = true
-            wrapIdx = i
-            break
-        end
-    end
-    
-    if hasWrapAround and wrapIdx then
-        if targetPos > 0.5 then
-            -- Target before wrap
-            for i = wrapIdx, 1, -1 do
-                if history.pos[i] <= targetPos then
-                    pruneIdx = i
-                    break
-                end
-            end
-        else
-            -- Target after wrap
-            for i = n, wrapIdx + 1, -1 do
-                if history.pos[i] <= targetPos then
-                    pruneIdx = i
-                    break
-                end
-            end
-            if not pruneIdx then
-                pruneIdx = wrapIdx
-            end
-        end
-    else
-        -- Simple case: no wrap-around
-        for i = n, 1, -1 do
-            if history.pos[i] <= targetPos then
-                pruneIdx = i
-                break
-            end
-        end
-    end
-    
-    if not pruneIdx then
-        -- Clear everything
-        pruneIdx = 0
-    end
-    
-    local originalLength = n
-    local samplesToRemove = originalLength - pruneIdx
-    
-    if samplesToRemove <= 0 then return 0 end
-    
-    -- Prune all arrays
-    local arrays = {'throttle', 'brake', 'clutch', 'steering', 'speed', 'gear', 'pos', 'flags'}
-    for _, field in ipairs(arrays) do
-        if history[field] then
-            for i = originalLength, pruneIdx + 1, -1 do
-                history[field][i] = nil
-            end
-        end
-    end
-    
-    return samplesToRemove
-end
-
--- Register rewind callbacks with state module
-state.onRewind(function(targetPos, pruned)
-    -- Reset delta bar smoothing
-    delta_bar.reset()
-    
-    -- Reset corner analysis live state
-    corner_analysis.reset()
-    
-    -- Prune trace history
-    local historyPruned = pruneHistoryToPosition(targetPos)
-    
-    -- Reset overlap tracking for trace display
-    overlapStartTime = nil
-    
-    ac.log(string.format("AC Tracer: Rewind callback - pruned %d history samples to pos %.3f", 
-        historyPruned, targetPos))
-end)
-
 local function updateHistory(car)
     local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
     
@@ -187,6 +95,44 @@ function script.update(dt)
 
     -- Skip all updates during pause or replay (TimeShift rewind)
     if sim.isPaused or sim.isReplayActive then return end
+
+    -- Checkpoint keybind polling (check before state update)
+    if settings.checkpointEnabled() then
+        local saveButton = settings.getSaveCheckpointButton()
+        local loadButton = settings.getLoadCheckpointButton()
+
+        -- Save checkpoint on button press
+        if saveButton:pressed() then
+            if state.saveCheckpoint() then
+                -- Store trace history snapshot after car state is saved (async callback)
+                -- We set it directly here since saveCheckpoint is async
+                state.setCheckpointTraceHistory(history)
+            end
+        end
+
+        -- Load checkpoint on button press
+        if loadButton:pressed() and state.hasCheckpoint() then
+            if state.loadCheckpoint() then
+                -- Restore trace history from checkpoint snapshot
+                local traceSnapshot = state.getCheckpointTraceHistory()
+                if traceSnapshot then
+                    -- Deep copy snapshot back into history
+                    for field, arr in pairs(traceSnapshot) do
+                        history[field] = {}
+                        for i = 1, #arr do
+                            history[field][i] = arr[i]
+                        end
+                    end
+                end
+
+                -- Reset delta bar smoothing
+                delta_bar.reset()
+
+                -- Reset overlap tracking
+                overlapStartTime = nil
+            end
+        end
+    end
 
     -- Update centralized state (handles lap recording, completion, best lap)
     state.update(dt, currentCar)

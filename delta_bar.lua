@@ -59,8 +59,12 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
-            if currentLap and referenceLap and currentPos then
-                lastDelta = currentLap:getDeltaVs(referenceLap, currentPos)
+            if referenceLap and currentPos then
+                -- Use live car.lapTimeMs for delta calculation (always accurate after checkpoint restore)
+                -- This bypasses stored lap.times[] which can become stale after teleport
+                local currentTimeS = car.lapTimeMs / 1000
+                local refTimeS = referenceLap:getTimeAtPos(currentPos)
+                lastDelta = currentTimeS - (refTimeS or currentTimeS)
             else
                 lastDelta = 0
             end
@@ -79,7 +83,7 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     smoothedBarWidth = smoothedBarWidth + (targetFillWidth - smoothedBarWidth) * config.barSmoothing
 
     -- Color based on delta time
-    -- Green at 0.0 or better (ahead), gradient through yellow to red over 0.2s behind
+    -- Green at 0.0 (even/ahead), direct gradient to red when behind
     local barColor, textColor
     local hasRef = referenceLap and referenceLap:length() > 10
     if not hasRef then
@@ -94,31 +98,16 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
         barColor = theme.delta.negative
         textColor = theme.delta.negative
     else
-        -- Gradient from green → yellow → red (avoids gray)
+        -- Direct gradient from green to red (0 to 0.2s behind)
         local t = smoothedDelta / 0.2  -- 0 to 1
         local green = theme.delta.positive
-        local yellow = rgbm(1, 0.85, 0.2, 1)  -- Bright yellow midpoint
         local red = theme.delta.negative
-        
-        if t < 0.5 then
-            -- Green to yellow (0 to 0.5)
-            local t2 = t * 2  -- 0 to 1
-            barColor = rgbm(
-                green.r + (yellow.r - green.r) * t2,
-                green.g + (yellow.g - green.g) * t2,
-                green.b + (yellow.b - green.b) * t2,
-                1
-            )
-        else
-            -- Yellow to red (0.5 to 1)
-            local t2 = (t - 0.5) * 2  -- 0 to 1
-            barColor = rgbm(
-                yellow.r + (red.r - yellow.r) * t2,
-                yellow.g + (red.g - yellow.g) * t2,
-                yellow.b + (red.b - yellow.b) * t2,
-                1
-            )
-        end
+        barColor = rgbm(
+            green.r + (red.r - green.r) * t,
+            green.g + (red.g - green.g) * t,
+            green.b + (red.b - green.b) * t,
+            1
+        )
         textColor = barColor
     end
 
@@ -259,14 +248,12 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     local sign = displayDelta >= 0 and "+" or ""
     local deltaText = hasRef and string.format("%s%.2f", sign, displayDelta) or "NO REF"
 
-    ui.pushFont(ui.Font.Monospace)
-    -- Scale font up ~2pt (1.15x larger)
-    ui.setNextTextFontScale(1.15)
+    ui.pushFont(ui.Font.Title)
     local deltaSize = ui.measureText(deltaText)
     local boxPadX = 14
     local boxPadY = 6
-    local boxW = deltaSize.x * 1.15 + boxPadX * 2  -- Account for scale in box width
-    local boxH = deltaSize.y * 1.15 + boxPadY * 2  -- Account for scale in box height
+    local boxW = deltaSize.x + boxPadX * 2
+    local boxH = deltaSize.y + boxPadY * 2
     local boxX = centerX - boxW / 2
     local boxY = bottomBoxY
 
@@ -277,8 +264,7 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
         rgbm(0.08, 0.08, 0.12, 0.95), 8
     )
 
-    -- Delta text (scaled up)
-    ui.setNextTextFontScale(1.15)
+    -- Delta text
     ui.setCursor(vec2(boxX + boxPadX, boxY + boxPadY))
     ui.pushStyleColor(ui.StyleColor.Text, textColor)
     ui.text(deltaText)

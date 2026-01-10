@@ -1139,37 +1139,39 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
         return y + h - ((speed - minSpeed) / speedRange) * h
     end
 
-    -- Find reference speed at reference apex position
-    local function getRefSpeedAtPos(pos)
-        if not refSpeeds or #refSpeeds < 2 or not pos then return nil end
+    -- Find speed at a position from a speed array
+    local function getSpeedAtPos(speeds, pos)
+        if not speeds or #speeds < 2 or not pos then return nil end
         -- Find the index that corresponds to this position
-        for i, s in ipairs(refSpeeds) do
+        for i, s in ipairs(speeds) do
             if math.abs(s.pos - pos) < 0.001 then
                 return s.speed
             end
         end
         -- Interpolate if exact match not found
-        for i = 1, #refSpeeds - 1 do
-            if refSpeeds[i].pos <= pos and refSpeeds[i + 1].pos >= pos then
-                local t = (pos - refSpeeds[i].pos) / (refSpeeds[i + 1].pos - refSpeeds[i].pos)
-                return refSpeeds[i].speed + t * (refSpeeds[i + 1].speed - refSpeeds[i].speed)
+        for i = 1, #speeds - 1 do
+            if speeds[i].pos <= pos and speeds[i + 1].pos >= pos then
+                local t = (pos - speeds[i].pos) / (speeds[i + 1].pos - speeds[i].pos)
+                return speeds[i].speed + t * (speeds[i + 1].speed - speeds[i].speed)
             end
         end
         return nil
     end
 
-    -- Reference apex line (dashed yellow) - extends down to the white ref speed line
+    -- Reference apex line (dashed white) - extends down to the ref speed line
     local refApexX = posToX(data.refApexPos)
     if refApexX then
-        local refApexSpeed = getRefSpeedAtPos(data.refApexPos)
+        local refApexSpeed = getSpeedAtPos(refSpeeds, data.refApexPos)
         local lineEndY = refApexSpeed and speedToY(refApexSpeed) or (y + h)
         ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, lineEndY), theme.marker.apexRef, 2, 5, 3)
     end
 
-    -- Current apex line (solid yellow) - slowest speed point
+    -- Current apex line (solid white) - extends down to the current speed line
     local curApexX = posToX(data.currentApexPos)
     if curApexX then
-        ui.drawLine(vec2(curApexX, y), vec2(curApexX, y + h), theme.marker.apex, 3)
+        local curApexSpeed = getSpeedAtPos(currentSpeeds, data.currentApexPos)
+        local lineEndY = curApexSpeed and speedToY(curApexSpeed) or (y + h)
+        ui.drawLine(vec2(curApexX, y), vec2(curApexX, lineEndY), theme.text.primary, 3)
     end
 
 end
@@ -1652,10 +1654,32 @@ function corner_analysis.reset()
     recentCornerScores = {}
 end
 
+--- Handle checkpoint load: keep display frozen but reset live tracking
+--- Called when user loads a checkpoint (teleports back to saved position)
+function corner_analysis.onCheckpointLoad(pos)
+    -- Keep displayData frozen (shows last corner result)
+    -- Reset live corner tracking state
+    resetLiveCorner()
+    -- Clear recent corner scores (they're now invalid since we teleported)
+    recentCornerScores = {}
+    -- Clear frozen corner state if any
+    corner_analysis.clearFrozenCorner()
+
+    ac.log(string.format("AC Tracer: Corner analysis reset for checkpoint at pos %.3f", pos or 0))
+end
+
 --- Get recent corner scores (for delta bar display)
 ---@return table Array of {cornerNum, score, lapNumber}
 function corner_analysis.getRecentCornerScores()
     return recentCornerScores
 end
+
+--------------------------------------------------------------------------------
+-- Module Initialization
+--------------------------------------------------------------------------------
+
+-- Register checkpoint callback with state module
+local state = require('state')
+state.onCheckpointLoad(corner_analysis.onCheckpointLoad)
 
 return corner_analysis
