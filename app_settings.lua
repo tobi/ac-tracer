@@ -17,6 +17,25 @@ end
 local M = {}
 
 --------------------------------------------------------------------------------
+-- Checkpoint Keybinds (using ac.ControlButton for configurable keys)
+--------------------------------------------------------------------------------
+
+local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
+local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
+
+--- Get the save checkpoint button (for polling in main loop)
+---@return ac.ControlButton
+function M.getSaveCheckpointButton()
+    return saveCheckpointButton
+end
+
+--- Get the load checkpoint button (for polling in main loop)
+---@return ac.ControlButton
+function M.getLoadCheckpointButton()
+    return loadCheckpointButton
+end
+
+--------------------------------------------------------------------------------
 -- Persistent Config (ac.storage auto-saves on assignment)
 --------------------------------------------------------------------------------
 
@@ -53,6 +72,9 @@ local config = ac.storage({
     brakeThreshold = 5,        -- bar - when to consider "braking"
     throttleThreshold = 0.98,  -- 0-1 - when to consider "full throttle"
     speedDropThreshold = 0.05, -- fraction - corner detection sensitivity
+
+    -- Checkpoint system
+    checkpointEnabled = true,  -- Enable/disable checkpoint save/load
 }, "ac_tracer/")
 
 --------------------------------------------------------------------------------
@@ -86,6 +108,9 @@ function M.telemetryAutoHideSpeed() return config.telemetryAutoHideSpeed end
 function M.brakeThreshold() return config.brakeThreshold end
 function M.throttleThreshold() return config.throttleThreshold end
 function M.speedDropThreshold() return config.speedDropThreshold end
+
+-- Checkpoint system
+function M.checkpointEnabled() return config.checkpointEnabled end
 
 --------------------------------------------------------------------------------
 -- Flag Marker Accessors
@@ -248,6 +273,33 @@ function M.windowSettings()
     end
     ui.sameLine()
     ui.text(config.useKMH and "km/h" or "mph")
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- CHECKPOINT section
+    sectionHeader("CHECKPOINT (Practice Rewind)")
+    
+    if ui.checkbox("Enable checkpoint system", config.checkpointEnabled) then
+        config.checkpointEnabled = not config.checkpointEnabled
+    end
+    
+    if config.checkpointEnabled then
+        ui.offsetCursorY(4)
+        ui.text("Save:")
+        ui.sameLine(50)
+        saveCheckpointButton:control(vec2(120, 0))
+        
+        ui.text("Load:")
+        ui.sameLine(50)
+        loadCheckpointButton:control(vec2(120, 0))
+        
+        ui.offsetCursorY(2)
+        ui.pushFont(ui.Font.Small)
+        ui.textColored("Press Save to capture position, Load to teleport back.", theme.text.muted)
+        ui.popFont()
+    end
     
     ui.offsetCursorY(10)
     ui.separator()

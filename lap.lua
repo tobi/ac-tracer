@@ -1217,6 +1217,77 @@ function lap.deserialize(data)
 end
 
 --------------------------------------------------------------------------------
+-- Cloning (for checkpoint snapshots)
+--------------------------------------------------------------------------------
+
+--- Helper to deep copy an array
+local function copyArray(arr)
+    if not arr then return {} end
+    local copy = {}
+    for i = 1, #arr do
+        copy[i] = arr[i]
+    end
+    return copy
+end
+
+--- Helper to deep copy sparse data
+local function copySparse(sparse)
+    if not sparse then return nil end
+    local copy = {}
+    for field, list in pairs(sparse) do
+        copy[field] = {}
+        for i = 1, #list do
+            copy[field][i] = { list[i][1], list[i][2] }
+        end
+    end
+    return copy
+end
+
+--- Create a deep copy of this lap (for checkpoint snapshots)
+--- This is more efficient than serialize/deserialize for in-memory cloning
+---@return table New lap instance with copied data
+function lap:clone()
+    local l = lap.new(self.track, self.car, self.sessionId)
+    
+    -- Copy metadata
+    l.completed = self.completed
+    l.valid = self.valid
+    l.time = self.time
+    l.fuelLeftAtStart = self.fuelLeftAtStart
+    l.lapNumberInSession = self.lapNumberInSession
+    l.csvSource = self.csvSource
+    
+    -- Deep copy telemetry arrays
+    l.throttle = copyArray(self.throttle)
+    l.brake = copyArray(self.brake)
+    l.brake_r = copyArray(self.brake_r)
+    l.clutch = copyArray(self.clutch)
+    l.steering = copyArray(self.steering)
+    l.speed = copyArray(self.speed)
+    l.gear = copyArray(self.gear)
+    l.pos = copyArray(self.pos)
+    l.times = copyArray(self.times)
+    l.fuel = copyArray(self.fuel)
+    l.flags = copyArray(self.flags)
+    
+    -- Deep copy gforce vectors
+    l.gforce = {}
+    if self.gforce then
+        for i = 1, #self.gforce do
+            local g = self.gforce[i]
+            if g then
+                l.gforce[i] = vec3(g.x, g.y, g.z)
+            end
+        end
+    end
+    
+    -- Deep copy sparse channels
+    l.sparse = copySparse(self.sparse)
+    
+    return l
+end
+
+--------------------------------------------------------------------------------
 -- Validation
 --------------------------------------------------------------------------------
 
