@@ -2,6 +2,8 @@
 -- Shows lap time, delta vs reference lap with color-coded bar
 
 local theme = require('theme')
+local corner_analysis = require('corner_analysis')
+local wedge = require('wedge')
 
 local delta_bar = {}
 
@@ -41,7 +43,8 @@ local lastDelta = 0
 ---@param currentLap table Current lap data
 ---@param referenceLap table Reference lap data
 ---@param currentPos number Current spline position
-function delta_bar.draw(dt, currentLap, referenceLap, currentPos)
+---@param corners table|nil Array of corner definitions (to know total corner count)
+function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     local car = ac.getCar(0)
     if not car then return end
 
@@ -121,7 +124,9 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos)
 
     -- Layout
     local topRowY = 4
-    local barY = lapCompleteTimer > 0 and 28 or 8  -- Move bar up when no lap time shown
+    local cornerScoresHeight = 20  -- Height for corner score wedges (including spacing)
+    local wedgeY = lapCompleteTimer > 0 and 30 or 8  -- Y position for wedges
+    local barY = wedgeY + cornerScoresHeight  -- Bar starts below wedges
     local bottomBoxY = barY + config.barHeight + 6
 
     ----------------------------------------
@@ -170,6 +175,35 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos)
     end
 
     ----------------------------------------
+    -- Corner score wedges (above bar)
+    -- Positioned by corner number: first corner on left, last on right
+    ----------------------------------------
+    local recentScores = corner_analysis.getRecentCornerScores()
+    local numCorners = corners and #corners or 0
+    
+    if recentScores and #recentScores > 0 and numCorners > 0 then
+        local wedgeWidth = 24   -- Larger width for visibility
+        local wedgeHeight = 16  -- Height for score text
+        local availableWidth = windowSize.x - padding * 2 - wedgeWidth  -- Leave room for wedge width
+        
+        -- Build a lookup of scores by corner number
+        local scoreByCorner = {}
+        for _, scoreData in ipairs(recentScores) do
+            if scoreData and scoreData.cornerNum and scoreData.score then
+                scoreByCorner[scoreData.cornerNum] = scoreData.score
+            end
+        end
+        
+        -- Draw wedges at their corner positions
+        for cornerNum, score in pairs(scoreByCorner) do
+            -- Position: cornerNum 1 = left edge, cornerNum N = right edge
+            local t = numCorners > 1 and ((cornerNum - 1) / (numCorners - 1)) or 0.5
+            local wedgeX = padding + t * availableWidth
+            wedge.drawCompact(wedgeX, wedgeY, wedgeWidth, wedgeHeight, score)
+        end
+    end
+
+    ----------------------------------------
     -- Middle: Dark bar with fill
     ----------------------------------------
     local barLeft = padding
@@ -214,10 +248,10 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos)
     local sign = displayDelta >= 0 and "+" or ""
     local deltaText = hasRef and string.format("%s%.2f", sign, displayDelta) or "NO REF"
 
-    ui.pushFont(ui.Font.Title)
+    ui.pushFont(ui.Font.Monospace)
     local deltaSize = ui.measureText(deltaText)
-    local boxPadX = 16
-    local boxPadY = 4
+    local boxPadX = 14
+    local boxPadY = 6
     local boxW = deltaSize.x + boxPadX * 2
     local boxH = deltaSize.y + boxPadY * 2
     local boxX = centerX - boxW / 2

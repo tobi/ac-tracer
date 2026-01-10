@@ -141,16 +141,16 @@ _G.mock = mock
 -- Run test files
 local test_files = { ... }
 if #test_files == 0 then
-    -- Default: run all test_*.lua files in tests/ (excluding test_runner.lua)
-    local handle = io.popen('ls tests/test_*.lua 2>/dev/null')
-    if handle then
-        for file in handle:lines() do
-            if not file:match("test_runner%.lua$") then
-                table.insert(test_files, file)
-            end
-        end
-        handle:close()
-    end
+    -- Default test files (no shell commands - works everywhere)
+    test_files = {
+        "tests/test_lap.lua",
+        "tests/test_csv_loading.lua",
+        "tests/test_corner_detection.lua",
+        "tests/test_corner_notes.lua",
+        "tests/test_scoring.lua",
+        "tests/test_settings.lua",
+        "tests/test_ui_utils.lua",
+    }
 end
 
 print("AC Tracer Test Runner")

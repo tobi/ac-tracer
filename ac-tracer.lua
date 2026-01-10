@@ -646,5 +646,5 @@ function script.windowReferenceLap(dt)
 end
 
 function script.windowDelta(dt)
-    delta_bar.draw(dt, state.currentLap, state.bestLap, state.trackPosition)
+    delta_bar.draw(dt, state.currentLap, state.bestLap, state.trackPosition, state.trackCorners)
 end

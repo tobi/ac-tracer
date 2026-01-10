@@ -7,6 +7,7 @@ local settings = require('app_settings')
 local extended_brake = require('extended-brake')
 local theme = require('theme')
 local ui_utils = require('ui_utils')
+local wedge = require('wedge')
 
 local corner_analysis = {}
 
@@ -57,6 +58,11 @@ local currentLapTime = 0
 local displayData = nil
 local displayScore = 0
 local displayLap = nil      -- The lap data at time of corner exit (for flag analysis)
+
+-- Recent corner scores (for delta bar display)
+-- Array of {cornerNum, score, lapNumber}, max 10 entries
+local recentCornerScores = {}
+local MAX_RECENT_SCORES = 10
 
 -- Frozen corner state (when viewing from telemetry)
 local frozenCorner = {
@@ -696,7 +702,7 @@ captureRefSpeeds = function(referenceLap, positions)
     return refSpeeds
 end
 
-local function onCornerExit(currentLap, referenceLap)
+local function onCornerExit(currentLap, referenceLap, car)
     if liveCorner.cornerNum == 0 then return end
 
     local cornerInfo = liveCorner.cornerInfo
@@ -722,7 +728,7 @@ local function onCornerExit(currentLap, referenceLap)
     local currentSpeeds = (#liveCorner.speeds >= 2) and liveCorner.speeds or nil
     local refSpeeds = currentSpeeds and captureRefSpeeds(referenceLap, currentSpeeds) or nil
 
-    corner_analysis.compare(cornerInfo, currentLap, referenceLap, {
+    local _, score = corner_analysis.compare(cornerInfo, currentLap, referenceLap, {
         currentSpeeds = currentSpeeds,
         refSpeeds = refSpeeds,
         timeDeltaOverride = timeDelta,
@@ -731,6 +737,21 @@ local function onCornerExit(currentLap, referenceLap)
     -- Store snapshot of current lap for flag analysis (notes section)
     -- Note: This is still a reference, but flags don't change after capture
     displayLap = currentLap
+    
+    -- Store corner score with lap number for delta bar display
+    if score and cornerInfo.number then
+        local lapNumber = car and car.lapCount or (currentLap and currentLap.lapNumberInSession) or 0
+        table.insert(recentCornerScores, 1, {
+            cornerNum = cornerInfo.number,
+            score = score,
+            lapNumber = lapNumber
+        })
+        
+        -- Keep only recent scores (oldest first, so we remove from end)
+        while #recentCornerScores > MAX_RECENT_SCORES do
+            table.remove(recentCornerScores)
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -758,6 +779,13 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
         displayData = nil
         displayScore = 0
         displayLap = nil
+        -- Clear corner scores from previous laps (keep only current lap scores)
+        -- Remove scores that are from laps before the current one
+        for i = #recentCornerScores, 1, -1 do
+            if recentCornerScores[i].lapNumber < car.lapCount then
+                table.remove(recentCornerScores, i)
+            end
+        end
     end
     
     currentLapTime = car.lapTimeMs / 1000
@@ -868,7 +896,7 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     
     -- Detect corner exit
     if wasInCorner and liveCorner.leftCorner then
-        onCornerExit(currentLap, referenceLap)
+        onCornerExit(currentLap, referenceLap, car)
     end
 end
 
@@ -1073,40 +1101,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, data)
     drawDirectionArrows(curApexX, refApexX, y, theme.marker.apex)
 end
 
-local function drawScoreGauge(cx, cy, radius, score)
-    local startAngle = math.rad(-225)
-    local endAngle = math.rad(45)
-    local totalArc = endAngle - startAngle
-    local segments = 32
-    ui.pathClear()
-    for i = 0, segments do
-        local angle = startAngle + (i / segments) * totalArc
-        local px = cx + math.cos(angle) * radius
-        local py = cy + math.sin(angle) * radius
-        ui.pathLineTo(vec2(px, py))
-    end
-    ui.pathStroke(theme.score.bg, false, 8)
-
-    local scoreAngle = startAngle + (score / 100) * totalArc
-    ui.pathClear()
-    for i = 0, segments do
-        local angle = startAngle + (i / segments) * (scoreAngle - startAngle)
-        if angle > scoreAngle then break end
-        local px = cx + math.cos(angle) * radius
-        local py = cy + math.sin(angle) * radius
-        ui.pathLineTo(vec2(px, py))
-    end
-    ui.pathStroke(theme.score.fill, false, 8)
-
-    ui.pushFont(ui.Font.Title)
-    local scoreText = tostring(math.floor(score))
-    local textWidth = ui.measureText(scoreText).x
-    ui.setCursor(vec2(cx - textWidth / 2, cy - 12))
-    ui.pushStyleColor(ui.StyleColor.Text, theme.score.fill)
-    ui.text(scoreText)
-    ui.popStyleColor()
-    ui.popFont()
-end
+-- drawScoreGauge removed - now using wedge.drawGauge
 
 --- Draw brake/throttle traces for a corner using captured pedal data
 local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
@@ -1228,7 +1223,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
 
         -- Score gauge (centered in right half of right panel)
         local gaugeCenterX = panelX + quarterW * 3
-        drawScoreGauge(gaugeCenterX, topCenterY, gaugeRadius, displayScore)
+        wedge.drawGauge(gaugeCenterX, topCenterY, gaugeRadius, displayScore)
 
         -- Header text
         ui.setCursor(vec2(padding, 4))
@@ -1488,6 +1483,13 @@ function corner_analysis.reset()
     displayLap = nil
     resetLiveCorner()
     corner_analysis.clearFrozenCorner()
+    recentCornerScores = {}
+end
+
+--- Get recent corner scores (for delta bar display)
+---@return table Array of {cornerNum, score, lapNumber}
+function corner_analysis.getRecentCornerScores()
+    return recentCornerScores
 end
 
 return corner_analysis
