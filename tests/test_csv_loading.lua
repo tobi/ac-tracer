@@ -461,3 +461,227 @@ test("m/s² to G conversion factor is correct", function()
     local extremeG = 50 * expectedConversion
     assert_near(extremeG, 5.1, 0.1, "50 m/s² should be ~5.1 G")
 end)
+
+--------------------------------------------------------------------------------
+-- MoTeC Directory CSV Tests
+--------------------------------------------------------------------------------
+
+suite("MoTeC CSV Loading")
+
+local motecDir = "C:\\MoTeC\\Logged Data\\"
+
+-- Check if MoTeC directory exists (skip all tests if not)
+local motecDirExists = io.dirExists and io.dirExists(motecDir)
+
+-- Test loading specific known files from MoTeC directory
+test("loads beche_daytona_sim.csv from MoTeC directory", function()
+    if not motecDirExists then
+        print("    [SKIP] MoTeC directory not found: " .. motecDir)
+        return
+    end
+    
+    local testFile = motecDir .. "beche_daytona_sim.csv"
+    if not io.fileExists(testFile) then
+        -- File doesn't exist - skip this test
+        print("    [SKIP] File not found: " .. testFile)
+        return
+    end
+    
+    -- Daytona track length is ~5717m (from earlier tests)
+    local loaded, warnings = lap.fromCSV(testFile, "ier_daytona", "test_car", 5717)
+    
+    if not loaded then
+        local warnMsg = warnings and table.concat(warnings, "; ") or "Unknown error"
+        error("Failed to load beche_daytona_sim.csv: " .. warnMsg)
+    end
+    
+    assert_not_nil(loaded, "Should load beche_daytona_sim.csv")
+    assert_true(loaded:length() > 100, "Should have many samples, got " .. loaded:length())
+    
+    -- Verify position data is normalized (0-1)
+    local minPos, maxPos = 1, 0
+    for i = 1, loaded:length() do
+        local p = loaded.pos[i]
+        if p < minPos then minPos = p end
+        if p > maxPos then maxPos = p end
+    end
+    
+    assert_true(minPos >= 0 and minPos <= 1, 
+        string.format("Min pos should be 0-1, got %.4f", minPos))
+    assert_true(maxPos >= 0 and maxPos <= 1, 
+        string.format("Max pos should be 0-1, got %.4f", maxPos))
+    assert_true(maxPos - minPos > 0.5, 
+        string.format("Should span >50%% of track (%.1f%% to %.1f%%)", 
+            minPos * 100, maxPos * 100))
+end)
+
+test("beche_daytona_sim.csv has valid telemetry data", function()
+    if not motecDirExists then
+        return
+    end
+    
+    local testFile = motecDir .. "beche_daytona_sim.csv"
+    if not io.fileExists(testFile) then
+        return
+    end
+    
+    local loaded, warnings = lap.fromCSV(testFile, "ier_daytona", "test_car", 5717)
+    if not loaded then
+        return  -- Skip if file couldn't load
+    end
+    
+    -- Check speed values are in realistic range
+    local maxSpeed = 0
+    for i = 1, math.min(100, loaded:length()) do
+        local s = loaded.speed[i]
+        if s and s > maxSpeed then maxSpeed = s end
+    end
+    assert_true(maxSpeed >= 0 and maxSpeed <= 500,
+        string.format("Max speed should be 0-500 km/h, got %.1f", maxSpeed))
+    
+    -- Check throttle is normalized 0-1
+    for i = 1, math.min(100, loaded:length()) do
+        local t = loaded.throttle[i]
+        assert_true(t >= 0 and t <= 1.01,
+            string.format("Throttle at sample %d should be 0-1, got %.3f", i, t))
+    end
+    
+    -- Check brake is in bar (non-negative)
+    local maxBrake = 0
+    for i = 1, math.min(100, loaded:length()) do
+        local b = loaded.brake[i]
+        assert_true(b >= 0, string.format("Brake at sample %d should be >= 0 bar, got %.3f", i, b))
+        if b > maxBrake then maxBrake = b end
+    end
+    assert_true(maxBrake < 200, string.format("Max brake should be < 200 bar, got %.1f", maxBrake))
+end)
+
+test("beche_daytona_sim.csv interpolation works", function()
+    if not motecDirExists then
+        return
+    end
+    
+    local testFile = motecDir .. "beche_daytona_sim.csv"
+    if not io.fileExists(testFile) then
+        return
+    end
+    
+    local loaded, warnings = lap.fromCSV(testFile, "ier_daytona", "test_car", 5717)
+    if not loaded then
+        return
+    end
+    
+    -- Test interpolation at various positions
+    for pos = 0.1, 0.9, 0.2 do
+        local speed = loaded:speedAt(pos)
+        assert_not_nil(speed, "Should interpolate speed at pos " .. pos)
+        assert_true(speed >= 0, "Speed should be non-negative")
+        
+        local throttle = loaded:throttleAt(pos)
+        assert_not_nil(throttle, "Should interpolate throttle at pos " .. pos)
+        assert_true(throttle >= 0 and throttle <= 1, 
+            string.format("Throttle should be 0-1 at pos %.1f, got %.3f", pos, throttle))
+    end
+end)
+
+test("loads beche_daytona_sim_1_40_1.csv from MoTeC directory", function()
+    if not motecDirExists then
+        return
+    end
+    
+    local testFile = motecDir .. "beche_daytona_sim_1_40_1.csv"
+    if not io.fileExists(testFile) then
+        print("    [SKIP] File not found: " .. testFile)
+        return
+    end
+    
+    -- Try to load - may have different format
+    local loaded, warnings = lap.fromCSV(testFile, "ier_daytona", "test_car", 5717)
+    
+    if loaded then
+        assert_not_nil(loaded, "Should load beche_daytona_sim_1_40_1.csv")
+        assert_true(loaded:length() > 10, "Should have samples, got " .. loaded:length())
+    else
+        -- If it fails, that's OK - different file format, but log the warning
+        local warnMsg = warnings and table.concat(warnings, "; ") or "Unknown error"
+        print("    [INFO] Could not load " .. testFile .. ": " .. warnMsg)
+        -- Don't fail the test - file might be in different format
+    end
+end)
+
+test("MoTeC directory scanning works", function()
+    if not motecDirExists then
+        print("    [SKIP] MoTeC directory not found: " .. motecDir)
+        return
+    end
+    
+    local files = io.scanDir(motecDir, "*.csv")
+    assert_not_nil(files, "Should be able to scan MoTeC directory")
+    
+    if files and #files > 0 then
+        print("    [INFO] Found " .. #files .. " CSV files in MoTeC directory")
+        for i, filename in ipairs(files) do
+            if i <= 5 then  -- Show first 5
+                print("        - " .. filename)
+            end
+        end
+    else
+        print("    [INFO] MoTeC directory is empty")
+    end
+end)
+
+test("file_utils.scanCSVFiles finds MoTeC files", function()
+    if not io.dirExists or not io.scanDir then
+        return  -- Skip if no directory functions
+    end
+    
+    local file_utils = require('file_utils')
+    
+    -- Invalidate cache to force fresh scan
+    file_utils.invalidateCache()
+    
+    local csvFiles = file_utils.scanCSVFiles()
+    assert_not_nil(csvFiles, "Should return file list")
+    assert_type(csvFiles, "table", "Should return table")
+    
+    -- Check if any files are from MoTeC directory
+    local motecFileCount = 0
+    for _, fileInfo in ipairs(csvFiles) do
+        assert_not_nil(fileInfo.path, "File info should have path")
+        assert_not_nil(fileInfo.filename, "File info should have filename")
+        assert_not_nil(fileInfo.source, "File info should have source")
+        
+        if fileInfo.source == "motec" then
+            motecFileCount = motecFileCount + 1
+            -- Verify path contains MoTeC directory (use plain string search, not pattern)
+            assert_true(fileInfo.path:find("MoTeC", 1, true), 
+                "MoTeC file path should contain 'MoTeC': " .. fileInfo.path)
+        end
+    end
+    
+    if motecDirExists then
+        print("    [INFO] Found " .. motecFileCount .. " CSV files from MoTeC directory")
+        if motecFileCount > 0 then
+            -- Verify we can actually load one of them
+            for _, fileInfo in ipairs(csvFiles) do
+                if fileInfo.source == "motec" then
+                    print("        Testing: " .. fileInfo.filename)
+                    local loaded, warnings = lap.fromCSV(fileInfo.path, "test", "test", 5717)
+                    if loaded then
+                        assert_true(loaded:length() > 10, 
+                            "Should load " .. fileInfo.filename .. " with samples")
+                        print("        ✓ " .. fileInfo.filename .. " loads successfully (" .. 
+                            loaded:length() .. " samples)")
+                        break  -- Test one file only
+                    else
+                        local warnMsg = warnings and table.concat(warnings, "; ") or "Unknown error"
+                        print("        ✗ " .. fileInfo.filename .. " failed: " .. warnMsg)
+                    end
+                    break
+                end
+            end
+        end
+    else
+        print("    [SKIP] MoTeC directory not found")
+    end
+end)

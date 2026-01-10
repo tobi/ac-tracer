@@ -479,6 +479,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                 if pos then
                     -- Detect lap start: position crosses from high to low (finish line)
                     -- OR we start with a low position that increases smoothly
+                    -- OR fallback: start collecting after checking first few samples (partial lap data)
                     if not lapStarted then
                         if lastPos and lastPos > 0.9 and pos < 0.1 then
                             -- Crossed finish line - lap starts here
@@ -489,6 +490,12 @@ local function parseSingleLap(lines, startIdx, indices, config)
                             -- First sample is near start - check if it's stable
                             lapStarted = true
                             firstTime = time
+                        elseif not lastPos then
+                            -- First sample is mid-lap (partial lap data like MoTeC exports)
+                            -- Start collecting immediately
+                            lapStarted = true
+                            firstTime = time
+                            ac.log(string.format("csv_parser: Partial lap data, starting at pos %.3f (line %d)", pos, i))
                         end
                         lastPos = pos
                     end

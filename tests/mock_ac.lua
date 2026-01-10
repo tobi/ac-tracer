@@ -387,11 +387,21 @@ package.loaded['extended-brake'] = {
     getStatus = function() return { available = false, source = "car.brake", status = "fallback mode" } end,
 }
 
--- Mock app_settings module
+-- Mock app_settings module (settings are accessed via functions)
 package.loaded['app_settings'] = {
-    brakeThreshold = 5,
-    throttleThreshold = 0.98,
-    useKMH = true,
+    brakeThreshold = function() return 5 end,
+    throttleThreshold = function() return 0.98 end,
+    useKMH = function() return true end,
+    setUseKMH = function(v) end,
+    maxHistoryLaps = function() return 20 end,
+    showFlagMarker = function(name) return false end,
+    telemetryShowLateralG = function() return false end,
+    telemetryShowLongG = function() return false end,
+    telemetryShowSpeed = function() return true end,
+    telemetryShowThrottle = function() return true end,
+    telemetryShowBrake = function() return true end,
+    telemetryShowSteering = function() return true end,
+    telemetryShowGear = function() return true end,
 }
 
 -- Mock theme module (minimal stub for corner_analysis)
@@ -410,5 +420,106 @@ package.loaded['theme'] = {
 
 -- NOTE: ui_utils is NOT mocked here - it loads the real module
 -- This allows test_ui_utils.lua to test the actual implementation
+
+-- Mock CSP io extensions using LuaJIT FFI for directory operations
+local ffi = require("ffi")
+
+-- Windows API declarations for directory listing
+ffi.cdef[[
+    typedef unsigned long DWORD;
+    typedef int BOOL;
+    typedef void* HANDLE;
+    typedef const char* LPCSTR;
+    
+    // FILETIME is two DWORDs
+    typedef struct {
+        DWORD dwLowDateTime;
+        DWORD dwHighDateTime;
+    } FILETIME;
+    
+    typedef struct {
+        DWORD dwFileAttributes;
+        FILETIME ftCreationTime;
+        FILETIME ftLastAccessTime;
+        FILETIME ftLastWriteTime;
+        DWORD nFileSizeHigh;
+        DWORD nFileSizeLow;
+        DWORD dwReserved0;
+        DWORD dwReserved1;
+        char cFileName[260];
+        char cAlternateFileName[14];
+    } WIN32_FIND_DATAA;
+    
+    HANDLE FindFirstFileA(LPCSTR lpFileName, WIN32_FIND_DATAA* lpFindFileData);
+    BOOL FindNextFileA(HANDLE hFindFile, WIN32_FIND_DATAA* lpFindFileData);
+    BOOL FindClose(HANDLE hFindFile);
+    DWORD GetFileAttributesA(LPCSTR lpFileName);
+]]
+
+local INVALID_HANDLE_VALUE = ffi.cast("HANDLE", -1)
+local FILE_ATTRIBUTE_DIRECTORY = 0x10
+local INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+
+-- io.fileExists - check if file exists
+io.fileExists = io.fileExists or function(path)
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
+-- io.dirExists - check if directory exists using Windows API
+io.dirExists = io.dirExists or function(path)
+    local attrs = ffi.C.GetFileAttributesA(path)
+    if attrs == INVALID_FILE_ATTRIBUTES then
+        return false
+    end
+    return bit.band(attrs, FILE_ATTRIBUTE_DIRECTORY) ~= 0
+end
+
+-- io.scanDir - scan directory for files matching pattern using Windows API
+io.scanDir = io.scanDir or function(path, pattern)
+    -- Normalize path and add wildcard
+    path = path:gsub("/", "\\")
+    if path:sub(-1) ~= "\\" then path = path .. "\\" end
+    
+    local searchPattern = path .. (pattern or "*")
+    
+    local findData = ffi.new("WIN32_FIND_DATAA")
+    local handle = ffi.C.FindFirstFileA(searchPattern, findData)
+    
+    if handle == INVALID_HANDLE_VALUE then
+        return nil
+    end
+    
+    local files = {}
+    repeat
+        local name = ffi.string(findData.cFileName)
+        -- Skip . and .. directories
+        if name ~= "." and name ~= ".." then
+            -- Skip directories, only return files
+            if bit.band(findData.dwFileAttributes, FILE_ATTRIBUTE_DIRECTORY) == 0 then
+                table.insert(files, name)
+            end
+        end
+    until ffi.C.FindNextFileA(handle, findData) == 0
+    
+    ffi.C.FindClose(handle)
+    
+    return #files > 0 and files or nil
+end
+
+-- io.fileSize - get file size in bytes
+io.fileSize = io.fileSize or function(path)
+    local f = io.open(path, "rb")
+    if f then
+        local size = f:seek("end")
+        f:close()
+        return size
+    end
+    return -1
+end
 
 return mock
