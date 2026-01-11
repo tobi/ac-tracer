@@ -4,6 +4,7 @@
 local lap = require('lap')
 local settings = require('app_settings')
 local history_storage = require('history_storage')
+local notification = require('sounds/notification')
 
 local state = {}
 
@@ -749,6 +750,9 @@ function state.init(car)
         ac.log("AC Tracer: Car jumped (teleport/reset), discarding lap")
     end)
 
+    -- Initialize notification sounds
+    notification.init()
+
     initialized = true
     ac.log('Traces: State initialized for ' .. state.track)
 end
@@ -1305,6 +1309,10 @@ function state.saveCheckpoint(traceHistory)
         }
         pendingTraceHistory = nil
 
+        -- Show toast notification and play sound
+        ac.setMessage("Checkpoint Saved", "Press load key to return here")
+        notification.playSave()
+
         ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f, lap %d",
             state.checkpoint.pos, state.checkpoint.lapCount))
     end)
@@ -1355,6 +1363,10 @@ function state.loadCheckpoint()
 
     -- Notify registered callbacks (corner_analysis, etc.)
     notifyCheckpointCallbacks(state.checkpoint.pos)
+
+    -- Show brief toast notification and play sound
+    ac.setMessage("Checkpoint Loaded", "")
+    notification.playLoad()
 
     ac.log(string.format("AC Tracer: Checkpoint loaded at pos %.3f, lap %d",
         state.checkpoint.pos, state.checkpoint.lapCount))
