@@ -1664,6 +1664,13 @@ function corner_analysis.onCheckpointLoad(pos)
     recentCornerScores = {}
     -- Clear frozen corner state if any
     corner_analysis.clearFrozenCorner()
+    
+    -- Reset lap count tracking to match restored state
+    -- This prevents false "new lap" detection on next update
+    local car = ac.getCar(0)
+    if car then
+        lastLapCount = car.lapCount
+    end
 
     ac.log(string.format("AC Tracer: Corner analysis reset for checkpoint at pos %.3f", pos or 0))
 end
