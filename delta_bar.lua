@@ -272,13 +272,22 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     ui.popFont()
 end
 
---- Reset smoothing state (call on lap reset)
+--- Reset smoothing state (call on lap reset or checkpoint load)
 function delta_bar.reset()
     smoothedBarWidth = 0
     smoothedDelta = 0
     displayDelta = 0
     updateTimer = 0
     lastDelta = 0
+    
+    -- Reset lap tracking to current car state
+    local car = ac.getCar(0)
+    if car then
+        lastLapCount = car.lapCount
+    end
+    
+    -- Clear lap completion display
+    lapCompleteTimer = 0
 end
 
 return delta_bar

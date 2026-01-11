@@ -101,13 +101,9 @@ function script.update(dt)
         local saveButton = settings.getSaveCheckpointButton()
         local loadButton = settings.getLoadCheckpointButton()
 
-        -- Save checkpoint on button press
+        -- Save checkpoint on button press (pass trace history to be captured synchronously)
         if saveButton:pressed() then
-            if state.saveCheckpoint() then
-                -- Store trace history snapshot after car state is saved (async callback)
-                -- We set it directly here since saveCheckpoint is async
-                state.setCheckpointTraceHistory(history)
-            end
+            state.saveCheckpoint(history)
         end
 
         -- Load checkpoint on button press

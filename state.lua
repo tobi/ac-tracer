@@ -1257,23 +1257,43 @@ local function notifyCheckpointCallbacks(pos)
     end
 end
 
+-- Pending trace history to be captured when async save completes
+local pendingTraceHistory = nil
+
 --- Save current state as a checkpoint (async car state capture)
 --- Call this when save checkpoint button is pressed
-function state.saveCheckpoint()
+---@param traceHistory table|nil Trace history to save (pass from ac-tracer.lua)
+function state.saveCheckpoint(traceHistory)
     if not ac.isCarResetAllowed() then
         ac.log("AC Tracer: Cannot save checkpoint - car reset not allowed in this session")
         return false
+    end
+
+    -- Store trace history to be captured when async callback fires
+    -- We deep-copy it NOW so it's captured at save time, not when callback runs
+    if traceHistory then
+        pendingTraceHistory = {}
+        for field, arr in pairs(traceHistory) do
+            pendingTraceHistory[field] = {}
+            for i = 1, #arr do
+                pendingTraceHistory[field][i] = arr[i]
+            end
+        end
     end
 
     -- Capture car state asynchronously
     ac.saveCarStateAsync(function(err, carStateBlob)
         if err or not carStateBlob then
             ac.log("AC Tracer: Failed to save car state: " .. tostring(err))
+            pendingTraceHistory = nil
             return
         end
 
         local car = ac.getCar(0)
-        if not car then return end
+        if not car then 
+            pendingTraceHistory = nil
+            return 
+        end
 
         -- Store checkpoint data
         state.checkpoint = {
@@ -1281,7 +1301,9 @@ function state.saveCheckpoint()
             lapSnapshot = state.currentLap and state.currentLap:clone() or nil,
             pos = car.splinePosition,
             lapCount = car.lapCount,
+            traceSnapshot = pendingTraceHistory,
         }
+        pendingTraceHistory = nil
 
         ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f, lap %d",
             state.checkpoint.pos, state.checkpoint.lapCount))
@@ -1350,21 +1372,6 @@ end
 function state.clearCheckpoint()
     state.checkpoint = nil
     ac.log("AC Tracer: Checkpoint cleared")
-end
-
---- Set trace history snapshot for checkpoint (called from ac-tracer.lua)
----@param traceHistory table The trace history to snapshot
-function state.setCheckpointTraceHistory(traceHistory)
-    if state.checkpoint then
-        -- Deep copy trace history
-        state.checkpoint.traceSnapshot = {}
-        for field, arr in pairs(traceHistory) do
-            state.checkpoint.traceSnapshot[field] = {}
-            for i = 1, #arr do
-                state.checkpoint.traceSnapshot[field][i] = arr[i]
-            end
-        end
-    end
 end
 
 --- Get trace history snapshot from checkpoint
