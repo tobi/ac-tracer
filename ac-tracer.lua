@@ -369,26 +369,30 @@ local function drawBar(origin, x, y, w, h, val, color)
 end
 
 local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
-    local innerR = r * 0.70
+    local innerR = r * 0.80
     local center = origin + vec2(cx, cy)
     local arcThickness = r - innerR
     local indicatorR = (innerR + r) / 2
     
     -- Outer ring for reference lap (5% larger radius, half thickness)
-    local outerRingR = r * 1.05
-    local outerRingThickness = arcThickness * 0.5
+    local outerRingR = r * 1.0
+    local outerRingThickness = arcThickness * 1.05
     local outerRingInnerR = outerRingR - outerRingThickness
     local outerIndicatorR = (outerRingInnerR + outerRingR) / 2
 
     -- Draw outer ring background first
     ui.drawCircleFilled(center, outerRingR, theme.wheel.bg, 48)
     ui.drawCircleFilled(center, outerRingInnerR, theme.bg.window, 48)
+
+    -- Main wheel ring background (on top of outer ring)
+    ui.drawCircleFilled(center, r, theme.wheel.bg, 48)
+    ui.drawCircleFilled(center, innerR, theme.bg.window, 48)
     
     -- Draw reference/ghost steering in outer ring
     if ghostSteerDeg then
         local ghostAngle = math.rad(ghostSteerDeg)
         ui.pathClear()
-        ui.pathArcTo(center, outerIndicatorR, -math.pi/2 + ghostAngle - 0.25, -math.pi/2 + ghostAngle + 0.25, 16)
+        ui.pathArcTo(center, outerIndicatorR, -math.pi/2 + ghostAngle - 0.125, -math.pi/2 + ghostAngle + 0.125, 16)
         ui.pathStroke(theme.wheel.ghost, false, outerRingThickness)
 
         -- Ghost center line in outer ring
@@ -396,46 +400,30 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
         local ghostInnerY = center.y - math.cos(ghostAngle) * outerRingInnerR
         local ghostOuterX = center.x + math.sin(ghostAngle) * outerRingR
         local ghostOuterY = center.y - math.cos(ghostAngle) * outerRingR
-        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), theme.withAlpha(theme.wheel.ghost, 0.5), 1)
     end
 
-    -- Main wheel ring background (on top of outer ring)
-    ui.drawCircleFilled(center, r, theme.wheel.bg, 48)
-    ui.drawCircleFilled(center, innerR, theme.bg.window, 48)
 
     -- Center notch (always visible, subtle gray marker at top/center)
     local notchAngle = 0  -- Top = center/straight
     local notchLen = arcThickness * 0.6
     local notchInner = innerR + (arcThickness - notchLen) / 2
     local notchOuter = notchInner + notchLen
-    local notchX1 = center.x + math.sin(notchAngle) * notchInner
-    local notchY1 = center.y - math.cos(notchAngle) * notchInner
-    local notchX2 = center.x + math.sin(notchAngle) * notchOuter
-    local notchY2 = center.y - math.cos(notchAngle) * notchOuter
-    ui.drawLine(vec2(notchX1, notchY1), vec2(notchX2, notchY2), theme.wheel.notch, 2)
 
-    -- Current steering indicator (white, half width)
+    -- Current steering indicator (white, narrow arc, full ring height)
     local angle = math.rad(steerDeg)
-    local halfArcThickness = arcThickness * 0.5
     ui.pathClear()
-    ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.25, -math.pi/2 + angle + 0.25, 16)
-    ui.pathStroke(theme.wheel.indicator, false, halfArcThickness)
+    ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.125, -math.pi/2 + angle + 0.125, 16)
+    ui.pathStroke(theme.wheel.indicator, false, arcThickness)
 
-    -- Red center line (current position)
-    local lineInnerX = center.x + math.sin(angle) * innerR
-    local lineInnerY = center.y - math.cos(angle) * innerR
-    local lineOuterX = center.x + math.sin(angle) * r
-    local lineOuterY = center.y - math.cos(angle) * r
-    ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), theme.wheel.centerLine, 2)
 end
 
 -- Bold font for gear display (defined once, reused)
-local gearFont = ui.DWriteFont('Segoe UI'):weight(ui.DWriteFont.Weight.Black)
+local gearFont = ui.DWriteFont('Segoe UI'):weight(ui.DWriteFont.Weight.ExtraBold)
 
 local function drawGear(origin, cx, cy, r, gear, refGear)
     local text = gear < 0 and "R" or (gear == 0 and "N" or tostring(gear))
-    local innerR = r * 0.70
-    local center = origin + vec2(cx, cy)
+    local innerR = r * 0.80
+    local center = origin + vec2(cx, cy-2)
     
     -- Determine color based on comparison with reference gear
     local color = theme.text.primary  -- Default white
@@ -449,7 +437,7 @@ local function drawGear(origin, cx, cy, r, gear, refGear)
     
     -- Draw gear number with bold font, centered in wheel
     -- Font size scales with wheel radius for consistent look
-    local fontSize = math.max(24, r * 0.5)
+    local fontSize = math.max(30, r * 0.5)
     ui.pushFont(gearFont)
     ui.dwriteDrawTextClipped(text, fontSize, 
         center - vec2(r * 0.4, r * 0.35),  -- Top-left of text box
@@ -466,8 +454,7 @@ local function drawSpeed(origin, cx, y, w, car)
     ui.popFont()
 end
 
--- Window toggle buttons
-local buttonSize = vec2(26, 26)
+-- Window toggle buttons (size calculated dynamically in windowMain)
 
 local function getWindowName(windowId)
     -- CSP uses format: IMGUI_LUA_<AppName>_<windowId>
@@ -484,31 +471,28 @@ local function toggleWindow(windowId)
     ui_utils.toggleWindow(windowId)
 end
 
-local function drawToggleButton(localPos, icon, tooltip, windowId)
-    local isActive = isWindowVisible(windowId)
-
-    -- Determine colors based on state
-    local bg = isActive and theme.bg.buttonActive or theme.bg.button
-    local bgHover = isActive and theme.bg.buttonActive or theme.bg.buttonHover
-    local fg = isActive and theme.text.secondary or theme.text.muted
-
-    -- Use styled button
-    ui.setCursor(localPos)
-    ui.pushStyleColor(ui.StyleColor.Button, bg)
-    ui.pushStyleColor(ui.StyleColor.ButtonHovered, bgHover)
-    ui.pushStyleColor(ui.StyleColor.ButtonActive, theme.bg.buttonActive)
-    ui.pushStyleColor(ui.StyleColor.Text, fg)
-    ui.pushStyleVar(ui.StyleVar.FrameRounding, 4)
-
-    if ui.button(icon .. "##" .. windowId, buttonSize) then
-        ac.log("AC Tracer: Button clicked for " .. windowId)
+local function drawToggleButton(localPos, icon, tooltip, windowId, btnSize)
+    local size = btnSize.x
+    local topLeft = localPos
+    local bottomRight = localPos + btnSize
+    local center = localPos + btnSize * 0.5
+    
+    -- Draw button background
+    local isHovered = ui.rectHovered(topLeft, bottomRight)
+    local bg = isHovered and theme.bg.buttonHover or theme.bg.button
+    ui.drawRectFilled(topLeft, bottomRight, bg, 4)
+    
+    -- Draw centered label
+    local fontSize = size * 0.6
+    ui.dwriteDrawTextClipped(icon, fontSize, topLeft, bottomRight, 0.5, 0.5, false, theme.text.muted)
+    
+    -- Handle click
+    if isHovered and ui.mouseClicked() then
         toggleWindow(windowId)
     end
-
-    ui.popStyleVar()
-    ui.popStyleColor(4)
-
-    if ui.itemHovered() then
+    
+    -- Tooltip
+    if isHovered then
         ui.setTooltip(tooltip)
     end
 end
@@ -611,6 +595,13 @@ function script.windowMain(dt)
         -- Use layout for inner dimensions
         local innerX, innerY, innerW, innerH = L.innerX, L.innerY, L.innerW, L.innerH
         
+        -- Split into history (90%) and lookahead (10%) areas (only if future traces enabled)
+        local showFuture = settings.showFutureTraces()
+        local historyRatio = showFuture and 0.9 or 1.0
+        local historyW = innerW * historyRatio
+        local lookaheadW = innerW * (1 - historyRatio)
+        local nowLineX = innerX + historyW
+        
         drawGrid(traceOrigin, innerX, innerY, innerW, innerH)
 
         -- Start/finish line (checkered flag pattern) - only at position 0
@@ -627,7 +618,7 @@ function script.windowMain(dt)
         end
         
         if hasZeroCrossing then
-            local sfX = posToX(0, history.pos, innerX, innerW)
+            local sfX = posToX(0, history.pos, innerX, historyW)
             if sfX then
                 local sfW = 5
                 local squareSize = 4
@@ -653,29 +644,111 @@ function script.windowMain(dt)
         local traceThickness = theme.style.traceThickness
         local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
         
-        -- Draw flag markers as background highlights (before traces)
-        drawFlagMarkers(traceOrigin, innerX, innerY, innerW, innerH, history.flags, maxPoints)
+        -- Draw flag markers as background highlights (before traces) - in history area
+        drawFlagMarkers(traceOrigin, innerX, innerY, historyW, innerH, history.flags, maxPoints)
         
         -- Ghost traces (reference) - drawn first so current traces render on top
         -- Uses filled=true to draw area under line (30% more transparent)
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints, true) end
-            if settings.displayGear() and ghostTraces.gear then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.gear, theme.ghost.gear, maxGear, ghostThickness, maxPoints, true) end
-            if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints, true) end
-            if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints, true) end
-            -- Draw throttle before brake for both ref and current
-            if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints, true) end
-            if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints, true) end
+            if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints, true) end
+            if settings.displayGear() and ghostTraces.gear then drawGearTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.gear, theme.ghost.gear, maxGear, ghostThickness, maxPoints, true) end
+            if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints, true) end
+            if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints, true) end
+            if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints, true) end
+            if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints, true) end
         end
 
-        -- Current traces - drawn on top of ghost traces
-        -- Draw throttle before brake so brake renders on top
-        if settings.displaySpeed() then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness, maxPoints) end
-        if settings.displayGear() then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, history.gear, theme.trace.gear, maxGear, traceThickness, maxPoints) end
-        if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness, maxPoints) end
-        if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.clutch, theme.trace.clutch, traceThickness, maxPoints) end
-        if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.throttle, theme.trace.throttle, traceThickness, maxPoints) end
-        if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.brake, theme.trace.brake, traceThickness, maxPoints) end
+        -- Current traces - drawn on top of ghost traces (in history area)
+        if settings.displaySpeed() then drawSpeedTrace(traceOrigin, innerX, innerY, historyW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness, maxPoints) end
+        if settings.displayGear() then drawGearTrace(traceOrigin, innerX, innerY, historyW, innerH, history.gear, theme.trace.gear, maxGear, traceThickness, maxPoints) end
+        if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, history.steering, theme.trace.steering, traceThickness, maxPoints) end
+        if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, history.clutch, theme.trace.clutch, traceThickness, maxPoints) end
+        if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, history.throttle, theme.trace.throttle, traceThickness, maxPoints) end
+        if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, historyW, innerH, history.brake, theme.trace.brake, traceThickness, maxPoints) end
+        
+        -- Lookahead: Generate positions ahead of current position (only if enabled)
+        local lookaheadPoints = math.ceil(maxPoints * (1 - historyRatio))
+        if showFuture and lookaheadPoints > 2 and state.bestLap then
+            local currentPos = car.splinePosition
+            local lookaheadPositions = {}
+            
+            -- Calculate how much track distance is covered in the history window
+            -- Use the same spline-per-sample rate as history
+            local posPerSample = 0
+            if #history.pos >= 2 then
+                -- Calculate average position change per sample from recent history
+                local posDiff = history.pos[#history.pos] - history.pos[math.max(1, #history.pos - 10)]
+                if posDiff < -0.5 then posDiff = posDiff + 1 end  -- Handle wrap
+                local sampleCount = math.min(10, #history.pos - 1)
+                if sampleCount > 0 then
+                    posPerSample = posDiff / sampleCount
+                end
+            end
+            
+            -- Generate lookahead positions starting from current position
+            for i = 1, lookaheadPoints do
+                local pos = currentPos + (i * posPerSample)
+                if pos > 1 then pos = pos - 1 end  -- Wrap around
+                table.insert(lookaheadPositions, pos)
+            end
+            
+            -- Get ghost traces for lookahead positions
+            local lookaheadTraces = state.getGhostTraces(lookaheadPositions)
+            
+            if lookaheadTraces and #lookaheadTraces.throttle > 1 then
+                -- Draw lookahead reference traces (ghost only, no current driver data)
+                -- Dim colors by halving existing alpha
+                local laX = nowLineX
+                local laW = lookaheadW
+                local dimFactor = 0.5  -- Multiply existing alpha by this
+                
+                local function dimColor(c)
+                    return rgbm(c.r, c.g, c.b, c.mult * dimFactor)
+                end
+                
+                -- Simple direct trace drawing for lookahead (no windowing needed)
+                if settings.displaySpeed() and lookaheadTraces.speed then 
+                    ui_utils.drawTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.speed, dimColor(theme.ghost.speed), {
+                        thickness = ghostThickness, filled = true, maxVal = maxSpeed
+                    })
+                end
+                if settings.displayGear() and lookaheadTraces.gear then 
+                    ui_utils.drawGearTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.gear, dimColor(theme.ghost.gear), {
+                        thickness = ghostThickness, filled = true, maxGear = maxGear
+                    })
+                end
+                if settings.displaySteering() and lookaheadTraces.steering then 
+                    ui_utils.drawTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.steering, dimColor(theme.ghost.steering), {
+                        thickness = ghostThickness, filled = true
+                    })
+                end
+                if settings.displayClutch() and lookaheadTraces.clutch then 
+                    ui_utils.drawTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.clutch, dimColor(theme.ghost.clutch), {
+                        thickness = ghostThickness, filled = true
+                    })
+                end
+                if settings.displayThrottle() and lookaheadTraces.throttle then 
+                    ui_utils.drawTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.throttle, dimColor(theme.ghost.throttle), {
+                        thickness = ghostThickness, filled = true
+                    })
+                end
+                if settings.displayBrake() and lookaheadTraces.brake then 
+                    ui_utils.drawTrace(traceOrigin.x + laX, traceOrigin.y + innerY, laW, innerH, lookaheadTraces.brake, dimColor(theme.ghost.brake), {
+                        thickness = ghostThickness, filled = true
+                    })
+                end
+            end
+        end
+        
+        -- Draw "now" line at the 90% point (overshoot 5% top and bottom) - drawn last on top
+        if showFuture then
+            local overshoot = innerH * 0.05
+            ui.drawLine(
+                traceOrigin + vec2(nowLineX, innerY - overshoot),
+                traceOrigin + vec2(nowLineX, innerY + innerH + overshoot),
+                rgbm(0.6, 0.6, 0.6, 1), 1
+            )
+        end
     end
 
     -- Use extended brake pressure for the brake bar
@@ -687,15 +760,33 @@ function script.windowMain(dt)
     drawSpeed(origin, L.wheelCX, L.wheelCY + L.wheelR + 2, L.wheelR * 2, car)
 
     -- Toggle window buttons (left side, vertically stacked next to trace area)
-    local numButtons = 3
-    local btnSpacing = 4
-    local totalBtnHeight = numButtons * buttonSize.y + (numButtons - 1) * btnSpacing
-    local btnLocalX = (L.pad + L.btnAreaW - buttonSize.x) / 2  -- Center in button area
-    local btnLocalY = L.pad + (L.contentH - totalBtnHeight) / 2  -- Vertically center
+    local numButtons = 4
+    local availableHeight = L.contentH
+    local minBtnSize = 18
+    local maxBtnSize = 26
+    local minSpacing = 2
+    local maxSpacing = 4
+    
+    -- Calculate button size to fit available height
+    -- Total height = numButtons * btnSize + (numButtons - 1) * spacing
+    -- Solve for btnSize: btnSize = (availableHeight - (numButtons - 1) * spacing) / numButtons
+    local btnSize = math.floor((availableHeight - (numButtons - 1) * maxSpacing) / numButtons)
+    btnSize = math.max(minBtnSize, math.min(maxBtnSize, btnSize))
+    
+    -- Recalculate spacing to fill remaining space evenly
+    local totalBtnHeight = numButtons * btnSize
+    local remainingSpace = availableHeight - totalBtnHeight
+    local btnSpacing = math.max(minSpacing, math.min(maxSpacing, math.floor(remainingSpace / (numButtons - 1))))
+    
+    local actualTotalHeight = numButtons * btnSize + (numButtons - 1) * btnSpacing
+    local buttonSize = vec2(btnSize, btnSize)
+    local btnLocalX = (L.pad + L.btnAreaW - btnSize) / 2  -- Center in button area
+    local btnLocalY = L.pad + (L.contentH - actualTotalHeight) / 2  -- Vertically center
 
-    drawToggleButton(vec2(btnLocalX, btnLocalY), "📊", "Lap Telemetry", "telemetry")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + buttonSize.y + btnSpacing), "Δ", "Delta Bar", "delta")
-    drawToggleButton(vec2(btnLocalX, btnLocalY + (buttonSize.y + btnSpacing) * 2), "◎", "Reference Lap", "referencelap")
+    drawToggleButton(vec2(btnLocalX, btnLocalY), "T", "Lap Telemetry", "telemetry", buttonSize)
+    drawToggleButton(vec2(btnLocalX, btnLocalY + btnSize + btnSpacing), "Δ", "Delta Bar", "delta", buttonSize)
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (btnSize + btnSpacing) * 2), "R", "Reference Lap", "referencelap", buttonSize)
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (btnSize + btnSpacing) * 3), "C", "Corner Analysis", "corners", buttonSize)
 end
 
 function script.windowSettings(dt)

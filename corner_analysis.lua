@@ -1552,15 +1552,71 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         
         statsY = statsY + 6
         
-        -- POSITION section (later = green for brake/lift, earlier = red)
+        -- Position bar helper: white line marker, "Xm early/late" format
+        local function drawPositionBar(label, meters, maxMeters)
+            if meters == nil then return end
+            
+            local barW = barTotalW - labelW - valueW - 8
+            local barStartX = panelInnerX + labelW + 4
+            local centerX = barStartX + barW / 2
+            
+            -- Label
+            ui.pushFont(ui.Font.Small)
+            ui.setCursor(vec2(panelInnerX, statsY + 1))
+            ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
+            ui.text(label)
+            ui.popStyleColor()
+            ui.popFont()
+            
+            -- Bar background
+            ui.drawRectFilled(
+                vec2(barStartX, statsY),
+                vec2(barStartX + barW, statsY + barH),
+                rgbm(0.15, 0.15, 0.15, 0.8), 2
+            )
+            
+            -- Center line (reference position) - more visible dashed style
+            ui.drawLine(
+                vec2(centerX, statsY + 1),
+                vec2(centerX, statsY + barH - 1),
+                rgbm(0.6, 0.6, 0.6, 0.9), 2
+            )
+            
+            -- Position marker (vertical line)
+            local onTarget = math.abs(meters) < 1
+            local markerColor = onTarget and theme.delta.positive or theme.text.primary
+            local normalized = math.clamp(meters / maxMeters, -1, 1)
+            local markerX = centerX + normalized * (barW / 2 - 2)
+            ui.drawLine(
+                vec2(markerX, statsY + 1),
+                vec2(markerX, statsY + barH - 1),
+                markerColor, 2
+            )
+            
+            -- Value text: "Xm early" or "Xm late" (positive = later in track)
+            local direction = meters >= 0 and "late" or "early"
+            local valueText = string.format("%.0fm %s", math.abs(meters), direction)
+            if onTarget then valueText = "on target" end
+            
+            ui.pushFont(ui.Font.Small)
+            ui.setCursor(vec2(barStartX + barW + 4, statsY + 1))
+            ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
+            ui.text(valueText)
+            ui.popStyleColor()
+            ui.popFont()
+            
+            statsY = statsY + barH + barSpacing
+        end
+        
+        -- POSITION section (white lines, early/late labels)
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        drawDeltaBar("Brake", brakeMeters, barMaxPos, "m", false)
-        drawDeltaBar("Lift", liftOffMeters, barMaxPos, "m", false)
+        drawPositionBar("Brake", brakeMeters, barMaxPos)
+        drawPositionBar("Lift", liftOffMeters, barMaxPos)
         
         -- Apex position delta
         if displayData.currentApexPos and displayData.refApexPos then
             local apexMeters = (displayData.currentApexPos - displayData.refApexPos) * (ac.getSim().trackLengthM or 5000)
-            drawDeltaBar("Apex", apexMeters, barMaxPos, "m", false)
+            drawPositionBar("Apex", apexMeters, barMaxPos)
         end
 
         -- Get lap data (use frozen lap data if viewing from telemetry, or displayLap for live)
