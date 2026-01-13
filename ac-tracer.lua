@@ -26,6 +26,105 @@ local overlapStartTime = nil
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
 
+--------------------------------------------------------------------------------
+-- Brake Marker System (3D line on track at brakepoint)
+--------------------------------------------------------------------------------
+
+--- Find upcoming brake points from the reference lap
+---@param refLap table Reference lap data
+---@param currentPos number Current car position (0-1)
+---@param corners table Corner definitions
+---@param mode string "next" or "all"
+---@return table Array of brake positions (up to 4)
+local function findUpcomingBrakePoints(refLap, currentPos, corners, mode)
+    if not refLap or not corners or #corners == 0 then return {} end
+    
+    local brakePoints = {}
+    local trackLength = ac.getSim().trackLengthM or 5000
+    local maxDistance = 500  -- meters ahead to look
+    local maxDistanceSpline = maxDistance / trackLength
+    
+    for _, corner in ipairs(corners) do
+        if corner.startPos and corner.endPos then
+            -- Find brake point for this corner
+            local brakePos = refLap:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold())
+            
+            if brakePos then
+                -- Calculate distance ahead (handling wrap-around)
+                local distance = brakePos - currentPos
+                if distance < 0 then distance = distance + 1 end
+                
+                -- Only include if ahead and within render distance
+                if distance > 0.002 and distance < maxDistanceSpline then
+                    table.insert(brakePoints, { pos = brakePos, distance = distance })
+                end
+            end
+        end
+    end
+    
+    -- Sort by distance
+    table.sort(brakePoints, function(a, b) return a.distance < b.distance end)
+    
+    -- Return based on mode
+    local result = {}
+    if mode == "next" then
+        if #brakePoints > 0 then
+            result[1] = brakePoints[1].pos
+        end
+    else  -- "all"
+        for i = 1, math.min(4, #brakePoints) do
+            result[i] = brakePoints[i].pos
+        end
+    end
+    
+    return result
+end
+
+--- Draw a single brake marker line across the track using debug lines
+---@param brakePos number Track position (0-1)
+local function drawBrakeMarkerLine(brakePos)
+    if not brakePos or brakePos < 0 then return end
+    
+    -- Get left and right points across the track
+    -- X: -1 = left edge, 1 = right edge
+    -- Y: height above track (0.1m to avoid z-fighting)
+    -- Z: track progress
+    local leftPoint = ac.trackCoordinateToWorld(vec3(-0.95, 0.1, brakePos))
+    local rightPoint = ac.trackCoordinateToWorld(vec3(0.95, 0.1, brakePos))
+    
+    -- Draw thick bright red line
+    -- HDR values > 1 create a glowing effect
+    render.debugLine(leftPoint, rightPoint, rgbm(8, 0.2, 0.1, 1), rgbm(8, 0.2, 0.1, 1))
+    
+    -- Draw a second line slightly offset for thickness
+    local leftPoint2 = ac.trackCoordinateToWorld(vec3(-0.95, 0.15, brakePos))
+    local rightPoint2 = ac.trackCoordinateToWorld(vec3(0.95, 0.15, brakePos))
+    render.debugLine(leftPoint2, rightPoint2, rgbm(6, 0.1, 0.05, 1), rgbm(6, 0.1, 0.05, 1))
+end
+
+--- Draw brake markers on the track
+local function drawBrakeMarkers()
+    local mode = settings.brakeMarkerMode()
+    if mode == "off" then return end
+    
+    local refLap = state.bestLap
+    if not refLap or refLap:length() < 10 then return end
+    
+    local car = currentCar
+    if not car then return end
+    
+    local corners = state.trackCorners
+    if not corners or #corners == 0 then return end
+    
+    -- Find brake points to display
+    local brakePoints = findUpcomingBrakePoints(refLap, car.splinePosition, corners, mode)
+    
+    -- Draw each brake point as a line across the track
+    for i = 1, #brakePoints do
+        drawBrakeMarkerLine(brakePoints[i])
+    end
+end
+
 local function updateHistory(car)
     local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
     
@@ -130,6 +229,13 @@ function script.update(dt)
         end
     end
 
+    -- Brake beep toggle hotkey
+    local brakeBeepButton = settings.getBrakeBeepButton()
+    if brakeBeepButton:pressed() then
+        local newMode = settings.toggleBrakeBeepMode()
+        ac.setMessage("Brake Beep", settings.brakeBeepModeDisplay())
+    end
+
     -- Update centralized state (handles lap recording, completion, best lap)
     state.update(dt, currentCar)
 
@@ -144,72 +250,64 @@ function script.update(dt)
     -- Update corner analysis (live tracking)
     corner_analysis.update(currentCar, state.currentLap, state.bestLap, state.trackCorners)
 
+    -- Draw brake markers on track (3D rendering)
+    drawBrakeMarkers()
+
     -- Auto-hide telemetry window when above speed threshold (traces always visible)
     if settings.telemetryAutoHide() then
         ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed(), {"telemetry"})
     end
 end
 
--- Drawing helpers
-local function drawTrace(origin, x, y, w, h, data, color, thickness, maxPts)
-    if #data < 2 then return end
-    thickness = thickness or theme.style.traceThickness
-    local step = w / (maxPts - 1)
-    local start = maxPts - #data
-    ui.pathClear()
-    for i = 1, #data do
-        ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - data[i] * h))
-    end
-    ui.pathStroke(color, false, thickness)
-end
+-- Drawing helpers using shared ui_utils.drawTrace
 
-local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickness, maxPts)
+-- Wrapper for rolling history traces (handles maxPts windowing)
+local function drawTrace(origin, x, y, w, h, data, color, thickness, maxPts, filled)
     if #data < 2 then return end
     thickness = thickness or theme.style.traceThickness
-    local step = w / (maxPts - 1)
-    local start = maxPts - #data
-    ui.pathClear()
-    for i = 1, #data do
-        local normalized = math.clamp(data[i] / maxSpeed, 0, 1)
-        ui.pathLineTo(origin + vec2(x + (start + i - 1) * step, y + h - normalized * h))
-    end
-    ui.pathStroke(color, false, thickness)
-end
-
--- Draw gear trace as stepped line (gear is discrete, not continuous)
--- Normalizes gear to 0-1 where 0=neutral/reverse, maxGear=1.0
-local function drawGearTrace(origin, x, y, w, h, data, color, maxGear, thickness, maxPts)
-    if #data < 2 then return end
-    thickness = thickness or theme.style.traceThickness
-    maxGear = maxGear or 8
-    local step = w / (maxPts - 1)
-    local start = maxPts - #data
     
-    -- Draw as horizontal segments (stepped) since gear is discrete
-    local prevGear = nil
-    local prevX = nil
-    for i = 1, #data do
-        local gear = data[i]
-        -- Normalize: 0 and negative (neutral/reverse) = 0, positive gears scale to maxGear
-        local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
-        local px = x + (start + i - 1) * step
-        local py = y + h - normalized * h
-        
-        if prevGear ~= nil then
-            local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
-            local prevY = y + h - prevNorm * h
-            
-            -- Horizontal line at previous gear level to current x
-            ui.drawLine(origin + vec2(prevX, prevY), origin + vec2(px, prevY), color, thickness)
-            -- Vertical line to new gear level (if changed)
-            if gear ~= prevGear then
-                ui.drawLine(origin + vec2(px, prevY), origin + vec2(px, py), color, thickness)
-            end
-        end
-        
-        prevGear = gear
-        prevX = px
-    end
+    -- For windowed traces, we need to offset the starting X position
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
+    local offsetX = start * step
+    local actualW = (#data - 1) * step
+    
+    ui_utils.drawTrace(origin.x + x + offsetX, origin.y + y, actualW, h, data, color, {
+        thickness = thickness,
+        filled = filled,
+    })
+end
+
+local function drawSpeedTrace(origin, x, y, w, h, data, color, maxSpeed, thickness, maxPts, filled)
+    if #data < 2 then return end
+    thickness = thickness or theme.style.traceThickness
+    
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
+    local offsetX = start * step
+    local actualW = (#data - 1) * step
+    
+    ui_utils.drawTrace(origin.x + x + offsetX, origin.y + y, actualW, h, data, color, {
+        thickness = thickness,
+        filled = filled,
+        maxVal = maxSpeed,
+    })
+end
+
+local function drawGearTrace(origin, x, y, w, h, data, color, maxGear, thickness, maxPts, filled)
+    if #data < 2 then return end
+    thickness = thickness or theme.style.traceThickness
+    
+    local step = w / (maxPts - 1)
+    local start = maxPts - #data
+    local offsetX = start * step
+    local actualW = (#data - 1) * step
+    
+    ui_utils.drawGearTrace(origin.x + x + offsetX, origin.y + y, actualW, h, data, color, {
+        thickness = thickness,
+        filled = filled,
+        maxGear = maxGear or 8,
+    })
 end
 
 -- Draw flag markers as background highlights
@@ -275,8 +373,33 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
     local center = origin + vec2(cx, cy)
     local arcThickness = r - innerR
     local indicatorR = (innerR + r) / 2
+    
+    -- Outer ring for reference lap (5% larger radius, half thickness)
+    local outerRingR = r * 1.05
+    local outerRingThickness = arcThickness * 0.5
+    local outerRingInnerR = outerRingR - outerRingThickness
+    local outerIndicatorR = (outerRingInnerR + outerRingR) / 2
 
-    -- Background wheel ring
+    -- Draw outer ring background first
+    ui.drawCircleFilled(center, outerRingR, theme.wheel.bg, 48)
+    ui.drawCircleFilled(center, outerRingInnerR, theme.bg.window, 48)
+    
+    -- Draw reference/ghost steering in outer ring
+    if ghostSteerDeg then
+        local ghostAngle = math.rad(ghostSteerDeg)
+        ui.pathClear()
+        ui.pathArcTo(center, outerIndicatorR, -math.pi/2 + ghostAngle - 0.25, -math.pi/2 + ghostAngle + 0.25, 16)
+        ui.pathStroke(theme.wheel.ghost, false, outerRingThickness)
+
+        -- Ghost center line in outer ring
+        local ghostInnerX = center.x + math.sin(ghostAngle) * outerRingInnerR
+        local ghostInnerY = center.y - math.cos(ghostAngle) * outerRingInnerR
+        local ghostOuterX = center.x + math.sin(ghostAngle) * outerRingR
+        local ghostOuterY = center.y - math.cos(ghostAngle) * outerRingR
+        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), theme.withAlpha(theme.wheel.ghost, 0.5), 1)
+    end
+
+    -- Main wheel ring background (on top of outer ring)
     ui.drawCircleFilled(center, r, theme.wheel.bg, 48)
     ui.drawCircleFilled(center, innerR, theme.bg.window, 48)
 
@@ -291,26 +414,12 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
     local notchY2 = center.y - math.cos(notchAngle) * notchOuter
     ui.drawLine(vec2(notchX1, notchY1), vec2(notchX2, notchY2), theme.wheel.notch, 2)
 
-    -- Ghost steering (more visible)
-    if ghostSteerDeg then
-        local ghostAngle = math.rad(ghostSteerDeg)
-        ui.pathClear()
-        ui.pathArcTo(center, indicatorR, -math.pi/2 + ghostAngle - 0.25, -math.pi/2 + ghostAngle + 0.25, 16)
-        ui.pathStroke(theme.wheel.ghost, false, arcThickness * 0.7)
-
-        -- Ghost center line
-        local ghostInnerX = center.x + math.sin(ghostAngle) * innerR
-        local ghostInnerY = center.y - math.cos(ghostAngle) * innerR
-        local ghostOuterX = center.x + math.sin(ghostAngle) * r
-        local ghostOuterY = center.y - math.cos(ghostAngle) * r
-        ui.drawLine(vec2(ghostInnerX, ghostInnerY), vec2(ghostOuterX, ghostOuterY), theme.withAlpha(theme.wheel.ghost, 0.5), 2)
-    end
-
-    -- Current steering indicator
+    -- Current steering indicator (white, half width)
     local angle = math.rad(steerDeg)
+    local halfArcThickness = arcThickness * 0.5
     ui.pathClear()
     ui.pathArcTo(center, indicatorR, -math.pi/2 + angle - 0.25, -math.pi/2 + angle + 0.25, 16)
-    ui.pathStroke(theme.wheel.indicator, false, arcThickness)
+    ui.pathStroke(theme.wheel.indicator, false, halfArcThickness)
 
     -- Red center line (current position)
     local lineInnerX = center.x + math.sin(angle) * innerR
@@ -320,15 +429,33 @@ local function drawWheel(origin, cx, cy, r, steerDeg, ghostSteerDeg)
     ui.drawLine(vec2(lineInnerX, lineInnerY), vec2(lineOuterX, lineOuterY), theme.wheel.centerLine, 2)
 end
 
-local function drawGear(origin, cx, cy, r, gear)
+-- Bold font for gear display (defined once, reused)
+local gearFont = ui.DWriteFont('Segoe UI'):weight(ui.DWriteFont.Weight.Black)
+
+local function drawGear(origin, cx, cy, r, gear, refGear)
     local text = gear < 0 and "R" or (gear == 0 and "N" or tostring(gear))
     local innerR = r * 0.70
     local center = origin + vec2(cx, cy)
-    -- Draw gear number larger, centered in wheel
-    ui.pushFont(ui.Font.Title)
-    local textSize = ui.measureText(text)
-    ui.setCursor(center - textSize / 2)
-    ui.text(text)
+    
+    -- Determine color based on comparison with reference gear
+    local color = theme.text.primary  -- Default white
+    if refGear and gear > 0 and refGear > 0 then
+        if gear < refGear then
+            color = theme.delta.negative  -- Red: lower gear than ref
+        elseif gear > refGear then
+            color = theme.delta.positive  -- Green: higher gear than ref
+        end
+    end
+    
+    -- Draw gear number with bold font, centered in wheel
+    -- Font size scales with wheel radius for consistent look
+    local fontSize = math.max(24, r * 0.5)
+    ui.pushFont(gearFont)
+    ui.dwriteDrawTextClipped(text, fontSize, 
+        center - vec2(r * 0.4, r * 0.35),  -- Top-left of text box
+        center + vec2(r * 0.4, r * 0.35),  -- Bottom-right of text box
+        0.5, 0.5,  -- Center alignment (H, V)
+        false, color)
     ui.popFont()
 end
 
@@ -530,16 +657,19 @@ function script.windowMain(dt)
         drawFlagMarkers(traceOrigin, innerX, innerY, innerW, innerH, history.flags, maxPoints)
         
         -- Ghost traces (reference) - drawn first so current traces render on top
+        -- Uses filled=true to draw area under line (30% more transparent)
         if ghostTraces and #ghostTraces.throttle == #history.throttle then
-            if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints) end
-            if settings.displayGear() and ghostTraces.gear then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.gear, theme.ghost.gear, maxGear, ghostThickness, maxPoints) end
-            if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints) end
-            if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints) end
-            if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints) end
-            if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints) end
+            if settings.displaySpeed() and ghostTraces.speed then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.speed, theme.ghost.speed, maxSpeed, ghostThickness, maxPoints, true) end
+            if settings.displayGear() and ghostTraces.gear then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.gear, theme.ghost.gear, maxGear, ghostThickness, maxPoints, true) end
+            if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.steering, theme.ghost.steering, ghostThickness, maxPoints, true) end
+            if settings.displayClutch() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.clutch, theme.ghost.clutch, ghostThickness, maxPoints, true) end
+            -- Draw throttle before brake for both ref and current
+            if settings.displayThrottle() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.throttle, theme.ghost.throttle, ghostThickness, maxPoints, true) end
+            if settings.displayBrake() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, ghostTraces.brake, theme.ghost.brake, ghostThickness, maxPoints, true) end
         end
 
         -- Current traces - drawn on top of ghost traces
+        -- Draw throttle before brake so brake renders on top
         if settings.displaySpeed() then drawSpeedTrace(traceOrigin, innerX, innerY, innerW, innerH, history.speed, theme.trace.speed, maxSpeed, traceThickness, maxPoints) end
         if settings.displayGear() then drawGearTrace(traceOrigin, innerX, innerY, innerW, innerH, history.gear, theme.trace.gear, maxGear, traceThickness, maxPoints) end
         if settings.displaySteering() then drawTrace(traceOrigin, innerX, innerY, innerW, innerH, history.steering, theme.trace.steering, traceThickness, maxPoints) end
@@ -553,7 +683,7 @@ function script.windowMain(dt)
     drawBar(origin, L.throttleX, 0, L.barW, L.contentH, car.gas, theme.trace.throttle)
 
     drawWheel(origin, L.wheelCX, L.wheelCY, L.wheelR, car.steer, state.getGhostSteering())
-    drawGear(origin, L.wheelCX, L.wheelCY, L.wheelR, car.gear)
+    drawGear(origin, L.wheelCX, L.wheelCY, L.wheelR, car.gear, state.getGhostGear())
     drawSpeed(origin, L.wheelCX, L.wheelCY + L.wheelR + 2, L.wheelR * 2, car)
 
     -- Toggle window buttons (left side, vertically stacked next to trace area)

@@ -323,7 +323,8 @@ end
 --- Add a sample from current car state
 ---@param self table Lap instance
 ---@param car table Car state from ac.getCar()
-function lap:addSample(car)
+---@param timeOffsetMs number|nil Optional time offset in ms (for checkpoint restore correction)
+function lap:addSample(car, timeOffsetMs)
     table.insert(self.throttle, car.gas)
     -- Get brake pressure in bar (from cphys DLL or fallback: pedal * 100)
     -- brake = front brake, brake_r = rear brake (or same as front if no DLL)
@@ -335,13 +336,16 @@ function lap:addSample(car)
     table.insert(self.speed, car.speedKmh)
     table.insert(self.gear, car.gear)
     table.insert(self.pos, car.splinePosition)
-    table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
+    -- Apply time offset correction (for checkpoint restore)
+    local correctedTimeMs = car.lapTimeMs - (timeOffsetMs or 0)
+    table.insert(self.times, correctedTimeMs / 1000)  -- seconds
     -- Fuel is recorded as a sparse channel (low-frequency changes)
     self:addSparseSample('fuel', car.splinePosition, car.fuel or 0)
 
     -- G-forces (non-sparse, full resolution)
+    -- Must copy the vec3 values since car.acceleration is reused each frame
     if car.acceleration then
-        table.insert(self.gforce, car.acceleration)
+        table.insert(self.gforce, vec3(car.acceleration.x, car.acceleration.y, car.acceleration.z))
     end
 
     -- Low-frequency settings (sparse)

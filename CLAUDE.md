@@ -216,6 +216,7 @@ state = {
     
     -- Reference lap
     bestLap = lap,               -- Best lap (from history or external)
+    bestInSession = lap,         -- Best lap from current session only (not loaded from file)
     bestLapCorners = {           -- Pre-computed corner analysis for bestLap
         [cornerNumber] = {
             entrySpeed = number,

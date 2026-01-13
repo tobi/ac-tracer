@@ -22,6 +22,7 @@ local M = {}
 
 local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
 local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
+local brakeBeepButton = ac.ControlButton('__AC_TRACER_BRAKE_BEEP_TOGGLE')
 
 --- Get the save checkpoint button (for polling in main loop)
 ---@return ac.ControlButton
@@ -33,6 +34,12 @@ end
 ---@return ac.ControlButton
 function M.getLoadCheckpointButton()
     return loadCheckpointButton
+end
+
+--- Get the brake beep toggle button (for polling in main loop)
+---@return ac.ControlButton
+function M.getBrakeBeepButton()
+    return brakeBeepButton
 end
 
 --------------------------------------------------------------------------------
@@ -61,6 +68,7 @@ local config = ac.storage({
     -- Telemetry window
     telemetryAutoHide = true,
     telemetryAutoHideSpeed = 20,
+    telemetryShowLateralG = true,  -- Show lateral G trace in telemetry
 
     -- Flag markers (shown in trace window and telemetry)
     showTCMarkers = false,
@@ -75,6 +83,14 @@ local config = ac.storage({
 
     -- Checkpoint system
     checkpointEnabled = true,  -- Enable/disable checkpoint save/load
+
+    -- Brake beep system (countdown beeps before brakepoint)
+    -- Values: "off", "ref" (reference lap), "session" (best in session)
+    brakeBeepMode = "off",
+
+    -- Brake marker system (3D line on track at brakepoint)
+    -- Values: "off", "next" (next corner only), "all" (all visible corners)
+    brakeMarkerMode = "next",
 }, "ac_tracer/")
 
 --------------------------------------------------------------------------------
@@ -103,6 +119,7 @@ function M.maxHistoryLaps() return config.maxHistoryLaps end
 -- Telemetry window
 function M.telemetryAutoHide() return config.telemetryAutoHide end
 function M.telemetryAutoHideSpeed() return config.telemetryAutoHideSpeed end
+function M.telemetryShowLateralG() return config.telemetryShowLateralG end
 
 -- Detection thresholds
 function M.brakeThreshold() return config.brakeThreshold end
@@ -111,6 +128,42 @@ function M.speedDropThreshold() return config.speedDropThreshold end
 
 -- Checkpoint system
 function M.checkpointEnabled() return config.checkpointEnabled end
+
+-- Brake beep system
+--- Get brake beep mode: "off", "ref", or "session"
+function M.brakeBeepMode() return config.brakeBeepMode or "off" end
+
+--- Set brake beep mode
+function M.setBrakeBeepMode(mode) config.brakeBeepMode = mode end
+
+--- Toggle brake beep mode: off -> ref -> session -> off
+function M.toggleBrakeBeepMode()
+    local current = config.brakeBeepMode or "off"
+    if current == "off" then
+        config.brakeBeepMode = "ref"
+    elseif current == "ref" then
+        config.brakeBeepMode = "session"
+    else
+        config.brakeBeepMode = "off"
+    end
+    return config.brakeBeepMode
+end
+
+--- Get display name for brake beep mode
+function M.brakeBeepModeDisplay()
+    local mode = config.brakeBeepMode or "off"
+    if mode == "ref" then return "Reference Lap"
+    elseif mode == "session" then return "Session Best"
+    else return "Off"
+    end
+end
+
+-- Brake marker system (3D line on track)
+--- Get brake marker mode: "off", "next", or "all"
+function M.brakeMarkerMode() return config.brakeMarkerMode or "next" end
+
+--- Set brake marker mode
+function M.setBrakeMarkerMode(mode) config.brakeMarkerMode = mode end
 
 --------------------------------------------------------------------------------
 -- Flag Marker Accessors
@@ -300,6 +353,63 @@ function M.windowSettings()
         ui.textColored("Press Save to capture position, Load to teleport back.", theme.text.muted)
         ui.popFont()
     end
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- BRAKE BEEP section
+    sectionHeader("BRAKE BEEP (Audio Cue)")
+    
+    ui.text("Mode:")
+    ui.sameLine(50)
+    if ui.radioButton("Off##beep", config.brakeBeepMode == "off") then
+        config.brakeBeepMode = "off"
+    end
+    ui.sameLine(90)
+    if ui.radioButton("Ref##beep", config.brakeBeepMode == "ref") then
+        config.brakeBeepMode = "ref"
+    end
+    ui.sameLine(140)
+    if ui.radioButton("Session##beep", config.brakeBeepMode == "session") then
+        config.brakeBeepMode = "session"
+    end
+    
+    ui.offsetCursorY(4)
+    ui.text("Toggle:")
+    ui.sameLine(50)
+    brakeBeepButton:control(vec2(120, 0))
+    
+    ui.offsetCursorY(2)
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("Beeps countdown to brakepoint from selected lap.", theme.text.muted)
+    ui.popFont()
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- BRAKE MARKER section
+    sectionHeader("BRAKE MARKER (Track Line)")
+    
+    ui.text("Mode:")
+    ui.sameLine(50)
+    if ui.radioButton("Off##marker", config.brakeMarkerMode == "off") then
+        config.brakeMarkerMode = "off"
+    end
+    ui.sameLine(90)
+    if ui.radioButton("Next##marker", config.brakeMarkerMode == "next") then
+        config.brakeMarkerMode = "next"
+    end
+    ui.sameLine(145)
+    if ui.radioButton("All##marker", config.brakeMarkerMode == "all") then
+        config.brakeMarkerMode = "all"
+    end
+    
+    ui.offsetCursorY(2)
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("Shows red line on track at brakepoint from ref lap.", theme.text.muted)
+    ui.popFont()
     
     ui.offsetCursorY(10)
     ui.separator()

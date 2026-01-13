@@ -21,9 +21,12 @@ function wedge.drawGauge(cx, cy, radius, score)
     local x = cx - width / 2
     local y = cy - height / 2
     
-    -- Color based on score: green >80, yellow 60-80, red <60
+    -- Color based on score: purple 100, green >80, yellow 60-80, red <60
     local color, bgColor
-    if score >= 80 then
+    if score >= 100 then
+        color = theme.corner.faster  -- Purple for perfect!
+        bgColor = rgbm(0.15, 0.08, 0.2, 0.95)  -- Dark purple bg
+    elseif score >= 80 then
         color = theme.delta.positive
         bgColor = rgbm(0.08, 0.2, 0.08, 0.95)  -- Dark green bg
     elseif score >= 60 then
@@ -86,9 +89,12 @@ function wedge.drawCompact(x, y, width, height, score)
     local centerX = x + width / 2
     local centerY = y + height / 2
     
-    -- Color based on score: green >80, yellow 60-80, red <60
+    -- Color based on score: purple 100, green >80, yellow 60-80, red <60
     local color, bgColor
-    if score >= 80 then
+    if score >= 100 then
+        color = theme.corner.faster  -- Purple for perfect!
+        bgColor = rgbm(0.18, 0.1, 0.25, 0.9)  -- Dark purple bg
+    elseif score >= 80 then
         color = theme.delta.positive
         bgColor = rgbm(0.1, 0.3, 0.1, 0.9)  -- Dark green bg
     elseif score >= 60 then
@@ -140,9 +146,12 @@ function wedge.drawMinimal(x, y, size, score)
     local endAngle = math.rad(0)       -- End at top
     local totalArc = endAngle - startAngle
     
-    -- Determine color based on score
+    -- Determine color based on score: purple 100, green >80, yellow 60-80, red <60
     local color, glowColor
-    if score >= 80 then
+    if score >= 100 then
+        color = theme.corner.faster  -- Purple for perfect!
+        glowColor = rgbm(0.7, 0.3, 1, 0.6)  -- Purple glow
+    elseif score >= 80 then
         color = theme.delta.positive
         glowColor = rgbm(0.3, 1, 0.3, 0.6)  -- Green glow
     elseif score >= 60 then
