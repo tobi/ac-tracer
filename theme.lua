@@ -70,14 +70,14 @@ theme.trace = {
     fuel = rgbm(1, 0.8, 0.3, 1),
 }
 
--- Ghost/reference traces (fainter)
+-- Ghost/reference traces (10% less transparent than before for better visibility)
 theme.ghost = {
-    throttle = rgbm(0, 1, 0, 0.25),
-    brake = rgbm(1, 0, 0, 0.25),
-    clutch = rgbm(0, 0.4, 1, 0.25),
-    steering = rgbm(0.7, 0.7, 0.7, 0.25),
-    speed = rgbm(0.5, 0.5, 0.7, 0.4),
-    gear = rgbm(0.9, 0.7, 0.3, 0.25),
+    throttle = rgbm(0, 1, 0, 0.35),
+    brake = rgbm(1, 0, 0, 0.35),
+    clutch = rgbm(0, 0.4, 1, 0.35),
+    steering = rgbm(0.7, 0.7, 0.7, 0.35),
+    speed = rgbm(0.5, 0.5, 0.7, 0.5),
+    gear = rgbm(0.9, 0.7, 0.3, 0.35),
 }
 
 -- Flag markers (background highlights in trace window)
@@ -99,7 +99,7 @@ theme.delta = {
 
 -- Corner analysis specific
 theme.corner = {
-    faster = rgbm(0.55, 0.20, 0.70, 1.0),    -- Purple: faster than ref (solid)
+    faster = rgbm(0.7, 0.3, 1.0, 1.0),       -- Purple: faster than ref (vibrant)
     onSpeed = rgbm(0.20, 0.70, 0.20, 1.0),   -- Green: matching ref (solid)
     slower = rgbm(0.70, 0.20, 0.20, 1.0),    -- Red: slower than ref (solid)
     -- Zone backgrounds (alternating)
@@ -160,7 +160,7 @@ theme.button = {
 -- Wheel/steering indicator
 theme.wheel = {
     bg = rgbm(0, 0, 0, 0.6),
-    indicator = rgbm(1, 1, 0, 1),
+    indicator = rgbm(1, 1, 1, 1),  -- White (was yellow)
     centerLine = rgbm(1, 0.2, 0.2, 1),
     notch = rgbm(0.5, 0.5, 0.5, 0.6),
     ghost = rgbm(0.6, 0.6, 0.6, 0.7),

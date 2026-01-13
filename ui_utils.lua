@@ -156,6 +156,121 @@ function ui_utils.formatPercent(value, decimals)
 end
 
 --------------------------------------------------------------------------------
+-- Trace Drawing
+--------------------------------------------------------------------------------
+
+--- Draw a telemetry trace line with optional filled area underneath
+--- Works with any array of normalized 0-1 values
+---@param x number Left edge X position
+---@param y number Top edge Y position
+---@param w number Width of trace area
+---@param h number Height of trace area
+---@param data table Array of values (0-1 normalized, or raw values if maxVal provided)
+---@param color rgbm Trace line color
+---@param opts table|nil Options: { filled, thickness, maxVal }
+---  - filled: boolean - Draw filled area under line (30% more transparent than line)
+---  - thickness: number - Line thickness (default 2)
+---  - maxVal: number - Max value for normalization (default 1, data is 0-1)
+function ui_utils.drawTrace(x, y, w, h, data, color, opts)
+    if not data or #data < 2 then return end
+    
+    opts = opts or {}
+    local thickness = opts.thickness or 2
+    local filled = opts.filled or false
+    local maxVal = opts.maxVal or 1
+    
+    local numPoints = #data
+    local step = w / (numPoints - 1)
+    
+    -- Draw filled area first if requested (use quads for non-convex shapes)
+    if filled then
+        local fillColor = rgbm(color.r, color.g, color.b, color.mult * 0.7 * 0.5)  -- 30% more transparent
+        local baseY = y + h
+        for i = 1, numPoints - 1 do
+            local val1 = math.clamp(data[i] / maxVal, 0, 1)
+            local val2 = math.clamp(data[i + 1] / maxVal, 0, 1)
+            local x1 = x + (i - 1) * step
+            local x2 = x + i * step
+            local y1 = y + h - val1 * h
+            local y2 = y + h - val2 * h
+            ui.drawQuadFilled(vec2(x1, y1), vec2(x2, y2), vec2(x2, baseY), vec2(x1, baseY), fillColor)
+        end
+    end
+    
+    -- Draw the line on top
+    ui.pathClear()
+    for i = 1, numPoints do
+        local val = math.clamp(data[i] / maxVal, 0, 1)
+        ui.pathLineTo(vec2(x + (i - 1) * step, y + h - val * h))
+    end
+    ui.pathStroke(color, false, thickness)
+end
+
+--- Draw a stepped gear trace (discrete values)
+---@param x number Left edge X position
+---@param y number Top edge Y position
+---@param w number Width of trace area
+---@param h number Height of trace area
+---@param data table Array of gear values
+---@param color rgbm Trace line color
+---@param opts table|nil Options: { filled, thickness, maxGear }
+function ui_utils.drawGearTrace(x, y, w, h, data, color, opts)
+    if not data or #data < 2 then return end
+    
+    opts = opts or {}
+    local thickness = opts.thickness or 2
+    local filled = opts.filled or false
+    local maxGear = opts.maxGear or 8
+    
+    local numPoints = #data
+    local step = w / (numPoints - 1)
+    
+    -- Draw filled area first if requested
+    if filled then
+        local fillColor = rgbm(color.r, color.g, color.b, color.mult * 0.7 * 0.5)
+        local prevGear = nil
+        local prevX = nil
+        for i = 1, numPoints do
+            local gear = data[i]
+            local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
+            local px = x + (i - 1) * step
+            
+            if prevGear ~= nil then
+                local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
+                local prevY = y + h - prevNorm * h
+                ui.drawRectFilled(vec2(prevX, prevY), vec2(px, y + h), fillColor)
+            end
+            
+            prevGear = gear
+            prevX = px
+        end
+    end
+    
+    -- Draw stepped line (horizontal segments with vertical transitions)
+    local prevGear = nil
+    local prevX = nil
+    for i = 1, numPoints do
+        local gear = data[i]
+        local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
+        local px = x + (i - 1) * step
+        local py = y + h - normalized * h
+        
+        if prevGear ~= nil then
+            local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
+            local prevY = y + h - prevNorm * h
+            
+            ui.drawLine(vec2(prevX, prevY), vec2(px, prevY), color, thickness)
+            if gear ~= prevGear then
+                ui.drawLine(vec2(px, prevY), vec2(px, py), color, thickness)
+            end
+        end
+        
+        prevGear = gear
+        prevX = px
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Graph Helpers
 --------------------------------------------------------------------------------
 

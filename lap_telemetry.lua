@@ -67,11 +67,11 @@ local function getSelectedLap()
         return selectedLap
     end
 
-    -- Auto mode: select best lap automatically
-    -- First, try fastest from current session
-    local fastest = ctx and ctx.getFastestSessionLap and ctx.getFastestSessionLap() or nil
-    if fastest then
-        return fastest
+    -- Auto mode: select best lap from current session (bestInSession)
+    -- This is the fastest lap driven in this session (not loaded from file)
+    local bestInSession = ctx and ctx.bestInSession or nil
+    if bestInSession and bestInSession:length() > 0 then
+        return bestInSession
     end
 
     -- Fallback to first history lap (which should be most recent)
@@ -1239,12 +1239,12 @@ function lap_telemetry.draw(dt, context)
         local lapTimeS = viewingLap.time / 1000
         local mins = math.floor(lapTimeS / 60)
         local secs = lapTimeS - mins * 60
-        -- Show label based on mode: (Auto), (CSV), or nothing for manual
+        -- Show label based on mode: (Session Best), (CSV), or nothing for manual
         local label = ""
         if viewingLap.csvSource then
             label = " (CSV)"
         elseif autoMode then
-            label = " (Auto)"
+            label = " (Session Best)"
         end
         ui.text(string.format("Lap: %d:%05.2f%s", mins, secs, label))
         ui.popStyleColor()

@@ -33,6 +33,9 @@ state.currentLap = nil         -- lap: being recorded
 state.bestLap = nil            -- lap: current reference for ghost comparison
 state.bestLapCorners = {}      -- pre-computed corner analysis for bestLap
 
+-- Best lap from current session only (not loaded from file)
+state.bestInSession = nil      -- lap: fastest valid lap driven in this session
+
 -- Brake scale for charts (computed from max brake across relevant laps)
 state.brakeScaleBar = 100      -- number: max bar value for brake charts (90 or 100)
 
@@ -42,10 +45,141 @@ state.cornerRecordStart = nil
 state.cornerRecordTime = nil
 
 -- Checkpoint system (session-only, not persisted)
-state.checkpoint = nil  -- { carState, lapSnapshot, pos, lapCount }
+state.checkpoint = nil  -- { carState, lapSnapshot, pos, lapCount, lapTimeMs }
 local checkpointCallbacks = {}  -- Callbacks to notify on checkpoint load
 local isLoadingCheckpoint = false  -- Flag to prevent onCarJumped from discarding lap during our restore
 local lastCheckpointLoadTime = 0  -- Time when checkpoint was last loaded (for grace period)
+
+-- Lap time offset (corrects for AC not restoring lapTimeMs on teleport)
+-- After checkpoint load: correctedTime = car.lapTimeMs - lapTimeOffset
+local lapTimeOffset = 0
+
+--------------------------------------------------------------------------------
+-- Brake Beep System
+--------------------------------------------------------------------------------
+
+-- Beep countdown state
+local brakeBeep = {
+    nextBrakePos = nil,      -- Position of next brakepoint (0-1)
+    lastBrakePos = nil,      -- Last brakepoint we processed (to avoid repeating)
+    beepIndex = 0,           -- Which beep in countdown (0 = not started, 1-4 = beeps)
+    lastBeepTime = 0,        -- Time of last beep (to prevent spam)
+}
+
+-- Beep times before brakepoint (in seconds, counting down)
+-- beep 1 at ~1.5s, beep 2 at ~1.0s, beep 3 at ~0.5s, final BEEP at brakepoint
+local BEEP_TIMES = { 1.5, 1.0, 0.5, 0 }
+-- Pitch multipliers for each beep (increasing pitch)
+local BEEP_PITCHES = { 0.8, 1.0, 1.2, 1.5 }
+
+--- Check if a position is inside a corner
+---@param pos number Spline position (0-1)
+---@param corners table Array of corner definitions
+---@return table|nil Corner definition if inside, nil if not
+local function getCornerAtPosition(pos, corners)
+    if not corners then return nil end
+    for _, c in ipairs(corners) do
+        if c.startPos and c.endPos then
+            local inside
+            if c.startPos <= c.endPos then
+                inside = pos >= c.startPos and pos <= c.endPos
+            else
+                -- Handle wrap-around corners
+                inside = pos >= c.startPos or pos <= c.endPos
+            end
+            if inside then return c end
+        end
+    end
+    return nil
+end
+
+--- Find the first brakepoint inside each corner from a lap
+--- Returns a sorted list of brakepoints (one per corner, the first brake touch)
+---@param lapData table Lap instance
+---@param corners table Array of corner definitions
+---@return table Array of {pos, cornerNum} sorted by position
+local function findCornerBrakepoints(lapData, corners)
+    if not lapData or lapData:length() < 10 then return {} end
+    if not corners or #corners == 0 then return {} end
+
+    -- Threshold for detecting intentional braking (not just light touches)
+    local BRAKE_TOUCH_THRESHOLD = 2  -- 2 bar = light but intentional braking
+    
+    -- Track which corners we've already found a brakepoint for
+    local cornerBrakepoints = {}  -- cornerNum -> brakepoint position
+    
+    -- Scan the lap looking for first brake application in each corner
+    local wasUnderThreshold = true  -- Start as if we weren't braking
+    
+    for i = 1, lapData:length() do
+        local brake = lapData.brake[i] or 0
+        local pos = lapData.pos[i]
+        if not pos then goto continue end
+        
+        -- Check if this position is inside a corner
+        local corner = getCornerAtPosition(pos, corners)
+        
+        if brake < BRAKE_TOUCH_THRESHOLD then
+            wasUnderThreshold = true
+        elseif wasUnderThreshold and brake >= BRAKE_TOUCH_THRESHOLD then
+            -- First brake touch detected
+            wasUnderThreshold = false
+            
+            -- Only record if inside a corner and we haven't recorded this corner yet
+            if corner and not cornerBrakepoints[corner.number] then
+                cornerBrakepoints[corner.number] = pos
+            end
+        end
+        
+        ::continue::
+    end
+    
+    -- Convert to sorted array
+    local result = {}
+    for cornerNum, pos in pairs(cornerBrakepoints) do
+        table.insert(result, { pos = pos, cornerNum = cornerNum })
+    end
+    table.sort(result, function(a, b) return a.pos < b.pos end)
+    
+    return result
+end
+
+-- Cache for corner brakepoints (recalculated when lap changes)
+local cachedBrakepoints = nil
+local cachedBrakepointsLap = nil
+
+--- Find the next brakepoint from a lap after the given position
+---@param lapData table Lap instance
+---@param currentPos number Current spline position (0-1)
+---@return number|nil Brakepoint position, or nil if not found
+local function findNextBrakepoint(lapData, currentPos)
+    if not lapData or lapData:length() < 10 then return nil end
+    
+    -- Recalculate brakepoints if lap changed
+    if cachedBrakepointsLap ~= lapData then
+        cachedBrakepoints = findCornerBrakepoints(lapData, state.trackCorners)
+        cachedBrakepointsLap = lapData
+    end
+    
+    if not cachedBrakepoints or #cachedBrakepoints == 0 then return nil end
+    
+    -- Find the next brakepoint ahead of current position
+    local bestPos = nil
+    local bestDistance = 2  -- > 1 means we haven't found anything
+    
+    for _, bp in ipairs(cachedBrakepoints) do
+        local distance = bp.pos - currentPos
+        if distance < 0 then distance = distance + 1 end
+        
+        -- Only consider brakepoints ahead of us (small buffer to avoid the one we just passed)
+        if distance > 0.005 and distance < bestDistance then
+            bestDistance = distance
+            bestPos = bp.pos
+        end
+    end
+    
+    return bestPos
+end
 
 --------------------------------------------------------------------------------
 -- Constants
@@ -805,6 +939,13 @@ function state.update(dt, car)
             
             -- Update best lap if this is faster and valid
             if state.currentLap.valid and state.currentLap.time > 0 then
+                -- Update bestInSession (session-only best, never from file)
+                if not state.bestInSession or state.currentLap.time < state.bestInSession.time then
+                    state.bestInSession = state.currentLap
+                    ac.log('Traces: New best in session: ' .. (state.currentLap.time / 1000) .. 's')
+                end
+                
+                -- Update overall bestLap if this is faster
                 if not state.bestLap or state.currentLap.time < state.bestLap.time then
                     state.bestLap = state.currentLap
                     state.bestLapCorners = state.analyzeCorners(state.currentLap)
@@ -824,6 +965,7 @@ function state.update(dt, car)
         state.currentLap.fuelLeftAtStart = car.fuel
         state.lapNumber = car.lapCount
         lap.resetOverlapTracking()  -- Reset overlap detection state
+        lapTimeOffset = 0  -- Reset time offset for new lap
     end
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
@@ -865,13 +1007,78 @@ function state.update(dt, car)
         -- Add sample if valid (and not in pits) and under max limit
         if car.lapTimeMs > 0 and car.splinePosition >= 0 and not inPit then
             if state.currentLap:length() < MAX_SAMPLES then
-                state.currentLap:addSample(car)
+                -- Pass time offset for checkpoint restore correction
+                state.currentLap:addSample(car, lapTimeOffset)
             end
         end
     end
     
     -- Update position
     state.trackPosition = car.splinePosition
+    
+    -- Brake beep system
+    local beepMode = settings.brakeBeepMode()
+    if beepMode ~= "off" and car.speedKmh > 30 then
+        -- Get the lap to use for brakepoint detection
+        local beepLap = nil
+        if beepMode == "ref" then
+            beepLap = state.bestLap
+        elseif beepMode == "session" then
+            beepLap = state.bestInSession
+        end
+        
+        if beepLap and beepLap:length() > 10 then
+            local trackLength = sim.trackLengthM or 5000
+            local currentPos = car.splinePosition
+            
+            -- Find next brakepoint if we don't have one or passed the current one
+            if not brakeBeep.nextBrakePos then
+                brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
+                brakeBeep.beepIndex = 0
+            else
+                -- Check if we passed the brakepoint
+                local distToBrake = brakeBeep.nextBrakePos - currentPos
+                if distToBrake < 0 then distToBrake = distToBrake + 1 end
+                
+                -- If we passed it (or very close), find next one
+                if distToBrake > 0.5 or distToBrake < 0.003 then
+                    brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
+                    brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
+                    brakeBeep.beepIndex = 0
+                end
+            end
+            
+            -- Calculate time to brakepoint based on current speed
+            if brakeBeep.nextBrakePos then
+                local distToBrake = brakeBeep.nextBrakePos - currentPos
+                if distToBrake < 0 then distToBrake = distToBrake + 1 end
+                local distMeters = distToBrake * trackLength
+                
+                -- Convert distance to time: time = distance / speed
+                -- Speed is in km/h, convert to m/s (divide by 3.6)
+                local speedMs = car.speedKmh / 3.6
+                local timeToBrake = speedMs > 1 and (distMeters / speedMs) or 999
+                
+                -- Play beeps at countdown times
+                local now = os.clock()
+                for i, timeThreshold in ipairs(BEEP_TIMES) do
+                    if brakeBeep.beepIndex < i and timeToBrake <= timeThreshold then
+                        -- Time check to prevent double-beeps
+                        if (now - brakeBeep.lastBeepTime) > 0.1 then
+                            notification.playBeep(BEEP_PITCHES[i])
+                            brakeBeep.beepIndex = i
+                            brakeBeep.lastBeepTime = now
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    else
+        -- Reset beep state when disabled or car is slow
+        brakeBeep.nextBrakePos = nil
+        brakeBeep.beepIndex = 0
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -890,6 +1097,13 @@ end
 function state.getGhostSteering()
     if not state.bestLap then return nil end
     return state.bestLap:steeringDegAt(state.trackPosition)
+end
+
+--- Get ghost gear at current position
+---@return number|nil Gear number
+function state.getGhostGear()
+    if not state.bestLap then return nil end
+    return math.floor(state.bestLap:gearAt(state.trackPosition) + 0.5)  -- Round to nearest integer
 end
 
 --- Get ghost traces for display positions
@@ -920,10 +1134,17 @@ function state.getBestLap()
     return state.bestLap
 end
 
---- Get fastest lap from current session only
+--- Get fastest lap from current session only (from history)
 ---@return table|nil lap, number|nil index
 function state.getFastestSessionLap()
     return history_storage.getFastestFromSession(state.sessionId)
+end
+
+--- Get best lap driven in this session (not loaded from file)
+--- This is updated live and cached, so it's faster than getFastestSessionLap
+---@return table|nil
+function state.getBestInSession()
+    return state.bestInSession
 end
 
 --- Get laps from current session
@@ -1299,12 +1520,13 @@ function state.saveCheckpoint(traceHistory)
             return 
         end
 
-        -- Store checkpoint data
+        -- Store checkpoint data (including lapTimeMs for time offset calculation on load)
         state.checkpoint = {
             carState = carStateBlob,
             lapSnapshot = state.currentLap and state.currentLap:clone() or nil,
             pos = car.splinePosition,
             lapCount = car.lapCount,
+            lapTimeMs = car.lapTimeMs,  -- Save this to correct delta after load
             traceSnapshot = pendingTraceHistory,
         }
         pendingTraceHistory = nil
@@ -1348,6 +1570,17 @@ function state.loadCheckpoint()
 
     -- Clear the flag
     isLoadingCheckpoint = false
+
+    -- Get current car state after teleport
+    local car = ac.getCar(0)
+
+    -- Calculate lap time offset: AC doesn't restore lapTimeMs on teleport,
+    -- so we need to correct for the difference between current time and saved time
+    if car and state.checkpoint.lapTimeMs then
+        lapTimeOffset = car.lapTimeMs - state.checkpoint.lapTimeMs
+        ac.log(string.format("AC Tracer: Lap time offset calculated: %d ms (current: %d, saved: %d)",
+            lapTimeOffset, car.lapTimeMs, state.checkpoint.lapTimeMs))
+    end
 
     -- Restore plugin state
     if state.checkpoint.lapSnapshot then
@@ -1393,6 +1626,18 @@ function state.getCheckpointTraceHistory()
         return state.checkpoint.traceSnapshot
     end
     return nil
+end
+
+--- Get the lap time offset (for correcting delta after checkpoint load)
+--- Use this to get the corrected lap time: (car.lapTimeMs - offset) / 1000
+---@return number Offset in milliseconds (0 if no checkpoint was loaded)
+function state.getLapTimeOffset()
+    return lapTimeOffset
+end
+
+--- Reset the lap time offset (call when starting a new lap normally)
+function state.resetLapTimeOffset()
+    lapTimeOffset = 0
 end
 
 --------------------------------------------------------------------------------

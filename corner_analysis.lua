@@ -8,6 +8,7 @@ local extended_brake = require('extended-brake')
 local theme = require('theme')
 local ui_utils = require('ui_utils')
 local wedge = require('wedge')
+local state = require('state')
 
 local corner_analysis = {}
 
@@ -822,7 +823,9 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
         end
     end
     
-    currentLapTime = car.lapTimeMs / 1000
+    -- Apply time offset for checkpoint restore correction
+    local lapTimeOffset = state.getLapTimeOffset()
+    currentLapTime = (car.lapTimeMs - lapTimeOffset) / 1000
     
     local currentPos = car.splinePosition
     local currentSpeed = car.speedKmh
@@ -1007,43 +1010,88 @@ end
 -- UI Drawing
 --------------------------------------------------------------------------------
 
+--- Calculate speed range for corner graph (shared by drawing functions)
+---@param currentSpeeds table Array of {pos, speed} samples
+---@param refSpeeds table|nil Array of {pos, speed} reference samples
+---@return number minSpeed Minimum speed for Y axis
+---@return number maxSpeed Maximum speed for Y axis
+---@return number speedRange Range for normalization
+local function calculateSpeedRange(currentSpeeds, refSpeeds)
+    local minSpeed, maxSpeed = math.huge, 0
+    for i, s in ipairs(currentSpeeds) do
+        minSpeed = math.min(minSpeed, s.speed)
+        maxSpeed = math.max(maxSpeed, s.speed)
+        if refSpeeds and refSpeeds[i] then
+            minSpeed = math.min(minSpeed, refSpeeds[i].speed)
+            maxSpeed = math.max(maxSpeed, refSpeeds[i].speed)
+        end
+    end
+    local speedRange = maxSpeed - minSpeed
+    minSpeed = minSpeed - speedRange * 0.15
+    maxSpeed = maxSpeed + speedRange * 0.1
+    speedRange = maxSpeed - minSpeed
+    return minSpeed, maxSpeed, speedRange
+end
+
+--- Find apex (minimum speed) from sampled speed data
+--- Returns the position and index of the minimum speed sample
+---@param speeds table Array of {pos, speed} samples
+---@return number|nil apexPos Position of minimum speed
+---@return number|nil apexIdx Index of minimum speed sample
+---@return number|nil apexSpeed Speed at apex
+local function findSampledApex(speeds)
+    if not speeds or #speeds < 2 then return nil, nil, nil end
+    local minSpeed = math.huge
+    local apexPos = nil
+    local apexIdx = nil
+    for i, s in ipairs(speeds) do
+        if s.speed < minSpeed then
+            minSpeed = s.speed
+            apexPos = s.pos
+            apexIdx = i
+        end
+    end
+    return apexPos, apexIdx, minSpeed
+end
+
 local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
     if not currentSpeeds or #currentSpeeds < 2 then return end
     if not refSpeeds or #refSpeeds < 2 then return end
 
     local SPEED_TOLERANCE = 1
 
-    -- Calculate speed range from captured data (no live state queries)
-    local minSpeed, maxSpeed = math.huge, 0
-    for i, s in ipairs(currentSpeeds) do
-        minSpeed = math.min(minSpeed, s.speed)
-        maxSpeed = math.max(maxSpeed, s.speed)
-        if refSpeeds[i] then
-            minSpeed = math.min(minSpeed, refSpeeds[i].speed)
-            maxSpeed = math.max(maxSpeed, refSpeeds[i].speed)
-        end
-    end
-
-    local speedRange = maxSpeed - minSpeed
-    minSpeed = minSpeed - speedRange * 0.15
-    maxSpeed = maxSpeed + speedRange * 0.1
-    speedRange = maxSpeed - minSpeed
-
+    local minSpeed, maxSpeed, speedRange = calculateSpeedRange(currentSpeeds, refSpeeds)
     if speedRange <= 0 then return end
 
     local numPoints = #currentSpeeds
     local bottomY = y + h
 
-    -- Draw filled comparison using captured data
+    -- Use position-based X coordinates from sampled data
+    local startPos = currentSpeeds[1].pos
+    local endPos = currentSpeeds[numPoints].pos
+    local posRange = endPos - startPos
+    if posRange <= 0 then posRange = posRange + 1 end  -- Handle wrap-around
+
+    -- Helper to convert position to X coordinate
+    local function posToX(pos)
+        local relPos = pos - startPos
+        if relPos < 0 then relPos = relPos + 1 end  -- Handle wrap-around
+        return x + (relPos / posRange) * w
+    end
+
+    -- Draw filled comparison using quads (more reliable than pathFillConvex)
     for i = 1, numPoints - 1 do
         local s1 = currentSpeeds[i]
         local s2 = currentSpeeds[i + 1]
         local ref1 = refSpeeds[i] and refSpeeds[i].speed or s1.speed
         local ref2 = refSpeeds[i + 1] and refSpeeds[i + 1].speed or s2.speed
-        local x1 = x + (i - 1) / (numPoints - 1) * w
-        local x2 = x + i / (numPoints - 1) * w
+        
+        -- Use actual position for X coordinate
+        local x1 = posToX(s1.pos)
+        local x2 = posToX(s2.pos)
         local curY1 = y + h - ((s1.speed - minSpeed) / speedRange) * h
         local curY2 = y + h - ((s2.speed - minSpeed) / speedRange) * h
+        
         local avgCurSpeed = (s1.speed + s2.speed) / 2
         local avgRefSpeed = (ref1 + ref2) / 2
         local speedDiff = avgCurSpeed - avgRefSpeed
@@ -1055,18 +1103,15 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
         else
             color = theme.corner.slower
         end
-        ui.pathClear()
-        ui.pathLineTo(vec2(x1, curY1))
-        ui.pathLineTo(vec2(x2, curY2))
-        ui.pathLineTo(vec2(x2, bottomY))
-        ui.pathLineTo(vec2(x1, bottomY))
-        ui.pathFillConvex(color)
+        
+        -- Use drawQuadFilled for reliable non-convex shape handling
+        ui.drawQuadFilled(vec2(x1, curY1), vec2(x2, curY2), vec2(x2, bottomY), vec2(x1, bottomY), color)
     end
 
-    -- Draw reference speed line using captured data
+    -- Draw reference speed line using position-based coordinates
     ui.pathClear()
     for i, s in ipairs(refSpeeds) do
-        local px = x + (i - 1) / (numPoints - 1) * w
+        local px = posToX(s.pos)
         local py = y + h - ((s.speed - minSpeed) / speedRange) * h
         ui.pathLineTo(vec2(px, py))
     end
@@ -1107,30 +1152,23 @@ end
 
 local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
     if not currentSpeeds or #currentSpeeds < 2 then return end
+    
+    local numPoints = #currentSpeeds
     local startPos = currentSpeeds[1].pos
-    local endPos = currentSpeeds[#currentSpeeds].pos
+    local endPos = currentSpeeds[numPoints].pos
     local posRange = endPos - startPos
-    if posRange <= 0 then posRange = 1 end
+    if posRange <= 0 then posRange = posRange + 1 end  -- Handle wrap-around
 
-    -- Calculate speed range for Y positioning (same as drawFilledComparison)
-    local minSpeed, maxSpeed = math.huge, 0
-    for i, s in ipairs(currentSpeeds) do
-        minSpeed = math.min(minSpeed, s.speed)
-        maxSpeed = math.max(maxSpeed, s.speed)
-        if refSpeeds and refSpeeds[i] then
-            minSpeed = math.min(minSpeed, refSpeeds[i].speed)
-            maxSpeed = math.max(maxSpeed, refSpeeds[i].speed)
-        end
-    end
-    local speedRange = maxSpeed - minSpeed
-    minSpeed = minSpeed - speedRange * 0.15
-    maxSpeed = maxSpeed + speedRange * 0.08
-    speedRange = maxSpeed - minSpeed
+    -- Use shared speed range calculation for consistency with filled graph
+    local minSpeed, maxSpeed, speedRange = calculateSpeedRange(currentSpeeds, refSpeeds)
     if speedRange <= 0 then speedRange = 1 end
 
+    -- Helper to convert position to X coordinate (same logic as drawFilledComparison)
     local function posToX(pos)
         if not pos then return nil end
-        local px = x + ((pos - startPos) / posRange) * w
+        local relPos = pos - startPos
+        if relPos < 0 then relPos = relPos + 1 end  -- Handle wrap-around
+        local px = x + (relPos / posRange) * w
         if px >= x and px <= x + w then return px end
         return nil
     end
@@ -1139,41 +1177,28 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
         return y + h - ((speed - minSpeed) / speedRange) * h
     end
 
-    -- Find speed at a position from a speed array
-    local function getSpeedAtPos(speeds, pos)
-        if not speeds or #speeds < 2 or not pos then return nil end
-        -- Find the index that corresponds to this position
-        for i, s in ipairs(speeds) do
-            if math.abs(s.pos - pos) < 0.001 then
-                return s.speed
-            end
-        end
-        -- Interpolate if exact match not found
-        for i = 1, #speeds - 1 do
-            if speeds[i].pos <= pos and speeds[i + 1].pos >= pos then
-                local t = (pos - speeds[i].pos) / (speeds[i + 1].pos - speeds[i].pos)
-                return speeds[i].speed + t * (speeds[i + 1].speed - speeds[i].speed)
-            end
-        end
-        return nil
-    end
+    -- Find apex from SAMPLED data so marker aligns with visual minimum in graph
+    -- This is more accurate than using raw lap data apex which may fall between samples
+    local curApexPos, curApexIdx, curApexSpeed = findSampledApex(currentSpeeds)
+    local refApexPos, refApexIdx, refApexSpeed = findSampledApex(refSpeeds)
 
     -- Reference apex line (dashed white) - extends down to the ref speed line
-    local refApexX = posToX(data.refApexPos)
-    if refApexX then
-        local refApexSpeed = getSpeedAtPos(refSpeeds, data.refApexPos)
-        local lineEndY = refApexSpeed and speedToY(refApexSpeed) or (y + h)
-        ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, lineEndY), theme.marker.apexRef, 2, 5, 3)
+    if refApexPos then
+        local refApexX = posToX(refApexPos)
+        if refApexX then
+            local lineEndY = refApexSpeed and speedToY(refApexSpeed) or (y + h)
+            ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, lineEndY), theme.marker.apexRef, 2, 5, 3)
+        end
     end
 
-    -- Current apex line (solid white) - extends down to the current speed line
-    local curApexX = posToX(data.currentApexPos)
-    if curApexX then
-        local curApexSpeed = getSpeedAtPos(currentSpeeds, data.currentApexPos)
-        local lineEndY = curApexSpeed and speedToY(curApexSpeed) or (y + h)
-        ui.drawLine(vec2(curApexX, y), vec2(curApexX, lineEndY), theme.text.primary, 3)
+    -- Current apex line (solid yellow) - extends down to the current speed line
+    if curApexPos then
+        local curApexX = posToX(curApexPos)
+        if curApexX then
+            local lineEndY = curApexSpeed and speedToY(curApexSpeed) or (y + h)
+            ui.drawLine(vec2(curApexX, y), vec2(curApexX, lineEndY), theme.marker.apex, 3)
+        end
     end
-
 end
 
 -- drawScoreGauge removed - now using wedge.drawGauge
@@ -1189,50 +1214,17 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
         ui.drawLine(vec2(x, lineY), vec2(x + w, lineY), rgbm(0.3, 0.3, 0.3, 0.3), 1)
     end
 
-    -- Draw reference traces first (behind current) using captured data
+    -- Draw reference traces first (behind current) with filled areas
     if refPedals and #refPedals.throttle > 0 then
-        local numPoints = #refPedals.throttle
-
-        -- Reference throttle (ghost)
-        ui.pathClear()
-        for i, throttle in ipairs(refPedals.throttle) do
-            local px = x + ((i - 1) / (numPoints - 1)) * w
-            local py = y + h - throttle * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.ghost.throttle, false, 2)
-
-        -- Reference brake (ghost)
-        ui.pathClear()
-        for i, brake in ipairs(refPedals.brake) do
-            local px = x + ((i - 1) / (numPoints - 1)) * w
-            local py = y + h - brake * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.ghost.brake, false, 2)
+        -- Reference throttle then brake (throttle first so brake renders on top)
+        ui_utils.drawTrace(x, y, w, h, refPedals.throttle, theme.ghost.throttle, { thickness = 2, filled = true })
+        ui_utils.drawTrace(x, y, w, h, refPedals.brake, theme.ghost.brake, { thickness = 2, filled = true })
     end
 
-    -- Draw current traces using captured data
+    -- Draw current traces on top (throttle first so brake renders on top)
     if currentPedals and #currentPedals.throttle > 0 then
-        local numPoints = #currentPedals.throttle
-
-        -- Current throttle
-        ui.pathClear()
-        for i, throttle in ipairs(currentPedals.throttle) do
-            local px = x + ((i - 1) / (numPoints - 1)) * w
-            local py = y + h - throttle * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.trace.throttle, false, 2)
-
-        -- Current brake
-        ui.pathClear()
-        for i, brake in ipairs(currentPedals.brake) do
-            local px = x + ((i - 1) / (numPoints - 1)) * w
-            local py = y + h - brake * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.trace.brake, false, 2)
+        ui_utils.drawTrace(x, y, w, h, currentPedals.throttle, theme.trace.throttle, { thickness = 2 })
+        ui_utils.drawTrace(x, y, w, h, currentPedals.brake, theme.trace.brake, { thickness = 2 })
     end
 
     -- Outline
@@ -1285,7 +1277,10 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         
         -- Determine colors based on score
         local scoreColor, cardBg
-        if displayScore >= 80 then
+        if displayScore >= 100 then
+            scoreColor = theme.corner.faster  -- Purple for perfect score!
+            cardBg = rgbm(0.12, 0.06, 0.15, 0.9)
+        elseif displayScore >= 80 then
             scoreColor = theme.delta.positive
             cardBg = rgbm(0.06, 0.15, 0.06, 0.9)
         elseif displayScore >= 60 then
@@ -1686,7 +1681,6 @@ end
 --------------------------------------------------------------------------------
 
 -- Register checkpoint callback with state module
-local state = require('state')
 state.onCheckpointLoad(corner_analysis.onCheckpointLoad)
 
 return corner_analysis

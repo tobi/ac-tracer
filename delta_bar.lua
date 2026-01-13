@@ -4,6 +4,7 @@
 local theme = require('theme')
 local corner_analysis = require('corner_analysis')
 local wedge = require('wedge')
+local state = require('state')
 
 local delta_bar = {}
 
@@ -60,9 +61,10 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
             if referenceLap and currentPos then
-                -- Use live car.lapTimeMs for delta calculation (always accurate after checkpoint restore)
-                -- This bypasses stored lap.times[] which can become stale after teleport
-                local currentTimeS = car.lapTimeMs / 1000
+                -- Use live car.lapTimeMs for delta calculation, corrected by checkpoint offset
+                -- After checkpoint load, AC doesn't restore lapTimeMs, so we subtract the offset
+                local lapTimeOffset = state.getLapTimeOffset()
+                local currentTimeS = (car.lapTimeMs - lapTimeOffset) / 1000
                 local refTimeS = referenceLap:getTimeAtPos(currentPos)
                 lastDelta = currentTimeS - (refTimeS or currentTimeS)
             else

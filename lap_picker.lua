@@ -371,7 +371,9 @@ function lap_picker.drawPopover(x, y, width, height, options)
     py = y + height - 30
     ui.setCursor(vec2(contentX, py))
     if ui.button("Close##picker", vec2(contentW, 0)) then
-        if lap_picker.onClose then
+        if options.onClose then
+            options.onClose()
+        elseif lap_picker.onClose then
             lap_picker.onClose()
         end
     end
