@@ -91,6 +91,9 @@ local config = ac.storage({
     -- Brake marker system (3D line on track at brakepoint)
     -- Values: "off", "next" (next corner only), "all" (all visible corners)
     brakeMarkerMode = "next",
+
+    -- Lookahead traces (show future reference lap data)
+    showFutureTraces = true,
 }, "ac_tracer/")
 
 --------------------------------------------------------------------------------
@@ -164,6 +167,10 @@ function M.brakeMarkerMode() return config.brakeMarkerMode or "next" end
 
 --- Set brake marker mode
 function M.setBrakeMarkerMode(mode) config.brakeMarkerMode = mode end
+
+-- Lookahead/future traces from reference lap
+function M.showFutureTraces() return config.showFutureTraces end
+function M.setShowFutureTraces(v) config.showFutureTraces = v end
 
 --------------------------------------------------------------------------------
 -- Flag Marker Accessors
@@ -251,6 +258,12 @@ function M.windowSettings()
     local newRate = ui.slider("##samplerate", config.sampleRate, 10, 60, "%.0f Hz")
     if newRate ~= config.sampleRate then
         config.sampleRate = newRate
+    end
+    
+    ui.offsetCursorY(6)
+    
+    if ui.checkbox("Show future traces from ref", config.showFutureTraces) then
+        config.showFutureTraces = not config.showFutureTraces
     end
     
     ui.offsetCursorY(10)

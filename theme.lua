@@ -159,11 +159,11 @@ theme.button = {
 
 -- Wheel/steering indicator
 theme.wheel = {
-    bg = rgbm(0, 0, 0, 0.6),
+    bg = rgbm(0, 0, 0, 1),
     indicator = rgbm(1, 1, 1, 1),  -- White (was yellow)
-    centerLine = rgbm(1, 0.2, 0.2, 1),
+    centerLine = rgbm(0.4, 0.2, 0.2, 1),
     notch = rgbm(0.5, 0.5, 0.5, 0.6),
-    ghost = rgbm(0.6, 0.6, 0.6, 0.7),
+    ghost = rgbm(0.4, 0.4, 0.4, 1),
 }
 
 -- Score gauge
