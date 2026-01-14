@@ -107,7 +107,7 @@ local function drawBrakeMarkers()
     local mode = settings.brakeMarkerMode()
     if mode == "off" then return end
     
-    local refLap = state.bestLap
+    local refLap = state.getComparisonLap()
     if not refLap or refLap:length() < 10 then return end
     
     local car = currentCar
@@ -192,6 +192,11 @@ function script.update(dt)
 
     local sim = ac.getSim()
 
+    -- Pause keybind polling (must happen before skip check so user can unpause)
+    if settings.getPauseSimButton():pressed() then
+        ui_utils.toggleSimPause()
+    end
+
     -- Skip all updates during pause or replay (TimeShift rewind)
     if sim.isPaused or sim.isReplayActive then return end
 
@@ -236,6 +241,13 @@ function script.update(dt)
         ac.setMessage("Brake Beep", settings.brakeBeepModeDisplay())
     end
 
+    -- Comparison mode toggle hotkey
+    local comparisonModeButton = settings.getComparisonModeButton()
+    if comparisonModeButton:pressed() then
+        local newMode = settings.toggleComparisonMode()
+        ac.setMessage("Comparison", settings.comparisonModeDisplay())
+    end
+
     -- Update centralized state (handles lap recording, completion, best lap)
     state.update(dt, currentCar)
 
@@ -248,7 +260,7 @@ function script.update(dt)
     end
 
     -- Update corner analysis (live tracking)
-    corner_analysis.update(currentCar, state.currentLap, state.bestLap, state.trackCorners)
+    corner_analysis.update(currentCar, state.currentLap, state.getComparisonLap(), state.trackCorners)
 
     -- Draw brake markers on track (3D rendering)
     drawBrakeMarkers()
@@ -668,7 +680,8 @@ function script.windowMain(dt)
         
         -- Lookahead: Generate positions ahead of current position (only if enabled)
         local lookaheadPoints = math.ceil(maxPoints * (1 - historyRatio))
-        if showFuture and lookaheadPoints > 2 and state.bestLap then
+        local compLapForLookahead = state.getComparisonLap()
+        if showFuture and lookaheadPoints > 2 and compLapForLookahead then
             local currentPos = car.splinePosition
             local lookaheadPositions = {}
             
@@ -795,7 +808,7 @@ end
 
 function script.windowCorners(dt)
     -- corner_analysis.update() handles corner tracking internally
-    corner_analysis.draw(dt, state.currentLap, state.bestLap, state.trackCorners)
+    corner_analysis.draw(dt, state.currentLap, state.getComparisonLap(), state.trackCorners)
 end
 
 function script.windowTelemetry(dt)
@@ -809,5 +822,5 @@ function script.windowReferenceLap(dt)
 end
 
 function script.windowDelta(dt)
-    delta_bar.draw(dt, state.currentLap, state.bestLap, state.trackPosition, state.trackCorners)
+    delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners)
 end

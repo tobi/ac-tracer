@@ -23,6 +23,7 @@ local M = {}
 local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
 local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
 local brakeBeepButton = ac.ControlButton('__AC_TRACER_BRAKE_BEEP_TOGGLE')
+local pauseSimButton = ac.ControlButton('__AC_TRACER_PAUSE_SIM')
 
 --- Get the save checkpoint button (for polling in main loop)
 ---@return ac.ControlButton
@@ -40,6 +41,12 @@ end
 ---@return ac.ControlButton
 function M.getBrakeBeepButton()
     return brakeBeepButton
+end
+
+--- Get the pause simulation button (for polling in main loop)
+---@return ac.ControlButton
+function M.getPauseSimButton()
+    return pauseSimButton
 end
 
 --------------------------------------------------------------------------------
@@ -422,6 +429,22 @@ function M.windowSettings()
     ui.offsetCursorY(2)
     ui.pushFont(ui.Font.Small)
     ui.textColored("Shows red line on track at brakepoint from ref lap.", theme.text.muted)
+    ui.popFont()
+    
+    ui.offsetCursorY(10)
+    ui.separator()
+    ui.offsetCursorY(10)
+    
+    -- PAUSE section
+    sectionHeader("PAUSE SIMULATION")
+    
+    ui.text("Toggle:")
+    ui.sameLine(50)
+    pauseSimButton:control(vec2(120, 0))
+    
+    ui.offsetCursorY(2)
+    ui.pushFont(ui.Font.Small)
+    ui.textColored("Freezes time. UI/telemetry still usable.", theme.text.muted)
     ui.popFont()
     
     ui.offsetCursorY(10)

@@ -761,4 +761,31 @@ function ui_utils.isWindowVisible(windowId, appName)
     return acc and acc:valid() and acc:visible()
 end
 
+--------------------------------------------------------------------------------
+-- Simulation Pause (freeze time while keeping UI interactive)
+--------------------------------------------------------------------------------
+
+--- Check if simulation is currently paused
+---@return boolean
+function ui_utils.isSimPaused()
+    return ac.getSim().isPaused
+end
+
+--- Set simulation pause state
+---@param paused boolean
+---@return boolean success Whether pause state was changed
+function ui_utils.setSimPaused(paused)
+    return ac.tryToPause(paused)
+end
+
+--- Toggle simulation pause state
+---@return boolean success Whether pause state was changed
+---@return boolean isPaused Current pause state after toggle
+function ui_utils.toggleSimPause()
+    local sim = ac.getSim()
+    local newState = not sim.isPaused
+    local success = ac.tryToPause(newState)
+    return success, ac.getSim().isPaused
+end
+
 return ui_utils
