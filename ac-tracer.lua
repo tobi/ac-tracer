@@ -192,11 +192,6 @@ function script.update(dt)
 
     local sim = ac.getSim()
 
-    -- Pause keybind polling (must happen before skip check so user can unpause)
-    if settings.getPauseSimButton():pressed() then
-        ui_utils.toggleSimPause()
-    end
-
     -- Skip all updates during pause or replay (TimeShift rewind)
     if sim.isPaused or sim.isReplayActive then return end
 
@@ -761,6 +756,17 @@ function script.windowMain(dt)
                 traceOrigin + vec2(nowLineX, innerY + innerH + overshoot),
                 rgbm(0.6, 0.6, 0.6, 1), 1
             )
+        end
+        
+        -- Draw comparison mode indicator at bottom-right of trace area
+        local compMode = settings.comparisonMode()
+        if compMode ~= "off" then
+            local modeText = "vs " .. settings.comparisonModeDisplay()
+            ui.pushFont(ui.Font.Small)
+            local textSize = ui.measureText(modeText)
+            ui.setCursor(traceOrigin + vec2(L.traceW / 2 - textSize.x /2 , L.traceH - textSize.y + 11))
+            ui.textColored(modeText, theme.text.muted)
+            ui.popFont()
         end
     end
 

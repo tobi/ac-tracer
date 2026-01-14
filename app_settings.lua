@@ -23,7 +23,7 @@ local M = {}
 local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
 local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
 local brakeBeepButton = ac.ControlButton('__AC_TRACER_BRAKE_BEEP_TOGGLE')
-local pauseSimButton = ac.ControlButton('__AC_TRACER_PAUSE_SIM')
+local comparisonModeButton = ac.ControlButton('__AC_TRACER_COMPARISON_MODE')
 
 --- Get the save checkpoint button (for polling in main loop)
 ---@return ac.ControlButton
@@ -41,12 +41,6 @@ end
 ---@return ac.ControlButton
 function M.getBrakeBeepButton()
     return brakeBeepButton
-end
-
---- Get the pause simulation button (for polling in main loop)
----@return ac.ControlButton
-function M.getPauseSimButton()
-    return pauseSimButton
 end
 
 --------------------------------------------------------------------------------
@@ -92,7 +86,7 @@ local config = ac.storage({
     checkpointEnabled = true,  -- Enable/disable checkpoint save/load
 
     -- Brake beep system (countdown beeps before brakepoint)
-    -- Values: "off", "ref" (reference lap), "session" (best in session)
+    -- Values: "off", "on" (uses comparison lap)
     brakeBeepMode = "off",
 
     -- Brake marker system (3D line on track at brakepoint)
@@ -101,6 +95,10 @@ local config = ac.storage({
 
     -- Lookahead traces (show future reference lap data)
     showFutureTraces = true,
+
+    -- Comparison mode (what to compare current lap against)
+    -- Values: "reference", "sessionBest", "recentBest", "bestCorners", "off"
+    comparisonMode = "reference",
 }, "ac_tracer/")
 
 --------------------------------------------------------------------------------
@@ -146,26 +144,17 @@ function M.brakeBeepMode() return config.brakeBeepMode or "off" end
 --- Set brake beep mode
 function M.setBrakeBeepMode(mode) config.brakeBeepMode = mode end
 
---- Toggle brake beep mode: off -> ref -> session -> off
+--- Toggle brake beep mode: off <-> on
 function M.toggleBrakeBeepMode()
     local current = config.brakeBeepMode or "off"
-    if current == "off" then
-        config.brakeBeepMode = "ref"
-    elseif current == "ref" then
-        config.brakeBeepMode = "session"
-    else
-        config.brakeBeepMode = "off"
-    end
+    config.brakeBeepMode = (current == "off") and "on" or "off"
     return config.brakeBeepMode
 end
 
 --- Get display name for brake beep mode
 function M.brakeBeepModeDisplay()
     local mode = config.brakeBeepMode or "off"
-    if mode == "ref" then return "Reference Lap"
-    elseif mode == "session" then return "Session Best"
-    else return "Off"
-    end
+    return (mode == "on") and "On" or "Off"
 end
 
 -- Brake marker system (3D line on track)
@@ -178,6 +167,47 @@ function M.setBrakeMarkerMode(mode) config.brakeMarkerMode = mode end
 -- Lookahead/future traces from reference lap
 function M.showFutureTraces() return config.showFutureTraces end
 function M.setShowFutureTraces(v) config.showFutureTraces = v end
+
+-- Comparison mode (what to compare current lap against)
+--- Get comparison mode: "reference", "sessionBest", "recentBest", "bestCorners", "off"
+function M.comparisonMode() return config.comparisonMode or "reference" end
+
+--- Set comparison mode
+function M.setComparisonMode(mode) config.comparisonMode = mode end
+
+--- Get the comparison mode button (for polling in main loop)
+---@return ac.ControlButton
+function M.getComparisonModeButton()
+    return comparisonModeButton
+end
+
+--- Toggle comparison mode: reference -> sessionBest -> recentBest -> bestCorners -> off -> reference
+function M.toggleComparisonMode()
+    local current = config.comparisonMode or "reference"
+    if current == "reference" then
+        config.comparisonMode = "sessionBest"
+    elseif current == "sessionBest" then
+        config.comparisonMode = "recentBest"
+    elseif current == "recentBest" then
+        config.comparisonMode = "bestCorners"
+    elseif current == "bestCorners" then
+        config.comparisonMode = "off"
+    else
+        config.comparisonMode = "reference"
+    end
+    return config.comparisonMode
+end
+
+--- Get display name for comparison mode
+function M.comparisonModeDisplay()
+    local mode = config.comparisonMode or "reference"
+    if mode == "reference" then return "Reference Lap"
+    elseif mode == "sessionBest" then return "Session Best"
+    elseif mode == "recentBest" then return "Recent Best"
+    elseif mode == "bestCorners" then return "Best Corners"
+    else return "Off"
+    end
+end
 
 --------------------------------------------------------------------------------
 -- Flag Marker Accessors
@@ -202,262 +232,178 @@ end
 -- Settings Window UI
 --------------------------------------------------------------------------------
 
-local function sectionHeader(text)
+local CONTROL_WIDTH = 120  -- Width for keybind controls
+local SLIDER_WIDTH = 80    -- Width for sliders
+
+-- Helper: Label on left, control right-aligned
+local function labeledControl(label, controlWidth, controlFn)
+    ui.text(label)
+    ui.sameLine(ui.availableSpaceX() - controlWidth)
+    controlFn()
+end
+
+-- Helper: Hint text below a control
+local function hint(text)
     ui.pushFont(ui.Font.Small)
     ui.textColored(text, theme.text.muted)
     ui.popFont()
-    ui.offsetCursorY(4)
 end
 
-local function checkbox(label, getter, setter)
-    if ui.checkbox(label, getter()) then
-        setter(not getter())
+-- Helper: Checkbox that auto-toggles config value
+local function configCheckbox(label, key)
+    if ui.checkbox(label, config[key]) then
+        config[key] = not config[key]
     end
 end
 
 function M.windowSettings()
-    local windowWidth = ui.availableSpaceX()
+    -- TRACES
+    ui.header("Traces")
     
-    -- TRACES section
-    sectionHeader("TRACES")
+    -- Trace toggles in a 2x3 grid
+    configCheckbox("Throttle", "displayThrottle")
+    ui.sameLine(90)
+    configCheckbox("Brake", "displayBrake")
+    ui.sameLine(165)
+    configCheckbox("Clutch", "displayClutch")
     
-    -- Row 1: Throttle, Brake, Clutch
-    if ui.checkbox("Throttle", config.displayThrottle) then
-        config.displayThrottle = not config.displayThrottle
-    end
-    ui.sameLine(100)
-    if ui.checkbox("Brake", config.displayBrake) then
-        config.displayBrake = not config.displayBrake
-    end
-    ui.sameLine(180)
-    if ui.checkbox("Clutch", config.displayClutch) then
-        config.displayClutch = not config.displayClutch
-    end
+    configCheckbox("Steering", "displaySteering")
+    ui.sameLine(90)
+    configCheckbox("Speed", "displaySpeed")
+    ui.sameLine(165)
+    configCheckbox("Gear", "displayGear")
     
-    -- Row 2: Steering, Speed, Gear
-    if ui.checkbox("Steering", config.displaySteering) then
-        config.displaySteering = not config.displaySteering
-    end
-    ui.sameLine(100)
-    if ui.checkbox("Speed", config.displaySpeed) then
-        config.displaySpeed = not config.displaySpeed
-    end
-    ui.sameLine(180)
-    if ui.checkbox("Gear", config.displayGear) then
-        config.displayGear = not config.displayGear
-    end
+    ui.dummy(vec2(0, 4))
     
-    ui.offsetCursorY(6)
+    -- Window slider - right aligned
+    ui.text("Time Window")
+    ui.sameLine(ui.availableSpaceX() - SLIDER_WIDTH)
+    ui.setNextItemWidth(SLIDER_WIDTH)
+    local newWindow = ui.slider("##timewindow", config.timeWindow, 5, 30, "%.0f sec")
+    if newWindow ~= config.timeWindow then config.timeWindow = newWindow end
     
-    -- Trace parameters
-    ui.text("Window:")
-    ui.sameLine(60)
-    ui.setNextItemWidth(50)
-    local newWindow = ui.slider("##timewindow", config.timeWindow, 5, 30, "%.0f s")
-    if newWindow ~= config.timeWindow then
-        config.timeWindow = newWindow
-    end
-    
-    ui.sameLine(140)
-    ui.text("Rate:")
-    ui.sameLine(175)
-    ui.setNextItemWidth(50)
+    -- Rate slider - right aligned
+    ui.text("Sample Rate")
+    ui.sameLine(ui.availableSpaceX() - SLIDER_WIDTH)
+    ui.setNextItemWidth(SLIDER_WIDTH)
     local newRate = ui.slider("##samplerate", config.sampleRate, 10, 60, "%.0f Hz")
-    if newRate ~= config.sampleRate then
-        config.sampleRate = newRate
-    end
+    if newRate ~= config.sampleRate then config.sampleRate = newRate end
     
-    ui.offsetCursorY(6)
+    ui.dummy(vec2(0, 2))
+    configCheckbox("Show future traces from reference lap", "showFutureTraces")
     
-    if ui.checkbox("Show future traces from ref", config.showFutureTraces) then
-        config.showFutureTraces = not config.showFutureTraces
-    end
+    ui.dummy(vec2(0, 8))
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
+    -- UNITS & HISTORY
+    ui.header("Units & History")
     
-    -- UNITS section
-    sectionHeader("UNITS")
-    
-    ui.text("Speed:")
-    ui.sameLine(60)
-    if ui.radioButton("km/h", config.useKMH) then
-        config.useKMH = true
-    end
-    ui.sameLine(120)
-    if ui.radioButton("mph", not config.useKMH) then
-        config.useKMH = false
-    end
-    
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-    
-    -- HISTORY section
-    sectionHeader("HISTORY")
-    
-    ui.text("Max laps:")
-    ui.sameLine(70)
-    ui.setNextItemWidth(60)
-    local newMax = ui.slider("##maxlaps", config.maxHistoryLaps, 10, 100, "%.0f")
-    if newMax ~= config.maxHistoryLaps then
-        config.maxHistoryLaps = math.floor(newMax)
-    end
-    
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-    
-    -- MARKERS section
-    sectionHeader("MARKERS")
-    
-    if ui.checkbox("Traction Control", config.showTCMarkers) then
-        config.showTCMarkers = not config.showTCMarkers
-    end
-    ui.sameLine(140)
-    if ui.checkbox("Lockups", config.showLockupMarkers) then
-        config.showLockupMarkers = not config.showLockupMarkers
-    end
-    
-    if ui.checkbox("Wheel Slip", config.showWheelSlipMarkers) then
-        config.showWheelSlipMarkers = not config.showWheelSlipMarkers
-    end
-    ui.sameLine(140)
-    if ui.checkbox("Pedal Overlap", config.showOverlapMarkers) then
-        config.showOverlapMarkers = not config.showOverlapMarkers
-    end
-    
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-    
-    -- TELEMETRY WINDOW section
-    sectionHeader("TELEMETRY WINDOW")
-    
-    if ui.checkbox("Auto-hide above", config.telemetryAutoHide) then
-        config.telemetryAutoHide = not config.telemetryAutoHide
-    end
-    ui.sameLine(130)
-    ui.setNextItemWidth(50)
-    local newSpeed = ui.slider("##autohidespeed", config.telemetryAutoHideSpeed, 5, 100, "%.0f")
-    if newSpeed ~= config.telemetryAutoHideSpeed then
-        config.telemetryAutoHideSpeed = newSpeed
-    end
+    ui.text("Speed")
+    ui.sameLine(ui.availableSpaceX() - 100)
+    if ui.radioButton("km/h", config.useKMH) then config.useKMH = true end
     ui.sameLine()
-    ui.text(config.useKMH and "km/h" or "mph")
+    if ui.radioButton("mph", not config.useKMH) then config.useKMH = false end
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
+    ui.text("Max History")
+    ui.sameLine(ui.availableSpaceX() - SLIDER_WIDTH)
+    ui.setNextItemWidth(SLIDER_WIDTH)
+    local newMax = ui.slider("##maxlaps", config.maxHistoryLaps, 10, 100, "%.0f laps")
+    if newMax ~= config.maxHistoryLaps then config.maxHistoryLaps = math.floor(newMax) end
     
-    -- CHECKPOINT section
-    sectionHeader("CHECKPOINT (Practice Rewind)")
+    ui.dummy(vec2(0, 8))
     
-    if ui.checkbox("Enable checkpoint system", config.checkpointEnabled) then
-        config.checkpointEnabled = not config.checkpointEnabled
-    end
+    -- MARKERS
+    ui.header("Flag Markers")
+    
+    configCheckbox("Traction Control", "showTCMarkers")
+    ui.sameLine(140)
+    configCheckbox("Lockups", "showLockupMarkers")
+    
+    configCheckbox("Wheel Slip", "showWheelSlipMarkers")
+    ui.sameLine(140)
+    configCheckbox("Pedal Overlap", "showOverlapMarkers")
+    
+    ui.dummy(vec2(0, 8))
+    
+    -- TELEMETRY WINDOW
+    ui.header("Telemetry Window")
+    
+    ui.text("Auto-hide Speed")
+    ui.sameLine(ui.availableSpaceX() - SLIDER_WIDTH)
+    ui.setNextItemWidth(SLIDER_WIDTH)
+    local newSpeed = ui.slider("##autohidespeed", config.telemetryAutoHideSpeed, 5, 100, 
+        config.useKMH and "%.0f km/h" or "%.0f mph")
+    if newSpeed ~= config.telemetryAutoHideSpeed then config.telemetryAutoHideSpeed = newSpeed end
+    
+    configCheckbox("Auto-hide when driving", "telemetryAutoHide")
+    
+    ui.dummy(vec2(0, 8))
+    
+    -- CHECKPOINT
+    ui.header("Checkpoint")
+    
+    configCheckbox("Enable checkpoint system", "checkpointEnabled")
     
     if config.checkpointEnabled then
-        ui.offsetCursorY(4)
-        ui.text("Save:")
-        ui.sameLine(50)
-        saveCheckpointButton:control(vec2(120, 0))
-        
-        ui.text("Load:")
-        ui.sameLine(50)
-        loadCheckpointButton:control(vec2(120, 0))
-        
-        ui.offsetCursorY(2)
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("Press Save to capture position, Load to teleport back.", theme.text.muted)
-        ui.popFont()
+        labeledControl("Save", CONTROL_WIDTH, function() 
+            saveCheckpointButton:control(vec2(CONTROL_WIDTH, 0)) 
+        end)
+        labeledControl("Load", CONTROL_WIDTH, function() 
+            loadCheckpointButton:control(vec2(CONTROL_WIDTH, 0)) 
+        end)
+        hint("Save position, then Load to teleport back")
     end
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
+    ui.dummy(vec2(0, 8))
     
-    -- BRAKE BEEP section
-    sectionHeader("BRAKE BEEP (Audio Cue)")
+    -- BRAKE BEEP
+    ui.header("Brake Beep")
     
-    ui.text("Mode:")
-    ui.sameLine(50)
-    if ui.radioButton("Off##beep", config.brakeBeepMode == "off") then
-        config.brakeBeepMode = "off"
-    end
-    ui.sameLine(90)
-    if ui.radioButton("Ref##beep", config.brakeBeepMode == "ref") then
-        config.brakeBeepMode = "ref"
-    end
-    ui.sameLine(140)
-    if ui.radioButton("Session##beep", config.brakeBeepMode == "session") then
-        config.brakeBeepMode = "session"
+    local brakeBeepOn = config.brakeBeepMode == "on"
+    if ui.checkbox("Enable brake beeps", brakeBeepOn) then
+        config.brakeBeepMode = brakeBeepOn and "off" or "on"
     end
     
-    ui.offsetCursorY(4)
-    ui.text("Toggle:")
-    ui.sameLine(50)
-    brakeBeepButton:control(vec2(120, 0))
+    labeledControl("Toggle Hotkey", CONTROL_WIDTH, function() 
+        brakeBeepButton:control(vec2(CONTROL_WIDTH, 0)) 
+    end)
+    hint("Audio countdown to brakepoint (uses comparison lap)")
     
-    ui.offsetCursorY(2)
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("Beeps countdown to brakepoint from selected lap.", theme.text.muted)
-    ui.popFont()
+    ui.dummy(vec2(0, 8))
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
+    -- BRAKE MARKER
+    ui.header("Brake Marker")
     
-    -- BRAKE MARKER section
-    sectionHeader("BRAKE MARKER (Track Line)")
+    if ui.radioButton("Off##marker", config.brakeMarkerMode == "off") then config.brakeMarkerMode = "off" end
+    if ui.radioButton("Next Corner##marker", config.brakeMarkerMode == "next") then config.brakeMarkerMode = "next" end
+    if ui.radioButton("All Corners##marker", config.brakeMarkerMode == "all") then config.brakeMarkerMode = "all" end
     
-    ui.text("Mode:")
-    ui.sameLine(50)
-    if ui.radioButton("Off##marker", config.brakeMarkerMode == "off") then
-        config.brakeMarkerMode = "off"
-    end
-    ui.sameLine(90)
-    if ui.radioButton("Next##marker", config.brakeMarkerMode == "next") then
-        config.brakeMarkerMode = "next"
-    end
-    ui.sameLine(145)
-    if ui.radioButton("All##marker", config.brakeMarkerMode == "all") then
-        config.brakeMarkerMode = "all"
-    end
+    hint("Red line on track at brakepoint")
     
-    ui.offsetCursorY(2)
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("Shows red line on track at brakepoint from ref lap.", theme.text.muted)
-    ui.popFont()
+    ui.dummy(vec2(0, 8))
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
+    -- COMPARISON MODE
+    ui.header("Comparison Mode")
     
-    -- PAUSE section
-    sectionHeader("PAUSE SIMULATION")
+    if ui.radioButton("Reference Lap##comp", config.comparisonMode == "reference") then config.comparisonMode = "reference" end
+    if ui.radioButton("Session Best##comp", config.comparisonMode == "sessionBest") then config.comparisonMode = "sessionBest" end
+    if ui.radioButton("Recent Best##comp", config.comparisonMode == "recentBest") then config.comparisonMode = "recentBest" end
+    if ui.radioButton("Best Corners##comp", config.comparisonMode == "bestCorners") then config.comparisonMode = "bestCorners" end
+    if ui.radioButton("Off##comp", config.comparisonMode == "off") then config.comparisonMode = "off" end
     
-    ui.text("Toggle:")
-    ui.sameLine(50)
-    pauseSimButton:control(vec2(120, 0))
+    labeledControl("Toggle Hotkey", CONTROL_WIDTH, function() 
+        comparisonModeButton:control(vec2(CONTROL_WIDTH, 0)) 
+    end)
+    hint("Ghost traces, delta, and corner analysis source")
     
-    ui.offsetCursorY(2)
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("Freezes time. UI/telemetry still usable.", theme.text.muted)
-    ui.popFont()
+    ui.dummy(vec2(0, 8))
     
-    ui.offsetCursorY(10)
-    ui.separator()
-    ui.offsetCursorY(10)
-    
-    -- REFERENCE LAP section
-    sectionHeader("REFERENCE LAP")
+    -- REFERENCE LAP
+    ui.header("Reference Lap")
     
     lap_picker.drawCompact()
     
-    ui.offsetCursorY(5)
-    if ui.button("Load Reference Lap...", vec2(150, 0)) then
+    ui.dummy(vec2(0, 4))
+    if ui.button("Open Lap Picker...", vec2(-1, 0)) then
         getUiUtils().openWindow("referencelap")
     end
 end

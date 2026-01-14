@@ -93,9 +93,10 @@ function notification.playLoad()
     end
 end
 
--- Play a beep with pitch shift
+-- Play a beep with pitch and volume shift
 -- pitch: multiplier (1.0 = normal, 1.5 = higher, 0.7 = lower)
-function notification.playBeep(pitch)
+-- volume: multiplier (1.0 = default 0.8 base, 1.5 = louder)
+function notification.playBeep(pitch, volume)
     if not beepSoundAvailable then return false end
     
     -- Enforce cooldown to prevent overlapping beeps
@@ -113,7 +114,7 @@ function notification.playBeep(pitch)
     end)
     
     if ok and event and event:isValid() then
-        event.volume = 0.8
+        event.volume = 0.8 * (volume or 1.0)
         event.pitch = pitch or 1.0
         event.cameraInteriorMultiplier = 1.0
         event.cameraExteriorMultiplier = 1.0

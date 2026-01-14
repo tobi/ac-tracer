@@ -77,8 +77,10 @@ local brakeBeep = {
 -- Beep times before brakepoint (in seconds, counting down)
 -- beep 1 at ~1.5s, beep 2 at ~1.0s, beep 3 at ~0.5s, final BEEP at brakepoint
 local BEEP_TIMES = { 1.5, 1.0, 0.5, 0 }
--- Pitch multipliers for each beep (increasing pitch)
-local BEEP_PITCHES = { 0.8, 1.0, 1.2, 1.5 }
+-- Pitch multipliers for each beep (increasing pitch, final beep much higher)
+local BEEP_PITCHES = { 0.8, 1.0, 1.3, 2.0 }
+-- Volume multipliers for each beep (final beep louder)
+local BEEP_VOLUMES = { 0.8, 0.9, 1.0, 1.4 }
 
 --- Check if a position is inside a corner
 ---@param pos number Spline position (0-1)
@@ -1209,61 +1211,52 @@ function state.update(dt, car)
     -- Update position
     state.trackPosition = car.splinePosition
     
-    -- Brake beep system
-    local beepMode = settings.brakeBeepMode()
-    if beepMode ~= "off" and car.speedKmh > 30 then
-        -- Get the lap to use for brakepoint detection
-        local beepLap = nil
-        if beepMode == "ref" then
-            beepLap = state.bestLap
-        elseif beepMode == "session" then
-            beepLap = state.bestInSession
-        end
+    -- Brake beep system (uses comparison lap)
+    local brakeBeepEnabled = settings.brakeBeepMode() == "on"
+    local beepLap = state.getComparisonLap()
+    if brakeBeepEnabled and car.speedKmh > 30 and beepLap and beepLap:length() > 10 then
+        local trackLength = sim.trackLengthM or 5000
+        local currentPos = car.splinePosition
         
-        if beepLap and beepLap:length() > 10 then
-            local trackLength = sim.trackLengthM or 5000
-            local currentPos = car.splinePosition
+        -- Find next brakepoint if we don't have one or passed the current one
+        if not brakeBeep.nextBrakePos then
+            brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
+            brakeBeep.beepIndex = 0
+        else
+            -- Check if we passed the brakepoint
+            local distToBrake = brakeBeep.nextBrakePos - currentPos
+            if distToBrake < 0 then distToBrake = distToBrake + 1 end
             
-            -- Find next brakepoint if we don't have one or passed the current one
-            if not brakeBeep.nextBrakePos then
+            -- If we passed it (or very close), find next one
+            if distToBrake > 0.5 or distToBrake < 0.003 then
+                brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
                 brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
                 brakeBeep.beepIndex = 0
-            else
-                -- Check if we passed the brakepoint
-                local distToBrake = brakeBeep.nextBrakePos - currentPos
-                if distToBrake < 0 then distToBrake = distToBrake + 1 end
-                
-                -- If we passed it (or very close), find next one
-                if distToBrake > 0.5 or distToBrake < 0.003 then
-                    brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
-                    brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
-                    brakeBeep.beepIndex = 0
-                end
             end
+        end
+        
+        -- Calculate time to brakepoint based on current speed
+        if brakeBeep.nextBrakePos then
+            local distToBrake = brakeBeep.nextBrakePos - currentPos
+            if distToBrake < 0 then distToBrake = distToBrake + 1 end
+            local distMeters = distToBrake * trackLength
             
-            -- Calculate time to brakepoint based on current speed
-            if brakeBeep.nextBrakePos then
-                local distToBrake = brakeBeep.nextBrakePos - currentPos
-                if distToBrake < 0 then distToBrake = distToBrake + 1 end
-                local distMeters = distToBrake * trackLength
-                
-                -- Convert distance to time: time = distance / speed
-                -- Speed is in km/h, convert to m/s (divide by 3.6)
-                local speedMs = car.speedKmh / 3.6
-                local timeToBrake = speedMs > 1 and (distMeters / speedMs) or 999
-                
-                -- Play beeps at countdown times
-                local now = os.clock()
-                for i, timeThreshold in ipairs(BEEP_TIMES) do
-                    if brakeBeep.beepIndex < i and timeToBrake <= timeThreshold then
-                        -- Time check to prevent double-beeps
-                        if (now - brakeBeep.lastBeepTime) > 0.1 then
-                            notification.playBeep(BEEP_PITCHES[i])
-                            brakeBeep.beepIndex = i
-                            brakeBeep.lastBeepTime = now
-                        end
-                        break
+            -- Convert distance to time: time = distance / speed
+            -- Speed is in km/h, convert to m/s (divide by 3.6)
+            local speedMs = car.speedKmh / 3.6
+            local timeToBrake = speedMs > 1 and (distMeters / speedMs) or 999
+            
+            -- Play beeps at countdown times
+            local now = os.clock()
+            for i, timeThreshold in ipairs(BEEP_TIMES) do
+                if brakeBeep.beepIndex < i and timeToBrake <= timeThreshold then
+                    -- Time check to prevent double-beeps
+                    if (now - brakeBeep.lastBeepTime) > 0.1 then
+                        notification.playBeep(BEEP_PITCHES[i], BEEP_VOLUMES[i])
+                        brakeBeep.beepIndex = i
+                        brakeBeep.lastBeepTime = now
                     end
+                    break
                 end
             end
         end
