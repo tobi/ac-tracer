@@ -1466,10 +1466,22 @@ function lap_telemetry.draw(dt, context)
          local throttleH = traceH - 5
          drawTimeTrace(graphX, y, graphW, throttleH, startTime, endTime, selectedLap, referenceLap, function(l, p) return l:throttleAt(p) end, theme.trace.throttle, theme.ghost.throttle, 0, 1, "Throttle", "")
 
-        -- Draw TC markers on throttle trace (current session laps only)
-        if settings.showFlagMarker('TC') and selectedLap.tcActive and #selectedLap.tcActive > 0 then
+        -- Draw flag markers on throttle trace (TC, lockups, etc.)
+        local hasFlags = selectedLap.flags and #selectedLap.flags > 0
+        local showTC = settings.showFlagMarker('TC')
+        local showLockup = settings.showFlagMarker('Lockup')
+        local showSlip = settings.showFlagMarker('WheelSlip')
+        local showOverlap = settings.showFlagMarker('Overlap')
+        
+        if hasFlags and (showTC or showLockup or showSlip or showOverlap) then
+            local LOCKUP_ANY = bit.bor(lap.FLAGS.LOCKUP_FL, lap.FLAGS.LOCKUP_FR, 
+                                       lap.FLAGS.LOCKUP_RL, lap.FLAGS.LOCKUP_RR)
+            local drawnTC = false
+            local drawnLockup = false
+            
             for i = 1, selectedLap:length() do
-                if selectedLap.tcActive[i] then
+                local f = selectedLap.flags[i] or 0
+                if f > 0 then
                     local sampleTime
                     if selectedLap.times and selectedLap.times[i] then
                         sampleTime = selectedLap.times[i]
@@ -1484,25 +1496,49 @@ function lap_telemetry.draw(dt, context)
                         local py = throttleY + throttleH - throttleVal * throttleH
 
                         -- TC marker (small orange triangle pointing down)
-                        ui.drawTriangleFilled(
-                            vec2(px - 3, py - 8),
-                            vec2(px + 3, py - 8),
-                            vec2(px, py - 2),
-                            theme.marker.tc
-                        )
+                        if showTC and bit.band(f, lap.FLAGS.TC_ACTIVE) ~= 0 then
+                            ui.drawTriangleFilled(
+                                vec2(px - 3, py - 8),
+                                vec2(px + 3, py - 8),
+                                vec2(px, py - 2),
+                                theme.marker.tc
+                            )
+                            drawnTC = true
+                        end
+                        
+                        -- Lockup marker (small red square)
+                        if showLockup and bit.band(f, LOCKUP_ANY) ~= 0 then
+                            ui.drawRectFilled(vec2(px - 2, py - 6), vec2(px + 2, py - 2), theme.flags.lockup)
+                            drawnLockup = true
+                        end
                     end
                 end
             end
 
-            -- Legend
-            ui.setCursor(vec2(graphX + 70, throttleY + 2))
-            ui.pushFont(ui.Font.Small)
-            ui.drawTriangleFilled(vec2(graphX + 70, throttleY + 4), vec2(graphX + 76, throttleY + 4), vec2(graphX + 73, throttleY + 10), theme.marker.tc)
-            ui.setCursor(vec2(graphX + 80, throttleY + 2))
-            ui.pushStyleColor(ui.StyleColor.Text, theme.marker.tc)
-            ui.text("TC")
-            ui.popStyleColor()
-            ui.popFont()
+            -- Legend for TC
+            if drawnTC then
+                ui.setCursor(vec2(graphX + 70, throttleY + 2))
+                ui.pushFont(ui.Font.Small)
+                ui.drawTriangleFilled(vec2(graphX + 70, throttleY + 4), vec2(graphX + 76, throttleY + 4), vec2(graphX + 73, throttleY + 10), theme.marker.tc)
+                ui.setCursor(vec2(graphX + 80, throttleY + 2))
+                ui.pushStyleColor(ui.StyleColor.Text, theme.marker.tc)
+                ui.text("TC")
+                ui.popStyleColor()
+                ui.popFont()
+            end
+            
+            -- Legend for Lockup
+            if drawnLockup then
+                local lockupLegendX = drawnTC and (graphX + 110) or (graphX + 70)
+                ui.setCursor(vec2(lockupLegendX, throttleY + 2))
+                ui.pushFont(ui.Font.Small)
+                ui.drawRectFilled(vec2(lockupLegendX, throttleY + 5), vec2(lockupLegendX + 6, throttleY + 11), theme.flags.lockup)
+                ui.setCursor(vec2(lockupLegendX + 10, throttleY + 2))
+                ui.pushStyleColor(ui.StyleColor.Text, theme.flags.lockup)
+                ui.text("Lockup")
+                ui.popStyleColor()
+                ui.popFont()
+            end
         end
 
         y = y + traceH + tracePadding

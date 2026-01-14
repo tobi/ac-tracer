@@ -42,8 +42,11 @@ lap.FLAGS = {
 }
 
 -- Thresholds for detecting events
-local SLIP_THRESHOLD = 0.15      -- Wheel slip ratio threshold (15% difference from road speed)
-local LOCKUP_SPEED_MIN = 20      -- Minimum car speed (km/h) for lockup detection
+-- Wheel slip detection thresholds
+-- slipRatio: positive = wheel spinning faster (wheelspin), negative = wheel spinning slower (lockup)
+local WHEELSPIN_THRESHOLD = 0.3   -- 30% faster than road speed = significant wheelspin
+local LOCKUP_THRESHOLD = -0.8     -- Wheel at 20% of road speed = locked up (slipRatio close to -1)
+local LOCKUP_SPEED_MIN = 30       -- Minimum car speed (km/h) for lockup detection
 local OVERLAP_THROTTLE_THRESHOLD = 0.1  -- Throttle must be > 10% for overlap
 lap.BRAKE_THRESHOLD_BAR = 5             -- Minimum brake pressure to count as braking (bar)
 local OVERLAP_BRAKE_THRESHOLD_BAR = 10  -- Brake must be > 10 bar for overlap
@@ -262,26 +265,35 @@ function lap.detectFlags(car, overlapState)
         flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
     end
     
-    -- Wheel slip detection
+    -- Wheel slip and lockup detection using slipRatio
+    -- slipRatio: positive = wheel spinning faster than road (wheelspin/traction loss)
+    --            negative = wheel spinning slower than road (braking lockup)
+    --            -1 = completely locked, 0 = matching road speed
     if car.wheels then
-        local hasSlip = false
+        local hasWheelspin = false
+        
         for i = 0, 3 do
             local wheel = car.wheels[i]
-            if wheel and wheel.slip and wheel.slip > SLIP_THRESHOLD then
-                hasSlip = true
-                break
+            if wheel then
+                -- Use slipRatio for wheelspin detection (positive = spinning faster than road)
+                local slipRatio = wheel.slipRatio or 0
+                if slipRatio > WHEELSPIN_THRESHOLD then
+                    hasWheelspin = true
+                end
             end
         end
-        if hasSlip then
+        
+        if hasWheelspin then
             flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
         end
         
-        -- Lockup detection
+        -- Lockup detection (only at speed, using slipRatio)
         if car.speedKmh > LOCKUP_SPEED_MIN then
             local function isLocked(wheel)
                 if not wheel then return false end
-                local slip = wheel.ndSlip or wheel.slip
-                return slip and slip < -0.5  -- Threshold for lockup
+                -- slipRatio close to -1 means wheel is nearly stopped while car is moving
+                local slipRatio = wheel.slipRatio or 0
+                return slipRatio < LOCKUP_THRESHOLD
             end
             
             if isLocked(car.wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end

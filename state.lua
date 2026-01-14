@@ -29,12 +29,20 @@ state.currentLap = nil         -- lap: being recorded
 -- state.history is now a reference to history_storage.laps (persisted session laps)
 -- CSV-loaded laps are added to history but marked with csvSource (not persisted)
 
--- Reference lap
-state.bestLap = nil            -- lap: current reference for ghost comparison
+-- Reference lap (the manually selected or loaded comparison target)
+state.bestLap = nil            -- lap: the reference lap (from CSV or manual selection)
 state.bestLapCorners = {}      -- pre-computed corner analysis for bestLap
 
 -- Best lap from current session only (not loaded from file)
 state.bestInSession = nil      -- lap: fastest valid lap driven in this session
+
+-- Best lap from all history (recentBest) - computed on load and lap completion
+state.recentBest = nil         -- lap: fastest valid lap across all history
+
+-- Best corners synthetic lap (built from best corner segments across all laps)
+-- Cached and rebuilt when history changes or corners change
+local bestCornersLap = nil     -- lap: synthetic lap from best corner segments
+local bestCornersValid = false -- bool: whether cache is valid
 
 -- Brake scale for charts (computed from max brake across relevant laps)
 state.brakeScaleBar = 100      -- number: max bar value for brake charts (90 or 100)
@@ -258,6 +266,180 @@ function state.updateBrakeScale()
 end
 
 --------------------------------------------------------------------------------
+-- Comparison Lap System
+--------------------------------------------------------------------------------
+
+--- Update recentBest from history (call after history changes)
+local function updateRecentBest()
+    local fastest = nil
+    for _, lapData in ipairs(state.history) do
+        if lapData.valid and lapData.time and lapData.time > 0 then
+            if not fastest or lapData.time < fastest.time then
+                fastest = lapData
+            end
+        end
+    end
+    state.recentBest = fastest
+end
+
+--- Invalidate bestCorners cache (call when history or corners change)
+function state.invalidateBestCorners()
+    bestCornersValid = false
+    bestCornersLap = nil
+end
+
+--- Build the best corners synthetic lap from best corner segments
+--- Excludes the reference lap so you can compare against truly different data
+---@return table|nil Synthetic lap or nil if not enough data
+local function buildBestCornersLap()
+    if not state.trackCorners or #state.trackCorners == 0 then
+        return nil
+    end
+    
+    -- Need at least 2 completed laps (excluding reference) to build best corners
+    local candidateLaps = {}
+    for _, lapData in ipairs(state.history) do
+        if lapData.valid and lapData.time and lapData.time > 0 and lapData ~= state.bestLap then
+            table.insert(candidateLaps, lapData)
+        end
+    end
+    
+    if #candidateLaps < 1 then
+        return nil
+    end
+    
+    -- For each corner, find the lap with the fastest corner time
+    local bestCornerLaps = {}  -- cornerNum -> {lap, cornerTime}
+    
+    for _, corner in ipairs(state.trackCorners) do
+        if corner.startPos and corner.endPos then
+            local bestTime = nil
+            local bestLapForCorner = nil
+            
+            for _, lapData in ipairs(candidateLaps) do
+                -- Calculate corner time for this lap
+                local entryTime = lapData:getTimeAtPos(corner.startPos)
+                local exitTime = lapData:getTimeAtPos(corner.endPos)
+                
+                if entryTime and exitTime then
+                    local cornerTime = exitTime - entryTime
+                    if cornerTime > 0 and (not bestTime or cornerTime < bestTime) then
+                        bestTime = cornerTime
+                        bestLapForCorner = lapData
+                    end
+                end
+            end
+            
+            if bestLapForCorner then
+                bestCornerLaps[corner.number] = {
+                    lap = bestLapForCorner,
+                    cornerTime = bestTime,
+                    startPos = corner.startPos,
+                    endPos = corner.endPos
+                }
+            end
+        end
+    end
+    
+    -- Build synthetic lap by splicing together best corner segments
+    -- For positions not in a corner, use the overall fastest lap (recentBest)
+    local baseLap = state.recentBest or candidateLaps[1]
+    if not baseLap then return nil end
+    
+    -- Create a new lap structure
+    local synthetic = lap.new(state.track, state.car, "synthetic_best_corners")
+    synthetic.time = 0  -- Will be computed
+    synthetic.valid = true
+    synthetic.completed = true
+    
+    -- Sample at the same rate as the base lap
+    local numSamples = baseLap:length()
+    if numSamples < 10 then return nil end
+    
+    -- For each sample, determine which lap to use based on position
+    for i = 1, numSamples do
+        local pos = baseLap.pos[i]
+        if not pos then goto continue end
+        
+        -- Find which corner (if any) this position is in
+        local cornerNum = nil
+        for _, corner in ipairs(state.trackCorners) do
+            if corner.startPos and corner.endPos then
+                local inside
+                if corner.startPos <= corner.endPos then
+                    inside = pos >= corner.startPos and pos <= corner.endPos
+                else
+                    inside = pos >= corner.startPos or pos <= corner.endPos
+                end
+                if inside then
+                    cornerNum = corner.number
+                    break
+                end
+            end
+        end
+        
+        -- Get the source lap for this sample
+        local sourceLap = baseLap
+        if cornerNum and bestCornerLaps[cornerNum] then
+            sourceLap = bestCornerLaps[cornerNum].lap
+        end
+        
+        -- Copy data from source lap at this position
+        table.insert(synthetic.throttle, sourceLap:throttleAt(pos))
+        table.insert(synthetic.brake, sourceLap:brakeAt(pos))
+        table.insert(synthetic.brake_r, sourceLap:brakeRearAt(pos))
+        table.insert(synthetic.clutch, sourceLap:clutchAt(pos))
+        table.insert(synthetic.steering, sourceLap:steeringAt(pos))
+        table.insert(synthetic.speed, sourceLap:speedAt(pos))
+        table.insert(synthetic.gear, math.floor(sourceLap:gearAt(pos) + 0.5))
+        table.insert(synthetic.pos, pos)
+        table.insert(synthetic.times, sourceLap:getTimeAtPos(pos) or (i / lap.SAMPLE_RATE))
+        table.insert(synthetic.flags, 0)  -- No flags for synthetic lap
+        
+        ::continue::
+    end
+    
+    -- Compute total time from times array
+    if #synthetic.times > 1 then
+        synthetic.time = (synthetic.times[#synthetic.times] - synthetic.times[1]) * 1000
+    end
+    
+    ac.log(string.format("AC Tracer: Built best corners lap with %d samples, %.3fs",
+        synthetic:length(), synthetic.time / 1000))
+    
+    return synthetic
+end
+
+--- Get the best corners lap (cached, rebuilt if invalid)
+---@return table|nil Synthetic lap
+function state.getBestCornersLap()
+    if not bestCornersValid then
+        bestCornersLap = buildBestCornersLap()
+        bestCornersValid = true
+    end
+    return bestCornersLap
+end
+
+--- Get the current comparison lap based on comparison mode
+--- This is what traces, delta bar, and corner analysis compare against
+---@return table|nil The lap to compare against
+function state.getComparisonLap()
+    local mode = settings.comparisonMode()
+    
+    if mode == "off" then
+        return nil
+    elseif mode == "sessionBest" then
+        return state.bestInSession
+    elseif mode == "recentBest" then
+        return state.recentBest
+    elseif mode == "bestCorners" then
+        return state.getBestCornersLap()
+    else  -- "reference" (default)
+        return state.bestLap
+    end
+end
+
+--------------------------------------------------------------------------------
 -- Persistence: Corners (CSV format)
 --------------------------------------------------------------------------------
 
@@ -478,6 +660,10 @@ local function loadHistory()
     local success = history_storage.load()
     -- Update the reference since history_storage.laps may have been reassigned
     state.history = history_storage.laps
+    -- Update recentBest from loaded history
+    updateRecentBest()
+    -- Invalidate bestCorners cache since history changed
+    state.invalidateBestCorners()
     return success
 end
 
@@ -853,6 +1039,9 @@ function state.init(car)
     
     ac.log("AC Tracer: Session ID: " .. state.sessionId)
     
+    -- Set track/car for history storage (must be before loading)
+    history_storage.setTrackCar(state.track, state.car)
+    
     -- Load corners from file
     loadCornersFromFile()
     
@@ -932,6 +1121,10 @@ function state.update(dt, car)
             -- Add to history (most recent first)
             history_storage.add(state.currentLap)
             state.history = history_storage.laps  -- Update reference
+            
+            -- Update recentBest and invalidate bestCorners cache
+            updateRecentBest()
+            state.invalidateBestCorners()
             
             ac.log(string.format("Traces: Lap completed - time: %.3fs, valid: %s, samples: %d, sessionId: %s", 
                 state.currentLap.time / 1000, tostring(state.currentLap.valid), state.currentLap:length(),
@@ -1082,53 +1275,72 @@ function state.update(dt, car)
 end
 
 --------------------------------------------------------------------------------
--- Ghost/Best Lap API
+-- Ghost/Comparison Lap API
 --------------------------------------------------------------------------------
 
---- Get current delta vs best lap
+--- Get current delta vs comparison lap
 ---@return number Delta in seconds (positive = slower)
 function state.getDelta()
-    if not state.currentLap or not state.bestLap then return 0 end
-    return state.currentLap:getDeltaVs(state.bestLap, state.trackPosition)
+    local compLap = state.getComparisonLap()
+    if not state.currentLap or not compLap then return 0 end
+    return state.currentLap:getDeltaVs(compLap, state.trackPosition)
 end
 
---- Get ghost steering at current position
+--- Get ghost steering at current position (from comparison lap)
 ---@return number|nil Steering in degrees
 function state.getGhostSteering()
-    if not state.bestLap then return nil end
-    return state.bestLap:steeringDegAt(state.trackPosition)
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return compLap:steeringDegAt(state.trackPosition)
 end
 
---- Get ghost gear at current position
+--- Get ghost gear at current position (from comparison lap)
 ---@return number|nil Gear number
 function state.getGhostGear()
-    if not state.bestLap then return nil end
-    return math.floor(state.bestLap:gearAt(state.trackPosition) + 0.5)  -- Round to nearest integer
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return math.floor(compLap:gearAt(state.trackPosition) + 0.5)  -- Round to nearest integer
 end
 
---- Get ghost traces for display positions
+--- Get ghost traces for display positions (from comparison lap)
 ---@param positions table Array of spline positions
 ---@return table|nil Traces { throttle={}, brake={}, ... }
 function state.getGhostTraces(positions)
-    if not state.bestLap then return nil end
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
     -- Use 100 bar normalization to match extended_brake.getNormalizedBrake()
-    return state.bestLap:getTracesAt(positions, 100)
+    return compLap:getTracesAt(positions, 100)
 end
 
---- Check if we have a best lap
+--- Check if we have a comparison lap
+---@return boolean
+function state.hasComparisonLap()
+    local compLap = state.getComparisonLap()
+    return compLap ~= nil and compLap:length() > 10
+end
+
+--- Check if we have a best/reference lap (for backwards compatibility)
 ---@return boolean
 function state.hasBestLap()
     return state.bestLap ~= nil and state.bestLap:length() > 10
 end
 
---- Get best lap time in seconds
+--- Get comparison lap time in seconds
+---@return number|nil
+function state.getComparisonLapTime()
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return compLap.time / 1000
+end
+
+--- Get best/reference lap time in seconds (for backwards compatibility)
 ---@return number|nil
 function state.getBestLapTime()
     if not state.bestLap then return nil end
     return state.bestLap.time / 1000
 end
 
---- Get best lap data
+--- Get best/reference lap data
 ---@return table|nil
 function state.getBestLap()
     return state.bestLap
@@ -1180,50 +1392,54 @@ end
 
 --- Get ghost value at position (for corner analysis)
 ---@param field string Field name
----@param pos number Spline position
---- Get ghost time at position
+--- Get ghost time at position (from comparison lap)
 ---@param pos number Spline position
 ---@return number|nil Time in seconds
 function state.getGhostTimeAtPos(pos)
-    if not state.bestLap then return nil end
-    return state.bestLap:getTimeAtPos(pos)
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return compLap:getTimeAtPos(pos)
 end
 
---- Get max steering in range from best lap
+--- Get max steering in range from comparison lap
 ---@param startPos number
 ---@param endPos number
 ---@return number Degrees
 function state.getGhostMaxSteeringInRange(startPos, endPos)
-    if not state.bestLap then return 0 end
-    return state.bestLap:findMaxSteering(startPos, endPos)
+    local compLap = state.getComparisonLap()
+    if not compLap then return 0 end
+    return compLap:findMaxSteering(startPos, endPos)
 end
 
---- Get brake point in range from best lap
+--- Get brake point in range from comparison lap
 ---@param startPos number
 ---@param endPos number
 ---@return number|nil
 function state.getGhostBrakePointInRange(startPos, endPos)
-    if not state.bestLap then return nil end
-    return state.bestLap:findBrakePoint(startPos, endPos)
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return compLap:findBrakePoint(startPos, endPos)
 end
 
---- Get lift-off point in range from best lap
+--- Get lift-off point in range from comparison lap
 ---@param startPos number
 ---@param endPos number
 ---@return number|nil
 function state.getGhostLiftPointInRange(startPos, endPos)
-    if not state.bestLap then return nil end
-    return state.bestLap:findLiftPoint(startPos, endPos)
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil end
+    return compLap:findLiftPoint(startPos, endPos)
 end
 
---- Get apex (minimum speed point) in range from best lap
+--- Get apex (minimum speed point) in range from comparison lap
 ---@param startPos number
 ---@param endPos number
 ---@return number|nil apexPos
 ---@return number|nil apexSpeed
 function state.getGhostApexInRange(startPos, endPos)
-    if not state.bestLap then return nil, nil end
-    return state.bestLap:findApex(startPos, endPos)
+    local compLap = state.getComparisonLap()
+    if not compLap then return nil, nil end
+    return compLap:findApex(startPos, endPos)
 end
 
 --------------------------------------------------------------------------------

@@ -86,6 +86,15 @@ if not bit.band then
     bit.rshift = function(a, n) return math.floor(a / (2 ^ n)) end
 end
 
+-- Mock ac.ControlButton for hotkey bindings
+ac.ControlButton = function(name, defaults)
+    return {
+        pressed = function() return false end,
+        down = function() return false end,
+        control = function(self, size) end,
+    }
+end
+
 -- Mock ac functions
 ac.log = function(msg)
     -- Silent by default, can be enabled for debugging

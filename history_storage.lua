@@ -6,16 +6,35 @@ local settings = require('app_settings')
 
 local M = {}
 
-local STORAGE_KEY = 'ac_tracer/history'
+-- Storage keys are now track-specific
+local currentTrack = nil
+local currentCar = nil
+
+local function getStorageKey()
+    if not currentTrack then return 'ac_tracer/history' end
+    -- Sanitize track/car names for storage key
+    local trackKey = currentTrack:gsub("[/\\:]", "_")
+    return 'ac_tracer/history/' .. trackKey
+end
+
+--- Set the current track/car for storage key generation
+---@param track string Track ID
+---@param car string Car ID
+function M.setTrackCar(track, car)
+    currentTrack = track
+    currentCar = car
+end
 
 -- In-memory history
 M.laps = {}
 
 --- Save history to storage
 function M.save()
+    local storageKey = getStorageKey()
+    
     if not M.laps or #M.laps == 0 then
-        ac.storage[STORAGE_KEY] = nil
-        ac.log("AC Tracer: History empty, cleared storage")
+        ac.storage[storageKey] = nil
+        ac.log("AC Tracer: History empty, cleared storage for " .. storageKey)
         return
     end
 
@@ -32,21 +51,22 @@ function M.save()
 
     if #serialized > 0 then
         local data = stringify(serialized)
-        ac.storage[STORAGE_KEY] = data
-        ac.log(string.format("AC Tracer: Saved %d laps to history (%.1f KB)", #serialized, #data / 1024))
+        ac.storage[storageKey] = data
+        ac.log(string.format("AC Tracer: Saved %d laps to %s (%.1f KB)", #serialized, storageKey, #data / 1024))
     end
 end
 
 --- Load history from storage
 function M.load()
-    local data = ac.storage[STORAGE_KEY]
+    local storageKey = getStorageKey()
+    local data = ac.storage[storageKey]
     if not data then
-        ac.log("AC Tracer: No history in storage")
+        ac.log("AC Tracer: No history in storage for " .. storageKey)
         M.laps = {}
         return false
     end
 
-    ac.log(string.format("AC Tracer: Loading history (%.1f KB)", #data / 1024))
+    ac.log(string.format("AC Tracer: Loading history from %s (%.1f KB)", storageKey, #data / 1024))
 
     local ok, serialized = pcall(function() return stringify.parse(data) end)
     if not ok or not serialized then
