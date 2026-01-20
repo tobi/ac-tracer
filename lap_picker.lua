@@ -85,20 +85,23 @@ local function drawLapRow(x, y, width, lapData, idx, options)
     local mins = math.floor(lapTimeS / 60)
     local secs = lapTimeS - mins * 60
 
-    local lapNum = (lapData.lapNumberInSession and lapData.lapNumberInSession > 0)
-        and string.format("L%d ", lapData.lapNumberInSession) or ""
-    local lapLabel = string.format("%s%d:%05.2f", lapNum, mins, secs)
+    local lapLabel = (lapData.lapNumberInSession and lapData.lapNumberInSession > 0)
+        and string.format("Lap %d", lapData.lapNumberInSession) or "Lap"
+    local timeLabel = string.format("%d:%05.2f", mins, secs)
 
     local isBest = options.isBest or (lapData == st.bestLap)
     local isCurrent = options.isCurrent or false
 
-    -- Lap label
+    -- Button area
+    local btnAreaX = x + width - BTN_WIDTH * 2 - 15
+
+    -- Lap label (left) and time (right-aligned in label area)
     ui.setCursor(vec2(x, y + 2))
     ui.pushFont(ui.Font.Small)
 
     local labelColor = theme.text.primary
     if isBest then
-        labelColor = theme.status.info
+        labelColor = theme.corner.faster
     elseif isCurrent then
         labelColor = theme.status.success
     end
@@ -115,10 +118,18 @@ local function drawLapRow(x, y, width, lapData, idx, options)
         ui.textColored("(cur)", theme.text.muted)
     end
     ui.popStyleColor()
-    ui.popFont()
 
-    -- Button area
-    local btnAreaX = x + width - BTN_WIDTH * 2 - 15
+    local timeWidth = ui.measureText(timeLabel).x
+    local timeX = btnAreaX - timeWidth - 10
+    local minTimeX = x + ui.measureText(lapLabel).x + 8
+    if timeX < minTimeX then
+        timeX = minTimeX
+    end
+    ui.setCursor(vec2(timeX, y + 2))
+    ui.pushStyleColor(ui.StyleColor.Text, labelColor)
+    ui.text(timeLabel)
+    ui.popStyleColor()
+    ui.popFont()
 
     -- "C" button (set as current to view)
     if options.showCurrent ~= false then
@@ -347,7 +358,7 @@ function lap_picker.drawPopover(x, y, width, height, options)
     ui.popFont()
     py = py + 18
 
-    local files = file_utils.scanCSVFiles()
+    local files = file_utils.scanCSVFiles(st.track)
     if #files > 0 then
         for j, fileInfo in ipairs(files) do
             if j <= maxCSVFiles and py < y + height - 40 then
@@ -512,7 +523,7 @@ function lap_picker.draw(dt)
         ui.popFont()
         py = py + 16
 
-        local files = file_utils.scanCSVFiles()
+        local files = file_utils.scanCSVFiles(st.track)
         if #files > 0 then
             for j, fileInfo in ipairs(files) do
                 py = drawCSVRow(padding, py, contentW, fileInfo, j, rowOptions)

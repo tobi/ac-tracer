@@ -145,6 +145,7 @@ if #test_files == 0 then
     test_files = {
         "tests/test_lap.lua",
         "tests/test_csv_loading.lua",
+        "tests/test_csv_export.lua",
         "tests/test_corner_detection.lua",
         "tests/test_corner_notes.lua",
         "tests/test_scoring.lua",

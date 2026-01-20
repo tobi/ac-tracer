@@ -16,6 +16,9 @@ local COLUMN_MAPPINGS = {
     -- Time column (required)
     time = { "time" },
 
+    -- Track name column (optional)
+    track = { "track", "track name", "venue" },
+
     -- Position/distance columns (at least one required)
     pos = { "lap progression" },           -- 0-1 spline position (AC exports)
     distance = { "distance" },             -- meters from lap start (real car exports)
@@ -648,9 +651,10 @@ end
 ---@param filePath string Path to CSV file
 ---@param trackLength number|nil Track length in meters (required for distance-based CSVs)
 ---@param targetSampleRate number Target Hz for output (required)
+---@param expectedTrack string|nil Expected track ID for filtering
 ---@return CSVParseResult|nil result Parsed lap data
 ---@return table|nil warnings Array of warning messages
-function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
+function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedTrack)
     local warnings = {}
 
     local f = io.open(filePath, "r")
@@ -841,6 +845,37 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
         targetSampleRate = targetSampleRate,
     }
 
+    -- Track column filtering (if present and expectedTrack provided)
+    if indices.track and expectedTrack then
+        local function normalizeTrackName(name)
+            if not name then return nil end
+            local norm = name:lower():gsub("^%s+", ""):gsub("%s+$", "")
+            norm = norm:gsub("[^%w]+", "_")
+            norm = norm:gsub("_+", "_")
+            return norm
+        end
+
+        local expectedNorm = normalizeTrackName(expectedTrack)
+        local foundTrack = nil
+        for i = dataStartLine, math.min(dataStartLine + 50, #allLines) do
+            local line = allLines[i]
+            if line and line ~= "" and not line:match("^%s*$") then
+                local fields = extractFields(line, { track = indices.track })
+                if fields.track and fields.track ~= "" then
+                    foundTrack = fields.track
+                    break
+                end
+            end
+        end
+
+        if foundTrack then
+            local foundNorm = normalizeTrackName(foundTrack)
+            if foundNorm and expectedNorm and foundNorm ~= expectedNorm then
+                return nil, { "CSV track does not match current track" }
+            end
+        end
+    end
+
     -- Parse all laps
     local allLaps = {}
     local currentIdx = dataStartLine
@@ -899,6 +934,7 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate)
         position = useDistance and (indices.distance and headers[indices.distance])
             or (indices.pos and headers[indices.pos] or nil),
         time = indices.time and headers[indices.time] or nil,
+        track = indices.track and headers[indices.track] or nil,
         fuel = indices.fuel and headers[indices.fuel] or nil,
         g_lat = indices.g_lat and headers[indices.g_lat] or nil,
         g_long = indices.g_long and headers[indices.g_long] or nil,

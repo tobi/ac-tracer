@@ -1336,8 +1336,8 @@ end
 ---@return table|nil Lap instance
 ---@return table|nil warnings Array of warning messages
 function lap.fromCSV(filePath, track, car, trackLength)
-    -- Delegate to csv_parser module, passing our target sample rate
-    local parsed, warnings = csv_parser.parseFile(filePath, trackLength, lap.SAMPLE_RATE)
+    -- Delegate to csv_parser module, passing our target sample rate and expected track
+    local parsed, warnings = csv_parser.parseFile(filePath, trackLength, lap.SAMPLE_RATE, track)
     if not parsed then
         return nil, warnings
     end

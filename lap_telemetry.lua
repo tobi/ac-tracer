@@ -6,6 +6,7 @@ local settings = require('app_settings')
 local corner_analysis = require('corner_analysis')
 local theme = require('theme')
 local file_utils = require('file_utils')
+local csv_export = require('csv_export')
 local lap_picker = require('lap_picker')
 local ui_utils = require('ui_utils')
 local markdown = require('markdown')
@@ -1008,6 +1009,7 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
             end
         end
 
+        drawCsvRow("Track", src.track)
         drawCsvRow("Throt", src.throttle)
         drawCsvRow("Brake", src.brake)
         drawCsvRow("Speed", src.speed)
@@ -1205,8 +1207,25 @@ function lap_telemetry.draw(dt, context)
         showRefPicker = not showRefPicker
     end
 
+    -- Save as Reference button
+    ui.setCursor(vec2(windowSize.x - 210, 4))
+    if ui.button("Save as Reference", vec2(100, 22)) then
+        if viewingLap then
+            local path, err = csv_export.saveLap(viewingLap)
+            if path then
+                file_utils.invalidateCache()
+                local filename = path:match("([^/\\]+)$") or path
+                ac.setMessage("Reference saved", filename)
+            else
+                ac.setMessage("Error", err or "Failed to save reference")
+            end
+        else
+            ac.setMessage("Error", "No lap to save")
+        end
+    end
+
     -- Copy as Markdown button
-    ui.setCursor(vec2(windowSize.x - 230, 4))
+    ui.setCursor(vec2(windowSize.x - 340, 4))
     if ui.button("Copy as Markdown", vec2(120, 22)) then
         local success, msg = markdown.copyToClipboard(viewingLap, referenceLap)
         if success then
@@ -1220,7 +1239,7 @@ function lap_telemetry.draw(dt, context)
     end
 
     -- Markers dropdown button
-    ui.setCursor(vec2(windowSize.x - 310, 4))
+    ui.setCursor(vec2(windowSize.x - 420, 4))
     markersButtonPos = ui.getCursor()
     if ui.button("Markers", vec2(70, 22)) then
         showMarkersDropdown = not showMarkersDropdown
