@@ -7,6 +7,9 @@ local file_utils = require('file_utils')
 suite("CSV Export - Round Trip")
 
 test("exports and re-imports lap data", function()
+    if mock and mock.resetVfs then
+        mock.resetVfs()
+    end
     local l = lap.new("test_track", "test_car", "session")
     local count = 31
 

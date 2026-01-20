@@ -146,11 +146,21 @@ if #test_files == 0 then
         "tests/test_lap.lua",
         "tests/test_csv_loading.lua",
         "tests/test_csv_export.lua",
+        "tests/test_csv_parser.lua",
         "tests/test_corner_detection.lua",
         "tests/test_corner_notes.lua",
+        "tests/test_corner_analysis_basic.lua",
+        "tests/test_checkpoint.lua",
         "tests/test_scoring.lua",
         "tests/test_settings.lua",
         "tests/test_ui_utils.lua",
+        "tests/test_file_utils.lua",
+        "tests/test_history_storage.lua",
+        "tests/test_markdown.lua",
+        "tests/test_theme.lua",
+        "tests/test_wedge.lua",
+        "tests/test_delta_bar.lua",
+        "tests/test_lap_picker.lua",
     }
 end
 

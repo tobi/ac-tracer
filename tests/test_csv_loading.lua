@@ -470,15 +470,19 @@ suite("MoTeC CSV Loading")
 
 local motecDir = "C:\\MoTeC\\Logged Data\\"
 
--- Check if MoTeC directory exists (skip all tests if not)
-local motecDirExists = io.dirExists and io.dirExists(motecDir)
+local function seedMotec()
+    if mock and mock.vfsSeedMotec then
+        mock.vfsSeedMotec("ier_daytona")
+    end
+end
+
+local function motecDirExists()
+    return io.dirExists and io.dirExists(motecDir)
+end
 
 -- Test loading specific known files from MoTeC directory
 test("loads beche_daytona_sim.csv from MoTeC directory", function()
-    if not motecDirExists then
-        print("    [SKIP] MoTeC directory not found: " .. motecDir)
-        return
-    end
+    seedMotec()
     
     local testFile = motecDir .. "beche_daytona_sim.csv"
     if not io.fileExists(testFile) then
@@ -516,9 +520,7 @@ test("loads beche_daytona_sim.csv from MoTeC directory", function()
 end)
 
 test("beche_daytona_sim.csv has valid telemetry data", function()
-    if not motecDirExists then
-        return
-    end
+    seedMotec()
     
     local testFile = motecDir .. "beche_daytona_sim.csv"
     if not io.fileExists(testFile) then
@@ -557,9 +559,7 @@ test("beche_daytona_sim.csv has valid telemetry data", function()
 end)
 
 test("beche_daytona_sim.csv interpolation works", function()
-    if not motecDirExists then
-        return
-    end
+    seedMotec()
     
     local testFile = motecDir .. "beche_daytona_sim.csv"
     if not io.fileExists(testFile) then
@@ -585,9 +585,7 @@ test("beche_daytona_sim.csv interpolation works", function()
 end)
 
 test("loads beche_daytona_sim_1_40_1.csv from MoTeC directory", function()
-    if not motecDirExists then
-        return
-    end
+    seedMotec()
     
     local testFile = motecDir .. "beche_daytona_sim_1_40_1.csv"
     if not io.fileExists(testFile) then
@@ -610,10 +608,7 @@ test("loads beche_daytona_sim_1_40_1.csv from MoTeC directory", function()
 end)
 
 test("MoTeC directory scanning works", function()
-    if not motecDirExists then
-        print("    [SKIP] MoTeC directory not found: " .. motecDir)
-        return
-    end
+    seedMotec()
     
     local files = io.scanDir(motecDir, "*.csv")
     assert_not_nil(files, "Should be able to scan MoTeC directory")
@@ -634,6 +629,7 @@ test("file_utils.scanCSVFiles finds MoTeC files", function()
     if not io.dirExists or not io.scanDir then
         return  -- Skip if no directory functions
     end
+    seedMotec()
     
     local file_utils = require('file_utils')
     
@@ -659,7 +655,7 @@ test("file_utils.scanCSVFiles finds MoTeC files", function()
         end
     end
     
-    if motecDirExists then
+    if motecDirExists() then
         print("    [INFO] Found " .. motecFileCount .. " CSV files from MoTeC directory")
         if motecFileCount > 0 then
             -- Verify we can actually load one of them
