@@ -161,6 +161,8 @@ if #test_files == 0 then
         "tests/test_wedge.lua",
         "tests/test_delta_bar.lua",
         "tests/test_lap_picker.lua",
+        "tests/test_state.lua",
+        "tests/test_lap_telemetry_basic.lua",
     }
 end
 
