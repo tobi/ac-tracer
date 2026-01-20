@@ -492,6 +492,36 @@ local function analyzeEntrySpeed(data)
     return { text = string.format("entry %.0f %s %s", displayDelta, ui_utils.speedUnit(), dir), severity = "info" }
 end
 
+--- Analyze downshift reaction time (brake to first downshift)
+--- Flags slow reaction if > 100ms
+---@param data table Corner comparison data
+---@return table|nil Note {text, severity} about slow downshift reaction, or nil if fast enough
+local function analyzeDownshiftReaction(data)
+    if not data.currentDownshiftFirstMs then return nil end
+
+    local SLOW_REACTION_THRESHOLD_MS = 100
+
+    if data.currentDownshiftFirstMs <= SLOW_REACTION_THRESHOLD_MS then
+        return nil -- Fast enough, no warning needed
+    end
+
+    -- Check if reference has downshift timing for comparison
+    local text
+    if data.refDownshiftFirstMs then
+        local diff = data.currentDownshiftFirstMs - data.refDownshiftFirstMs
+        if math.abs(diff) > 50 then  -- Only compare if significant difference
+            local dir = diff > 0 and "slower" or "faster"
+            text = string.format("downshift %.0fms %s than ref", math.abs(diff), dir)
+        else
+            text = string.format("slow downshift reaction (%.0fms)", data.currentDownshiftFirstMs)
+        end
+    else
+        text = string.format("slow downshift reaction (%.0fms)", data.currentDownshiftFirstMs)
+    end
+
+    return { text = text, severity = "info" }
+end
+
 --- Collect all corner notes by running analysis functions
 ---@param data table Corner comparison data
 ---@param currentLap table Current lap data (optional, for flag-based analysis)
@@ -511,6 +541,7 @@ local function collectCornerNotes(data, currentLap, refLap)
     addNote(analyzeGearUsage(data))
     addNote(analyzeCoasting(data))
     addNote(analyzeEntrySpeed(data))
+    addNote(analyzeDownshiftReaction(data))
 
     -- Lap-based analysis (flags, pressure, timing)
     if currentLap then
@@ -549,6 +580,10 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
     local entrySpeed = lapData:findEntrySpeed(cornerDef.startPos, cornerDef.endPos)
     local exitSpeed = lapData:findExitSpeed(cornerDef.startPos, cornerDef.endPos)
 
+    -- Downshift timing (reaction time and total shift time)
+    local downshiftFirstMs, downshiftLastMs = lapData:findDownshiftDelay(
+        cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold())
+
     return {
         number = cornerDef.number,
         startPos = cornerDef.startPos,
@@ -564,6 +599,8 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         entryTime = lapData:getTimeAtPos(cornerDef.startPos),
         exitTime = lapData:getTimeAtPos(cornerDef.endPos),
         overlapTime = lapData:getOverlapTimeInRange(cornerDef.startPos, cornerDef.endPos),
+        downshiftFirstMs = downshiftFirstMs,  -- Reaction time: brake to first downshift
+        downshiftLastMs = downshiftLastMs,    -- Total shift time: brake to last downshift
     }
 end
 
@@ -590,14 +627,14 @@ end
 ---@return table Comparison with deltas
 function corner_analysis.compareCorners(current, reference)
     if not current or not reference then return nil end
-    
+
     local timeDelta = nil
     if current.entryTime and current.exitTime and reference.entryTime and reference.exitTime then
         local currentDuration = current.exitTime - current.entryTime
         local refDuration = reference.exitTime - reference.entryTime
         timeDelta = currentDuration - refDuration
     end
-    
+
     return {
         number = current.number,
         -- Reference data
@@ -620,8 +657,13 @@ function corner_analysis.compareCorners(current, reference)
         currentMaxSteeringDeg = current.maxSteeringDeg or 0,
         currentMinGear = current.minGear,
         currentOverlapTime = current.overlapTime or 0,
-        -- Reference gear
+        -- Downshift timing (current)
+        currentDownshiftFirstMs = current.downshiftFirstMs,
+        currentDownshiftLastMs = current.downshiftLastMs,
+        -- Reference gear and downshift timing
         refMinGear = reference.minGear,
+        refDownshiftFirstMs = reference.downshiftFirstMs,
+        refDownshiftLastMs = reference.downshiftLastMs,
         -- Deltas
         timeDelta = timeDelta,
         entrySpeedDelta = current.entrySpeed and reference.entrySpeed and
