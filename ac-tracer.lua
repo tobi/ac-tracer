@@ -830,3 +830,10 @@ end
 function script.windowDelta(dt)
     delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners)
 end
+
+-- Called when app is shutting down
+function script.shutdown()
+    if state and state.autosaveReferenceIfFaster then
+        state.autosaveReferenceIfFaster()
+    end
+end

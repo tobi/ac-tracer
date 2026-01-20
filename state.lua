@@ -5,6 +5,8 @@ local lap = require('lap')
 local settings = require('app_settings')
 local history_storage = require('history_storage')
 local notification = require('sounds/notification')
+local csv_export = require('csv_export')
+local file_utils = require('file_utils')
 
 local state = {}
 
@@ -1865,6 +1867,44 @@ function state.loadCSV(filePath)
             loaded.time / 1000, loaded:length()))
     end
     return loaded, warnings
+end
+
+--------------------------------------------------------------------------------
+-- Autosave reference on exit
+--------------------------------------------------------------------------------
+
+--- Autosave fastest session lap if it beats the loaded reference for this track
+function state.autosaveReferenceIfFaster()
+    local reference = state.bestLap
+    if not reference or not reference.csvSource then
+        return false
+    end
+    if reference.track and state.track and reference.track ~= state.track then
+        return false
+    end
+
+    local candidate = state.bestInSession
+    if not candidate or not candidate.valid or not candidate.time or candidate.time <= 0 then
+        return false
+    end
+
+    if reference.time and candidate.time >= reference.time then
+        return false
+    end
+
+    local filename = csv_export.buildAutosaveFilename(state.track, candidate.time)
+    local path, err = csv_export.saveLap(candidate, {
+        directory = file_utils.getLapDirectory(),
+        filename = filename,
+    })
+    if path then
+        file_utils.invalidateCache()
+        ac.log("AC Tracer: Autosaved reference lap to " .. path)
+        return true
+    end
+
+    ac.log("AC Tracer: Autosave failed: " .. tostring(err))
+    return false
 end
 
 --- Load CSV and set as reference (best) lap

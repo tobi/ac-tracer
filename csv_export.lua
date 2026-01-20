@@ -29,6 +29,16 @@ local function buildFilename(lapObj)
     return string.format("%s_%s.csv", track, timeLabel)
 end
 
+--- Build autosave filename for a track/time
+---@param track string Track ID
+---@param timeMs number Lap time in milliseconds
+---@return string Filename
+function csv_export.buildAutosaveFilename(track, timeMs)
+    local trackName = sanitizeFilename(track or "track")
+    local timeLabel = formatTimeLabel(timeMs or 0)
+    return string.format("%s-%s-autosave.csv", trackName, timeLabel)
+end
+
 local function formatNumber(value, fmt)
     if value == nil then return "" end
     return string.format(fmt or "%.3f", value)
