@@ -873,14 +873,16 @@ function lap:findApex(startPos, endPos)
     return nil, nil
 end
 
---- Find the delay in milliseconds between brake initiation and first downshift
+--- Find the delay in milliseconds between brake initiation and first/last downshift
 --- Useful for analyzing braking technique (trail braking with heel-toe)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
 ---@param brakeThreshold number? Brake threshold in bar (default lap.BRAKE_THRESHOLD_BAR)
----@return number|nil delayMs Milliseconds between brake and first downshift (nil if no downshift found)
----@return number|nil brakeTime Time of brake initiation (for debugging)
----@return number|nil downshiftTime Time of first downshift (for debugging)
+---@return number|nil firstDelayMs Milliseconds between brake and first downshift (reaction time)
+---@return number|nil lastDelayMs Milliseconds between brake and last downshift (total shift time)
+---@return number|nil brakeTime Time of brake initiation
+---@return number|nil firstDownshiftTime Time of first downshift
+---@return number|nil lastDownshiftTime Time of last downshift
 function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
     if not self.pos or #self.pos < 2 then return nil end
     if not self.gear or #self.gear < 2 then return nil end
@@ -910,8 +912,9 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
         return nil -- No braking found in range
     end
 
-    -- Find first downshift after brake initiation
-    local downshiftTime = nil
+    -- Find first and last downshifts after brake initiation
+    local firstDownshiftTime = nil
+    local lastDownshiftTime = nil
     local lastGear = brakeGear
 
     for i = brakeIdx + 1, #self.pos do
@@ -920,26 +923,29 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
             local currentGear = self.gear[i]
             if currentGear and lastGear and currentGear < lastGear and currentGear >= 1 then
                 -- Found a downshift (gear decreased, still in forward gear)
-                downshiftTime = self.times[i]
-                break
+                if not firstDownshiftTime then
+                    firstDownshiftTime = self.times[i]
+                end
+                lastDownshiftTime = self.times[i]
             end
             if currentGear then
                 lastGear = currentGear
             end
         elseif brakeIdx and i > brakeIdx then
-            -- We've left the corner range without finding a downshift
+            -- We've left the corner range without finding more downshifts
             break
         end
     end
 
-    if not downshiftTime then
+    if not firstDownshiftTime then
         return nil -- No downshift found after brake initiation
     end
 
-    -- Calculate delay in milliseconds
-    local delayMs = (downshiftTime - brakeTime) * 1000
+    -- Calculate delays in milliseconds
+    local firstDelayMs = (firstDownshiftTime - brakeTime) * 1000
+    local lastDelayMs = (lastDownshiftTime - brakeTime) * 1000
 
-    return delayMs, brakeTime, downshiftTime
+    return firstDelayMs, lastDelayMs, brakeTime, firstDownshiftTime, lastDownshiftTime
 end
 
 --- Find entry speed (max speed in first half of corner or before min speed point)
