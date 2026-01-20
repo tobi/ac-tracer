@@ -29,7 +29,7 @@ test("exports and re-imports lap data", function()
     l.time = l.times[#l.times] * 1000
     l.completed = true
 
-    local baseDir = file_utils.getLapDirectory()
+    local baseDir = __dirname .. "/tracks/"
     local path1, err1 = csv_export.saveLap(l, { directory = baseDir, filename = "test_export_1.csv" })
     assert_not_nil(path1, err1 or "CSV export failed")
 

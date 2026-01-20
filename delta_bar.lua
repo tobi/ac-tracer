@@ -54,13 +54,15 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     local centerX = windowSize.x / 2
     local padding = 10
 
+    local isOutlap = car.lapCount == 0
+
     -- Skip updates during replay/rewind (keep showing last known values)
     if not sim.isReplayActive and not sim.isPaused then
         -- Throttle delta updates to 2 Hz
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
-            if referenceLap and currentPos then
+            if referenceLap and currentPos and not isOutlap then
                 -- Use live car.lapTimeMs for delta calculation, corrected by checkpoint offset
                 -- After checkpoint load, AC doesn't restore lapTimeMs, so we subtract the offset
                 local lapTimeOffset = state.getLapTimeOffset()
@@ -87,7 +89,7 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     -- Color based on delta time
     -- Green at 0.0 (even/ahead), direct gradient to red when behind
     local barColor, textColor
-    local hasRef = referenceLap and referenceLap:length() > 10
+    local hasRef = referenceLap and referenceLap:length() > 10 and not isOutlap
     if not hasRef then
         barColor = theme.text.muted
         textColor = theme.text.muted
@@ -248,7 +250,14 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
     -- Bottom: Large delta in dark box
     ----------------------------------------
     local sign = displayDelta >= 0 and "+" or ""
-    local deltaText = hasRef and string.format("%s%.2f", sign, displayDelta) or "NO REF"
+    local deltaText
+    if isOutlap then
+        deltaText = "OUTLAP"
+    elseif hasRef then
+        deltaText = string.format("%s%.2f", sign, displayDelta)
+    else
+        deltaText = "NO REF"
+    end
 
     ui.pushFont(ui.Font.Title)
     local deltaSize = ui.measureText(deltaText)

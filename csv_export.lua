@@ -44,10 +44,15 @@ local function formatNumber(value, fmt)
     return string.format(fmt or "%.3f", value)
 end
 
-local function writeLine(file, fields)
+local function writeLine(file, fields, forceQuote)
     local escaped = {}
     for i = 1, #fields do
-        escaped[i] = file_utils.escapeCSV(fields[i])
+        local value = tostring(fields[i] or "")
+        if forceQuote then
+            escaped[i] = '"' .. value:gsub('"', '""') .. '"'
+        else
+            escaped[i] = file_utils.escapeCSV(value)
+        end
     end
     file:write(table.concat(escaped, ",") .. "\n")
 end
@@ -75,8 +80,8 @@ function csv_export.saveLap(lapObj, options)
     end
 
     -- Minimal MoTeC-style metadata
-    writeLine(f, { "Format", "MoTeC CSV File" })
-    writeLine(f, { "Sample Rate", string.format("%.3f", lap.SAMPLE_RATE), "Hz" })
+    writeLine(f, { "Format", "MoTeC CSV File" }, true)
+    writeLine(f, { "Sample Rate", string.format("%.3f", lap.SAMPLE_RATE), "Hz" }, true)
     f:write("\n")
 
     -- Header + units (must include Time and Lap Progression for parser)
@@ -111,8 +116,8 @@ function csv_export.saveLap(lapObj, options)
         "g",
     }
 
-    writeLine(f, headers)
-    writeLine(f, units)
+    writeLine(f, headers, true)
+    writeLine(f, units, true)
     f:write("\n")
 
     -- Data rows

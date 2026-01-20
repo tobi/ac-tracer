@@ -492,33 +492,19 @@ local function analyzeEntrySpeed(data)
     return { text = string.format("entry %.0f %s %s", displayDelta, ui_utils.speedUnit(), dir), severity = "info" }
 end
 
---- Analyze downshift reaction time (brake to first downshift)
---- Flags slow reaction if > 100ms
+--- Analyze downshift reaction distance (brake to first downshift)
+--- Flags slow reaction if distance is large
 ---@param data table Corner comparison data
 ---@return table|nil Note {text, severity} about slow downshift reaction, or nil if fast enough
 local function analyzeDownshiftReaction(data)
-    if not data.currentDownshiftFirstMs then return nil end
+    if not data.currentDownshiftDistanceM then return nil end
 
-    local SLOW_REACTION_THRESHOLD_MS = 100
-
-    if data.currentDownshiftFirstMs <= SLOW_REACTION_THRESHOLD_MS then
+    local SLOW_REACTION_THRESHOLD_M = 5
+    if data.currentDownshiftDistanceM <= SLOW_REACTION_THRESHOLD_M then
         return nil -- Fast enough, no warning needed
     end
 
-    -- Check if reference has downshift timing for comparison
-    local text
-    if data.refDownshiftFirstMs then
-        local diff = data.currentDownshiftFirstMs - data.refDownshiftFirstMs
-        if math.abs(diff) > 50 then  -- Only compare if significant difference
-            local dir = diff > 0 and "slower" or "faster"
-            text = string.format("downshift %.0fms %s than ref", math.abs(diff), dir)
-        else
-            text = string.format("slow downshift reaction (%.0fms)", data.currentDownshiftFirstMs)
-        end
-    else
-        text = string.format("slow downshift reaction (%.0fms)", data.currentDownshiftFirstMs)
-    end
-
+    local text = string.format("downshift after %.1fm of braking", data.currentDownshiftDistanceM)
     return { text = text, severity = "info" }
 end
 
@@ -581,8 +567,13 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
     local exitSpeed = lapData:findExitSpeed(cornerDef.startPos, cornerDef.endPos)
 
     -- Downshift timing (reaction time and total shift time)
-    local downshiftFirstMs, downshiftLastMs = lapData:findDownshiftDelay(
+    local downshiftFirstMs, downshiftLastMs, _, _, _, brakePos, firstDownshiftPos = lapData:findDownshiftDelay(
         cornerDef.startPos, cornerDef.endPos, settings.brakeThreshold())
+
+    local downshiftDistanceM = nil
+    if brakePos and firstDownshiftPos then
+        downshiftDistanceM = math.abs(ui_utils.positionDeltaToMeters(firstDownshiftPos, brakePos) or 0)
+    end
 
     return {
         number = cornerDef.number,
@@ -601,6 +592,7 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         overlapTime = lapData:getOverlapTimeInRange(cornerDef.startPos, cornerDef.endPos),
         downshiftFirstMs = downshiftFirstMs,  -- Reaction time: brake to first downshift
         downshiftLastMs = downshiftLastMs,    -- Total shift time: brake to last downshift
+        downshiftDistanceM = downshiftDistanceM,  -- Brake to first downshift distance
     }
 end
 
@@ -660,6 +652,7 @@ function corner_analysis.compareCorners(current, reference)
         -- Downshift timing (current)
         currentDownshiftFirstMs = current.downshiftFirstMs,
         currentDownshiftLastMs = current.downshiftLastMs,
+        currentDownshiftDistanceM = current.downshiftDistanceM,
         -- Reference gear and downshift timing
         refMinGear = reference.minGear,
         refDownshiftFirstMs = reference.downshiftFirstMs,

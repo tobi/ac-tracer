@@ -1,0 +1,1 @@
+Run unit tests tests\run.cmd

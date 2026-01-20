@@ -685,6 +685,12 @@ nix-shell -p luajit --command "luajit tests/test_runner.lua"
 nix-shell -p luajit --command "luajit -bl state.lua > /dev/null && echo OK"
 ```
 
+Windows (PowerShell or CMD):
+
+```
+tests\run.cmd
+```
+
 ### Test Files
 
 - `tests/test_runner.lua` - Main test runner, loads all test files

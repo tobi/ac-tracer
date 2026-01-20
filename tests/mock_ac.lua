@@ -463,6 +463,7 @@ ffi.cdef[[
     BOOL FindNextFileA(HANDLE hFindFile, WIN32_FIND_DATAA* lpFindFileData);
     BOOL FindClose(HANDLE hFindFile);
     DWORD GetFileAttributesA(LPCSTR lpFileName);
+    BOOL CreateDirectoryA(LPCSTR lpPathName, void* lpSecurityAttributes);
 ]]
 
 local INVALID_HANDLE_VALUE = ffi.cast("HANDLE", -1)
@@ -518,6 +519,15 @@ io.scanDir = io.scanDir or function(path, pattern)
     ffi.C.FindClose(handle)
     
     return #files > 0 and files or nil
+end
+
+-- io.createDir - create directory if missing
+io.createDir = io.createDir or function(path)
+    if io.dirExists(path) then
+        return true
+    end
+    ffi.C.CreateDirectoryA(path, nil)
+    return io.dirExists(path)
 end
 
 -- io.fileSize - get file size in bytes

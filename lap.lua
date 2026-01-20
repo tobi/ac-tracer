@@ -768,20 +768,14 @@ function lap:findLiftPoint(startPos, endPos, fullThrottleThreshold)
     if not self.pos then return nil end
     fullThrottleThreshold = fullThrottleThreshold or 0.98  -- 98% = full throttle
 
-    local GEAR_SHIFT_WINDOW = 30  -- Samples to ignore around gear shifts (~0.5s at 60Hz)
-
-    -- Helper to check if a gear shift occurred near index i
+    -- Helper to check if a gear shift occurred at or adjacent to index i
     local function isNearGearShift(i)
         if not self.gear or #self.gear < 2 then return false end
         local currentGear = self.gear[i]
-        if not currentGear then return false end
-
-        -- Check samples before and after for gear changes
-        for j = math.max(1, i - GEAR_SHIFT_WINDOW), math.min(#self.gear, i + GEAR_SHIFT_WINDOW) do
-            if self.gear[j] and self.gear[j] ~= currentGear then
-                return true
-            end
-        end
+        local prevGear = self.gear[i - 1]
+        local nextGear = self.gear[i + 1]
+        if currentGear and prevGear and currentGear ~= prevGear then return true end
+        if currentGear and nextGear and currentGear ~= nextGear then return true end
         return false
     end
 
@@ -883,6 +877,9 @@ end
 ---@return number|nil brakeTime Time of brake initiation
 ---@return number|nil firstDownshiftTime Time of first downshift
 ---@return number|nil lastDownshiftTime Time of last downshift
+---@return number|nil brakePos Position of brake initiation
+---@return number|nil firstDownshiftPos Position of first downshift
+---@return number|nil lastDownshiftPos Position of last downshift
 function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
     if not self.pos or #self.pos < 2 then return nil end
     if not self.gear or #self.gear < 2 then return nil end
@@ -895,6 +892,7 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
     local brakeIdx = nil
     local brakeTime = nil
     local brakeGear = nil
+    local brakePos = nil
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
@@ -903,6 +901,7 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
                 brakeIdx = i
                 brakeTime = self.times[i]
                 brakeGear = self.gear[i]
+                brakePos = self.pos[i]
                 break
             end
         end
@@ -915,6 +914,8 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
     -- Find first and last downshifts after brake initiation
     local firstDownshiftTime = nil
     local lastDownshiftTime = nil
+    local firstDownshiftPos = nil
+    local lastDownshiftPos = nil
     local lastGear = brakeGear
 
     for i = brakeIdx + 1, #self.pos do
@@ -925,8 +926,10 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
                 -- Found a downshift (gear decreased, still in forward gear)
                 if not firstDownshiftTime then
                     firstDownshiftTime = self.times[i]
+                    firstDownshiftPos = self.pos[i]
                 end
                 lastDownshiftTime = self.times[i]
+                lastDownshiftPos = self.pos[i]
             end
             if currentGear then
                 lastGear = currentGear
@@ -945,7 +948,7 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
     local firstDelayMs = (firstDownshiftTime - brakeTime) * 1000
     local lastDelayMs = (lastDownshiftTime - brakeTime) * 1000
 
-    return firstDelayMs, lastDelayMs, brakeTime, firstDownshiftTime, lastDownshiftTime
+    return firstDelayMs, lastDelayMs, brakeTime, firstDownshiftTime, lastDownshiftTime, brakePos, firstDownshiftPos, lastDownshiftPos
 end
 
 --- Find entry speed (max speed in first half of corner or before min speed point)

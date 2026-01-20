@@ -1163,6 +1163,11 @@ function state.update(dt, car)
         state.lapNumber = car.lapCount
         lap.resetOverlapTracking()  -- Reset overlap detection state
         lapTimeOffset = 0  -- Reset time offset for new lap
+
+        -- Auto-save a checkpoint on start/finish if none exists (silent)
+        if not state.hasCheckpoint() then
+            state.saveCheckpoint(nil, false)
+        end
     end
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
@@ -1699,11 +1704,13 @@ local pendingTraceHistory = nil
 --- Save current state as a checkpoint (async car state capture)
 --- Call this when save checkpoint button is pressed
 ---@param traceHistory table|nil Trace history to save (pass from ac-tracer.lua)
-function state.saveCheckpoint(traceHistory)
+---@param notify boolean|nil Whether to show toast/sound (default true)
+function state.saveCheckpoint(traceHistory, notify)
     if not ac.isCarResetAllowed() then
         ac.log("AC Tracer: Cannot save checkpoint - car reset not allowed in this session")
         return false
     end
+    if notify == nil then notify = true end
 
     -- Store trace history to be captured when async callback fires
     -- We deep-copy it NOW so it's captured at save time, not when callback runs
@@ -1742,9 +1749,11 @@ function state.saveCheckpoint(traceHistory)
         }
         pendingTraceHistory = nil
 
-        -- Show toast notification and play sound
-        ac.setMessage("Checkpoint Saved", "Press load key to return here")
-        notification.playSave()
+        -- Show toast notification and play sound (optional)
+        if notify then
+            ac.setMessage("Checkpoint Saved", "Press load key to return here")
+            notification.playSave()
+        end
 
         ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f, lap %d",
             state.checkpoint.pos, state.checkpoint.lapCount))
@@ -1791,6 +1800,8 @@ function state.loadCheckpoint()
         lapTimeOffset = car.lapTimeMs - state.checkpoint.lapTimeMs
         ac.log(string.format("AC Tracer: Lap time offset calculated: %d ms (current: %d, saved: %d)",
             lapTimeOffset, car.lapTimeMs, state.checkpoint.lapTimeMs))
+    else
+        lapTimeOffset = 0
     end
 
     -- Restore plugin state
@@ -1799,7 +1810,16 @@ function state.loadCheckpoint()
     end
 
     -- Update lap tracking
-    state.lapNumber = state.checkpoint.lapCount
+    local currentLapCount = state.checkpoint.lapCount
+    if car then
+        if state.checkpoint.lapCount ~= nil and car.lapCount ~= state.checkpoint.lapCount then
+            ac.log(string.format(
+                "AC Tracer: Checkpoint lap mismatch (saved %d, current %d) - keeping current lap count",
+                state.checkpoint.lapCount, car.lapCount))
+        end
+        currentLapCount = car.lapCount
+    end
+    state.lapNumber = currentLapCount
     state.trackPosition = state.checkpoint.pos
 
     -- Reset overlap tracking

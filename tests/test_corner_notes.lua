@@ -406,13 +406,15 @@ test("findDownshiftDelay detects immediate downshift after braking", function()
         l.gear[i] = 4
     end
 
-    local firstDelayMs, lastDelayMs, brakeTime, firstDownshiftTime, lastDownshiftTime = l:findDownshiftDelay(0.1, 0.2)
+    local firstDelayMs, lastDelayMs, brakeTime, firstDownshiftTime, lastDownshiftTime, brakePos, firstDownshiftPos = l:findDownshiftDelay(0.1, 0.2)
 
     assert_not_nil(firstDelayMs, "Should find first downshift delay")
     assert_not_nil(lastDelayMs, "Should find last downshift delay")
     assert_not_nil(brakeTime, "Should return brake time")
     assert_not_nil(firstDownshiftTime, "Should return first downshift time")
     assert_not_nil(lastDownshiftTime, "Should return last downshift time")
+    assert_not_nil(brakePos, "Should return brake position")
+    assert_not_nil(firstDownshiftPos, "Should return first downshift position")
 
     -- With only one downshift, first and last should be equal
     assert_equal(firstDelayMs, lastDelayMs, "First and last delay should match for single downshift")
@@ -420,6 +422,13 @@ test("findDownshiftDelay detects immediate downshift after braking", function()
     -- Delay should be (15 - 10) samples = 5 samples at 30Hz = ~166.7ms
     local expectedDelayMs = (downshiftSample - brakeStartSample) / lap.SAMPLE_RATE * 1000
     assert_near(firstDelayMs, expectedDelayMs, 50, "Delay should be ~166ms (5 samples at 30Hz)")
+
+    -- Position delta should match sample spacing
+    local posRange = 0.2 - 0.1
+    local expectedBrakePos = 0.1 + ((brakeStartSample - 1) / (numSamples - 1)) * posRange
+    local expectedDownshiftPos = 0.1 + ((downshiftSample - 1) / (numSamples - 1)) * posRange
+    assert_near(brakePos, expectedBrakePos, 0.0001, "Brake position should match expected")
+    assert_near(firstDownshiftPos, expectedDownshiftPos, 0.0001, "Downshift position should match expected")
 end)
 
 test("findDownshiftDelay returns nil when no braking occurs", function()
@@ -540,56 +549,27 @@ test("findDownshiftDelay detects multiple downshifts (returns first and last)", 
     assert_true(firstDelayMs < lastDelayMs, "First delay should be less than last delay")
 end)
 
-test("findDownshiftDelay compares current vs reference lap timing", function()
-    -- Create two laps with different downshift timing
+test("findDownshiftDelay returns brake/downshift positions", function()
     local numSamples = lap.SAMPLE_RATE
-
-    local currentLap = createTestLap({
+    local l = createTestLap({
         numSamples = numSamples,
         startPos = 0.1,
         endPos = 0.2,
     })
 
-    local referenceLap = createTestLap({
-        numSamples = numSamples,
-        startPos = 0.1,
-        endPos = 0.2,
-    })
-
-    -- Both laps brake at same point (sample 10)
-    local brakeStartSample = 10
+    local brakeStartSample = 8
     for i = 1, numSamples do
-        currentLap.gear[i] = 5
-        currentLap.brake[i] = i >= brakeStartSample and 50 or 0
-
-        referenceLap.gear[i] = 5
-        referenceLap.brake[i] = i >= brakeStartSample and 50 or 0
+        l.gear[i] = 5
+        l.brake[i] = i >= brakeStartSample and 50 or 0
     end
 
-    -- Current lap: late downshift at sample 20 (~333ms delay)
-    local currentDownshift = 20
-    for i = currentDownshift, numSamples do
-        currentLap.gear[i] = 4
+    local downshiftSample = 14
+    for i = downshiftSample, numSamples do
+        l.gear[i] = 4
     end
 
-    -- Reference lap: quick downshift at sample 12 (~66ms delay)
-    local refDownshift = 12
-    for i = refDownshift, numSamples do
-        referenceLap.gear[i] = 4
-    end
-
-    local currentFirstDelay = currentLap:findDownshiftDelay(0.1, 0.2)
-    local refFirstDelay = referenceLap:findDownshiftDelay(0.1, 0.2)
-
-    assert_not_nil(currentFirstDelay, "Current lap should have downshift delay")
-    assert_not_nil(refFirstDelay, "Reference lap should have downshift delay")
-
-    -- Current lap is slower to downshift
-    assert_true(currentFirstDelay > refFirstDelay, "Current lap should have longer delay than reference")
-
-    -- Calculate the difference in downshift timing
-    local timingDifference = currentFirstDelay - refFirstDelay
-    -- Expected: (20-10)/30*1000 - (12-10)/30*1000 = 333.3 - 66.7 = 266.7ms
-    local expectedDiff = ((currentDownshift - brakeStartSample) - (refDownshift - brakeStartSample)) / lap.SAMPLE_RATE * 1000
-    assert_near(timingDifference, expectedDiff, 50, "Timing difference should match expected")
+    local _, _, _, _, _, brakePos, firstDownshiftPos = l:findDownshiftDelay(0.1, 0.2)
+    assert_not_nil(brakePos, "Brake position should be returned")
+    assert_not_nil(firstDownshiftPos, "Downshift position should be returned")
+    assert_true(firstDownshiftPos > brakePos, "Downshift should occur after brake position")
 end)
