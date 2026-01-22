@@ -2,14 +2,14 @@
 -- Uses ac.storage for automatic persistence (no manual save needed)
 -- All settings accessed via accessor functions for live updates
 
-local lap_picker = require('lap_picker')
-local theme = require('theme')
+local lap_picker = require('lib.controls.lap_picker')
+local theme = require('lib.ui.theme')
 
 -- Deferred require to avoid circular dependency (ui_utils requires settings)
 local ui_utils = nil
 local function getUiUtils()
     if not ui_utils then
-        ui_utils = require('ui_utils')
+        ui_utils = require('lib.ui.utils')
     end
     return ui_utils
 end

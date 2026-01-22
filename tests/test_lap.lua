@@ -1,6 +1,6 @@
 -- test_lap.lua - Tests for lap.lua module
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 suite("lap.new")
 

@@ -6,6 +6,7 @@
 local script_dir = arg[0]:match("(.*/)")
 if script_dir then
     package.path = script_dir .. "../?.lua;" .. package.path
+    package.path = script_dir .. "../?/init.lua;" .. package.path
     package.path = script_dir .. "?.lua;" .. package.path
 end
 

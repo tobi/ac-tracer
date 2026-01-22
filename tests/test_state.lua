@@ -1,16 +1,16 @@
 -- test_state.lua - Integration tests for state.lua
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 local function withState(testFn, options)
     options = options or {}
     local original = {
-        state = package.loaded['state'],
-        settings = package.loaded['app_settings'],
-        history_storage = package.loaded['history_storage'],
+        state = package.loaded['lib.state'],
+        settings = package.loaded['lib.settings'],
+        history_storage = package.loaded['lib.core.history'],
         notification = package.loaded['sounds/notification'],
-        csv_export = package.loaded['csv_export'],
-        file_utils = package.loaded['file_utils'],
+        csv_export = package.loaded['lib.lap.csv_export'],
+        file_utils = package.loaded['lib.core.files'],
         io_open = io.open,
         io_createDir = io.createDir,
     }
@@ -34,25 +34,25 @@ local function withState(testFn, options)
     history_storage.getLapsFromSession = function() return {} end
     history_storage.getLapsNotFromSession = function() return {} end
 
-    package.loaded['app_settings'] = settings
-    package.loaded['history_storage'] = history_storage
+    package.loaded['lib.settings'] = settings
+    package.loaded['lib.core.history'] = history_storage
     package.loaded['sounds/notification'] = { init = function() end, playSave = function() end, playLoad = function() end }
-    package.loaded['csv_export'] = { saveLap = function() return "path" end }
-    package.loaded['file_utils'] = { scanCSVFiles = function() return {} end, formatLapTime = function() return "" end }
-    package.loaded['state'] = nil
+    package.loaded['lib.lap.csv_export'] = { saveLap = function() return "path" end }
+    package.loaded['lib.core.files'] = { scanCSVFiles = function() return {} end, formatLapTime = function() return "" end }
+    package.loaded['lib.state'] = nil
 
     io.open = options.ioOpen or function() return nil end
     io.createDir = options.ioCreateDir or function() return true end
 
-    local state = require('state')
+    local state = require('lib.state')
     testFn(state, settings, history_storage)
 
-    package.loaded['state'] = original.state
-    package.loaded['app_settings'] = original.settings
-    package.loaded['history_storage'] = original.history_storage
+    package.loaded['lib.state'] = original.state
+    package.loaded['lib.settings'] = original.settings
+    package.loaded['lib.core.history'] = original.history_storage
     package.loaded['sounds/notification'] = original.notification
-    package.loaded['csv_export'] = original.csv_export
-    package.loaded['file_utils'] = original.file_utils
+    package.loaded['lib.lap.csv_export'] = original.csv_export
+    package.loaded['lib.core.files'] = original.file_utils
     io.open = original.io_open
     io.createDir = original.io_createDir
 end

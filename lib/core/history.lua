@@ -1,8 +1,8 @@
 -- History storage module for AC Tracer
 -- Handles lap history persistence using ac.storage with stringify for complex data
 
-local lap = require('lap')
-local settings = require('app_settings')
+local lap = require('lib.lap')
+local settings = require('lib.settings')
 
 local M = {}
 

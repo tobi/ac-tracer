@@ -1,6 +1,6 @@
 -- test_csv_parser.lua - Tests for csv_parser.lua module
 
-local csv_parser = require('csv_parser')
+local csv_parser = require('lib.lap.csv_parser')
 
 suite("csv_parser.parseFile")
 

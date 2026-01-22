@@ -2,15 +2,15 @@
 -- Can render as standalone window or embedded popover
 -- Single source for loading CSV files and selecting laps
 
-local lap = require('lap')
-local theme = require('theme')
-local file_utils = require('file_utils')
+local lap = require('lib.lap')
+local theme = require('lib.ui.theme')
+local file_utils = require('lib.core.files')
 
 -- Deferred require to avoid circular dependency
 local state = nil
 local function getState()
     if not state then
-        state = require('state')
+        state = require('lib.state')
     end
     return state
 end

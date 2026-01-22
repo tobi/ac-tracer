@@ -1,7 +1,7 @@
 -- test_settings.lua - Tests for app_settings.lua module
 -- These tests verify that settings accessors are functions that must be called
 
-local settings = require('app_settings')
+local settings = require('lib.settings')
 
 --------------------------------------------------------------------------------
 -- Settings Accessor Tests

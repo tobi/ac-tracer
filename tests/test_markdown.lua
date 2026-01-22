@@ -1,6 +1,6 @@
 -- test_markdown.lua - Tests for markdown.lua module
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 local function makeLap(sessionId, timeMs)
     local l = lap.new("test_track", "test_car", sessionId)
@@ -26,11 +26,11 @@ end
 suite("markdown")
 
 test("generate outputs expected sections", function()
-    local originalState = package.loaded['state']
-    local originalCorner = package.loaded['corner_analysis']
-    local originalMarkdown = package.loaded['markdown']
+    local originalState = package.loaded['lib.state']
+    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalMarkdown = package.loaded['lib.ui.markdown']
 
-    package.loaded['state'] = {
+    package.loaded['lib.state'] = {
         track = "test_track",
         car = "test_car",
         trackCorners = {
@@ -38,7 +38,7 @@ test("generate outputs expected sections", function()
         }
     }
 
-    package.loaded['corner_analysis'] = {
+    package.loaded['lib.controls.corner_analysis'] = {
         analyzeCorner = function()
             return {
                 entrySpeed = 100,
@@ -75,8 +75,8 @@ test("generate outputs expected sections", function()
         end
     }
 
-    package.loaded['markdown'] = nil
-    local markdown = require('markdown')
+    package.loaded['lib.ui.markdown'] = nil
+    local markdown = require('lib.ui.markdown')
 
     local currentLap = makeLap("session_a", 90000)
     local referenceLap = makeLap("session_b", 88000)
@@ -87,31 +87,31 @@ test("generate outputs expected sections", function()
     assert_true(output:find("## Lap Comparison") ~= nil)
     assert_true(output:find("### T1") ~= nil)
 
-    package.loaded['state'] = originalState
-    package.loaded['corner_analysis'] = originalCorner
-    package.loaded['markdown'] = originalMarkdown
+    package.loaded['lib.state'] = originalState
+    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.ui.markdown'] = originalMarkdown
 end)
 
 test("copyToClipboard returns success and message", function()
-    local originalState = package.loaded['state']
-    local originalCorner = package.loaded['corner_analysis']
-    local originalMarkdown = package.loaded['markdown']
+    local originalState = package.loaded['lib.state']
+    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalMarkdown = package.loaded['lib.ui.markdown']
     local originalClipboard = ac.setClipboardText
 
-    package.loaded['state'] = {
+    package.loaded['lib.state'] = {
         track = "test_track",
         car = "test_car",
         trackCorners = { { number = 1, name = "T1", startPos = 0.1, endPos = 0.2 } }
     }
-    package.loaded['corner_analysis'] = {
+    package.loaded['lib.controls.corner_analysis'] = {
         analyzeCorner = function() return nil end,
         compareCorners = function() return nil end
     }
 
     ac.setClipboardText = function(text) end
 
-    package.loaded['markdown'] = nil
-    local markdown = require('markdown')
+    package.loaded['lib.ui.markdown'] = nil
+    local markdown = require('lib.ui.markdown')
     local currentLap = makeLap("session_a", 90000)
 
     local ok, msg = markdown.copyToClipboard(currentLap, nil)
@@ -119,7 +119,7 @@ test("copyToClipboard returns success and message", function()
     assert_true(msg:find("Copied to clipboard") ~= nil)
 
     ac.setClipboardText = originalClipboard
-    package.loaded['state'] = originalState
-    package.loaded['corner_analysis'] = originalCorner
-    package.loaded['markdown'] = originalMarkdown
+    package.loaded['lib.state'] = originalState
+    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.ui.markdown'] = originalMarkdown
 end)

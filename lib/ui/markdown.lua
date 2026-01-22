@@ -1,11 +1,11 @@
 -- markdown.lua - Generate coaching-friendly markdown from lap data
 -- For export to AI coaching tools
 
-local state = require('state')
-local lap = require('lap')
-local scoring = require('scoring')
-local corner_analysis = require('corner_analysis')
-local ui_utils = require('ui_utils')
+local state = require('lib.state')
+local lap = require('lib.lap')
+local scoring = require('lib.core.scoring')
+local corner_analysis = require('lib.controls.corner_analysis')
+local ui_utils = require('lib.ui.utils')
 
 local markdown = {}
 

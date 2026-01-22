@@ -1,540 +1,583 @@
 --[[
-AC Tracer Simulator - LÖVE2D Version
-Runs ac-tracer outside of Assetto Corsa
+AC Tracer Simulator - ImGui Version
+Runs ac-tracer outside of Assetto Corsa using LuaJIT-ImGui
 
-Usage:
-  cd ac-tracer
-  love sim/
+Usage with dinau/luajitImGui (Windows):
+  luajitImGui\luajitw.exe main.lua
 
-Or on Windows/macOS, drag the sim folder onto the LÖVE application.
+Usage with sonoro1234/LuaJIT-ImGui:
+  luajit main.lua
 ]]
 
--- Add parent directory to path for ac-tracer modules
-local simDir = love.filesystem.getSource()
-package.path = simDir .. "/../?.lua;" .. simDir .. "/../?/init.lua;" .. package.path
+-- Detect which ImGui binding is available
+local imgui, sdl, gl
 
--- Load CSP compatibility layer FIRST (creates global ac, ui, render, etc.)
-require('sim.csp_compat_love')
+local function tryRequire(name)
+    local ok, mod = pcall(require, name)
+    return ok and mod or nil
+end
 
--- Now load ac-tracer modules
-local lap = require('lap')
-local state = require('state')
-local settings = require('app_settings')
-local theme = require('theme')
+-- Try different ImGui bindings
+imgui = tryRequire("imgui") or tryRequire("imgui.imgui")
+sdl = tryRequire("sdl2_ffi") or tryRequire("sdl")
+gl = tryRequire("opengl") or tryRequire("gl")
+
+if not imgui then
+    print("ERROR: ImGui bindings not found!")
+    print("Please install LuaJIT-ImGui or luajitImGui")
+    print("")
+    print("Options:")
+    print("1. Download luajitImGui from: https://github.com/dinau/luajitImGui/releases")
+    print("2. Build LuaJIT-ImGui from: https://github.com/sonoro1234/LuaJIT-ImGui")
+    os.exit(1)
+end
+
+if not sdl then
+    print("ERROR: SDL2 bindings not found!")
+    print("Make sure LuaJIT-SDL2 is installed alongside LuaJIT-ImGui")
+    os.exit(1)
+end
 
 --------------------------------------------------------------------------------
--- Simulator State
+-- Setup paths for ac-tracer modules
 --------------------------------------------------------------------------------
 
-local sim = {
-    -- Playback
-    playback = {
-        lap = nil,
-        position = 0,
-        playing = false,
-        speed = 1.0,
-        time = 0,
-        lapTime = 0,
-    },
+local simDir = debug.getinfo(1, "S").source:match("@(.*/)")
+if not simDir then simDir = "./" end
+local parentDir = simDir:match("(.*/)[^/]+/$") or "../"
 
-    -- UI
-    showHelp = false,
-    showTimeline = true,
+-- Add parent directory to package path
+package.path = parentDir .. "?.lua;" .. parentDir .. "?/init.lua;" .. package.path
 
-    -- Fonts
-    font = nil,
-    fontSmall = nil,
-    fontMono = nil,
-    fontLarge = nil,
+--------------------------------------------------------------------------------
+-- Load CSP compatibility shim BEFORE ac-tracer modules
+--------------------------------------------------------------------------------
+
+-- Create global CSP-like APIs
+dofile(simDir .. "csp_shim.lua")
+
+--------------------------------------------------------------------------------
+-- Playback State
+--------------------------------------------------------------------------------
+
+local playback = {
+    lap = nil,              -- Loaded lap data
+    position = 0,           -- Current position (0-1)
+    playing = false,        -- Is playing
+    speed = 1.0,            -- Playback speed
+    time = 0,               -- Current time in seconds
+    lapTime = 0,            -- Total lap time in seconds
 }
+
+-- Export for csp_shim
+_G._playback = playback
+
+--------------------------------------------------------------------------------
+-- Load ac-tracer modules (after shim is set up)
+--------------------------------------------------------------------------------
+
+local state, lap, settings
+
+local function loadAcTracerModules()
+    local ok, err
+
+    ok, lap = pcall(require, 'lib.lap')
+    if not ok then
+        print("Warning: Could not load lap module: " .. tostring(lap))
+        lap = nil
+    end
+
+    ok, state = pcall(require, 'lib.state')
+    if not ok then
+        print("Warning: Could not load state module: " .. tostring(state))
+        state = nil
+    end
+
+    ok, settings = pcall(require, 'lib.settings')
+    if not ok then
+        print("Warning: Could not load settings module: " .. tostring(settings))
+        settings = nil
+    end
+end
 
 --------------------------------------------------------------------------------
 -- Playback Functions
 --------------------------------------------------------------------------------
 
 local function loadLap(filepath)
-    print("Loading lap: " .. filepath)
+    if not lap then return false end
 
     local loadedLap = lap.fromCSV(filepath)
     if loadedLap and loadedLap:length() > 10 then
-        sim.playback.lap = loadedLap
-        sim.playback.position = 0
-        sim.playback.time = 0
-        sim.playback.lapTime = loadedLap.time / 1000
-        sim.playback.playing = false
+        playback.lap = loadedLap
+        playback.position = 0
+        playback.time = 0
+        playback.lapTime = loadedLap.time / 1000  -- Convert ms to seconds
+        playback.playing = false
 
-        -- Update state
-        state.bestLap = loadedLap
-        state.currentLap = lap.new(loadedLap.track, loadedLap.car)
+        -- Update state if available
+        if state then
+            state.bestLap = loadedLap
+            state.currentLap = lap.new(loadedLap.track, loadedLap.car)
+        end
 
-        -- Export for csp_compat
+        -- Export for csp_shim
         _G._playbackLap = loadedLap
 
-        print(string.format("Loaded: %d samples, %.2f seconds", loadedLap:length(), sim.playback.lapTime))
+        print(string.format("Loaded lap: %s (%d samples, %.2fs)",
+            filepath, loadedLap:length(), playback.lapTime))
         return true
     end
 
-    print("Failed to load lap")
+    print("Failed to load lap: " .. filepath)
     return false
 end
 
 local function updatePlayback(dt)
-    if not sim.playback.lap or not sim.playback.playing then return end
+    if not playback.lap or not playback.playing then return end
 
-    sim.playback.time = sim.playback.time + (dt * sim.playback.speed)
+    -- Advance time
+    playback.time = playback.time + (dt * playback.speed)
 
-    if sim.playback.time >= sim.playback.lapTime then
-        sim.playback.time = 0  -- Loop
+    -- Clamp to lap duration
+    if playback.time >= playback.lapTime then
+        playback.time = 0  -- Loop
     end
 
-    -- Find position at time
-    local lapData = sim.playback.lap
+    -- Find position at current time
+    local lapData = playback.lap
     local times = lapData.times
     for i = 1, #times - 1 do
-        if times[i + 1] > sim.playback.time then
-            local frac = (sim.playback.time - times[i]) / (times[i + 1] - times[i])
-            sim.playback.position = lapData.pos[i] + (lapData.pos[i + 1] - lapData.pos[i]) * frac
+        if times[i + 1] > playback.time then
+            local frac = (playback.time - times[i]) / (times[i + 1] - times[i])
+            playback.position = lapData.pos[i] + (lapData.pos[i + 1] - lapData.pos[i]) * frac
             break
         end
     end
 
-    _G._mockCarPosition = sim.playback.position
+    -- Update global for csp_shim
+    _G._mockCarPosition = playback.position
 end
 
 local function seekToPosition(pos)
-    sim.playback.position = math.clamp(pos, 0, 1)
-    if sim.playback.lap then
-        sim.playback.time = sim.playback.lap:timeAt(sim.playback.position)
+    playback.position = math.max(0, math.min(1, pos))
+    if playback.lap then
+        playback.time = playback.lap:timeAt(playback.position)
     end
-    _G._mockCarPosition = sim.playback.position
+    _G._mockCarPosition = playback.position
 end
 
-local function seekByTime(delta)
-    sim.playback.time = math.max(0, sim.playback.time + delta)
-    if sim.playback.lapTime > 0 then
-        sim.playback.time = math.min(sim.playback.time, sim.playback.lapTime)
-        seekToPosition(sim.playback.time / sim.playback.lapTime)
+local function seekByTime(deltaSeconds)
+    playback.time = math.max(0, playback.time + deltaSeconds)
+    if playback.lapTime > 0 then
+        playback.time = math.min(playback.time, playback.lapTime)
+        seekToPosition(playback.time / playback.lapTime)
     end
 end
 
 --------------------------------------------------------------------------------
--- LÖVE Callbacks
+-- SDL + ImGui Setup
 --------------------------------------------------------------------------------
 
-function love.load()
-    -- Fonts
-    sim.font = love.graphics.newFont(14)
-    sim.fontSmall = love.graphics.newFont(11)
-    sim.fontMono = love.graphics.newFont(13)
-    sim.fontLarge = love.graphics.newFont(24)
+local WINDOW_WIDTH = 1280
+local WINDOW_HEIGHT = 800
+local WINDOW_TITLE = "AC Tracer Simulator"
 
-    love.graphics.setFont(sim.font)
+local window, glContext, impl
+local running = true
+local showHelp = false
 
-    -- Initialize state
-    state.init({ id = function() return "sim_car" end })
+local function initSDL()
+    -- Initialize SDL
+    if sdl.init(sdl.INIT_VIDEO + sdl.INIT_TIMER) ~= 0 then
+        error("Failed to initialize SDL: " .. ffi.string(sdl.getError()))
+    end
 
-    -- Try to load first CSV from tracks folder
-    local parentDir = love.filesystem.getSource() .. "/../"
-    local tracksDir = parentDir .. "tracks"
+    -- OpenGL attributes
+    sdl.gL_SetAttribute(sdl.GL_DOUBLEBUFFER, 1)
+    sdl.gL_SetAttribute(sdl.GL_DEPTH_SIZE, 24)
+    sdl.gL_SetAttribute(sdl.GL_STENCIL_SIZE, 8)
+    sdl.gL_SetAttribute(sdl.GL_CONTEXT_MAJOR_VERSION, 2)
+    sdl.gL_SetAttribute(sdl.GL_CONTEXT_MINOR_VERSION, 2)
 
-    -- Check if tracks directory exists and has files
-    local info = love.filesystem.getInfo("../tracks")
-    if info then
-        local files = love.filesystem.getDirectoryItems("../tracks")
-        for _, f in ipairs(files or {}) do
-            if f:match("%.csv$") then
-                loadLap(parentDir .. "tracks/" .. f)
-                break
+    -- Create window
+    window = sdl.createWindow(
+        WINDOW_TITLE,
+        sdl.WINDOWPOS_CENTERED,
+        sdl.WINDOWPOS_CENTERED,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+        sdl.WINDOW_OPENGL + sdl.WINDOW_RESIZABLE + sdl.WINDOW_ALLOW_HIGHDPI
+    )
+
+    if window == nil then
+        error("Failed to create window: " .. ffi.string(sdl.getError()))
+    end
+
+    -- Create OpenGL context
+    glContext = sdl.gL_CreateContext(window)
+    sdl.gL_MakeCurrent(window, glContext)
+    sdl.gL_SetSwapInterval(1)  -- VSync
+
+    -- Initialize ImGui
+    if imgui.Imgui_Impl_SDL_opengl2 then
+        impl = imgui.Imgui_Impl_SDL_opengl2()
+        impl:Init(window, glContext)
+    else
+        -- Alternative initialization for different ImGui bindings
+        imgui.CreateContext()
+        -- Impl-specific init would go here
+    end
+
+    -- Style
+    local style = imgui.GetStyle()
+    style.WindowRounding = 4
+    style.FrameRounding = 2
+
+    print("SDL + ImGui initialized successfully")
+end
+
+local function processEvents()
+    local event = ffi.new("SDL_Event")
+    while sdl.pollEvent(event) ~= 0 do
+        if impl then impl:ProcessEvent(event) end
+
+        if event.type == sdl.QUIT then
+            running = false
+        elseif event.type == sdl.KEYDOWN then
+            local key = event.key.keysym.sym
+
+            if key == sdl.K_SPACE then
+                playback.playing = not playback.playing
+            elseif key == sdl.K_h then
+                showHelp = not showHelp
+            elseif key == sdl.K_r then
+                playback.position = 0
+                playback.time = 0
+            elseif key == sdl.K_LEFT then
+                seekByTime(-1)
+            elseif key == sdl.K_RIGHT then
+                seekByTime(1)
+            elseif key == sdl.K_COMMA then
+                seekByTime(-1/60)
+            elseif key == sdl.K_PERIOD then
+                seekByTime(1/60)
+            elseif key == sdl.K_1 then
+                playback.speed = 0.25
+            elseif key == sdl.K_2 then
+                playback.speed = 0.5
+            elseif key == sdl.K_3 then
+                playback.speed = 1.0
+            elseif key == sdl.K_4 then
+                playback.speed = 2.0
+            end
+        elseif event.type == sdl.DROPFILE then
+            local filepath = ffi.string(event.drop.file)
+            if filepath:match("%.csv$") then
+                loadLap(filepath)
+            end
+            sdl.free(event.drop.file)
+        end
+    end
+end
+
+local function render()
+    local io = imgui.GetIO()
+
+    -- Clear
+    gl.glViewport(0, 0, io.DisplaySize.x, io.DisplaySize.y)
+    gl.glClearColor(0.1, 0.1, 0.1, 1.0)
+    gl.glClear(gl.GL_COLOR_BUFFER_BIT)
+
+    -- Start ImGui frame
+    if impl then impl:NewFrame() end
+    imgui.NewFrame()
+
+    -- Draw UI
+    drawMainUI()
+
+    -- Render ImGui
+    imgui.Render()
+    if impl then impl:RenderDrawData(imgui.GetDrawData()) end
+
+    -- Swap
+    sdl.gL_SwapWindow(window)
+end
+
+--------------------------------------------------------------------------------
+-- Main UI Drawing
+--------------------------------------------------------------------------------
+
+function drawMainUI()
+    local io = imgui.GetIO()
+    local displayW, displayH = io.DisplaySize.x, io.DisplaySize.y
+
+    -- Main menu bar
+    if imgui.BeginMainMenuBar() then
+        if imgui.BeginMenu("File") then
+            if imgui.MenuItem("Load Lap...", "L") then
+                -- File dialog would go here
+                print("Drop a CSV file onto the window to load it")
+            end
+            imgui.Separator()
+            if imgui.MenuItem("Quit", "Esc") then
+                running = false
+            end
+            imgui.EndMenu()
+        end
+        if imgui.BeginMenu("Playback") then
+            if imgui.MenuItem(playback.playing and "Pause" or "Play", "Space") then
+                playback.playing = not playback.playing
+            end
+            if imgui.MenuItem("Reset", "R") then
+                playback.position = 0
+                playback.time = 0
+            end
+            imgui.Separator()
+            if imgui.MenuItem("0.25x", "1", playback.speed == 0.25) then playback.speed = 0.25 end
+            if imgui.MenuItem("0.5x", "2", playback.speed == 0.5) then playback.speed = 0.5 end
+            if imgui.MenuItem("1x", "3", playback.speed == 1.0) then playback.speed = 1.0 end
+            if imgui.MenuItem("2x", "4", playback.speed == 2.0) then playback.speed = 2.0 end
+            imgui.EndMenu()
+        end
+        if imgui.BeginMenu("Help") then
+            if imgui.MenuItem("Show Help", "H") then
+                showHelp = true
+            end
+            imgui.EndMenu()
+        end
+        imgui.EndMainMenuBar()
+    end
+
+    -- Main trace window
+    imgui.SetNextWindowPos(imgui.ImVec2(10, 30), imgui.Cond_FirstUseEver)
+    imgui.SetNextWindowSize(imgui.ImVec2(600, 250), imgui.Cond_FirstUseEver)
+    if imgui.Begin("Main Traces") then
+        drawTraceWindow()
+    end
+    imgui.End()
+
+    -- Delta window
+    imgui.SetNextWindowPos(imgui.ImVec2(620, 30), imgui.Cond_FirstUseEver)
+    imgui.SetNextWindowSize(imgui.ImVec2(200, 100), imgui.Cond_FirstUseEver)
+    if imgui.Begin("Delta / Position") then
+        drawDeltaWindow()
+    end
+    imgui.End()
+
+    -- Timeline window (bottom)
+    imgui.SetNextWindowPos(imgui.ImVec2(10, displayH - 100), imgui.Cond_Always)
+    imgui.SetNextWindowSize(imgui.ImVec2(displayW - 20, 90), imgui.Cond_Always)
+    if imgui.Begin("Timeline", nil, imgui.WindowFlags_NoTitleBar + imgui.WindowFlags_NoResize) then
+        drawTimeline()
+    end
+    imgui.End()
+
+    -- Help window
+    if showHelp then
+        imgui.SetNextWindowPos(imgui.ImVec2(displayW/2 - 200, displayH/2 - 150), imgui.Cond_FirstUseEver)
+        imgui.SetNextWindowSize(imgui.ImVec2(400, 300), imgui.Cond_FirstUseEver)
+        if imgui.Begin("Help", showHelp_ptr) then
+            imgui.Text("AC Tracer Simulator")
+            imgui.Separator()
+            imgui.Text("Controls:")
+            imgui.BulletText("Space - Play/Pause")
+            imgui.BulletText("Left/Right - Seek +/- 1 second")
+            imgui.BulletText(",/. - Previous/Next frame")
+            imgui.BulletText("1/2/3/4 - Speed (0.25x/0.5x/1x/2x)")
+            imgui.BulletText("R - Reset to start")
+            imgui.BulletText("H - Toggle help")
+            imgui.Separator()
+            imgui.Text("Drop a CSV file onto the window to load it.")
+            imgui.Separator()
+            if imgui.Button("Close") then
+                showHelp = false
             end
         end
-    end
-
-    print("AC Tracer Simulator ready. Press H for help.")
-end
-
-function love.update(dt)
-    updatePlayback(dt)
-    state.update(dt, ac.getCar(0))
-end
-
-function love.draw()
-    local w, h = love.graphics.getDimensions()
-
-    -- Background
-    love.graphics.setBackgroundColor(0.08, 0.08, 0.08)
-    love.graphics.clear()
-
-    -- Main trace area
-    drawTraceWindow(10, 30, 600, 250)
-
-    -- Info panel
-    drawInfoPanel(620, 30, 250, 150)
-
-    -- Timeline at bottom
-    if sim.showTimeline then
-        drawTimeline(10, h - 90, w - 20, 80)
-    end
-
-    -- Status bar
-    love.graphics.setColor(0.5, 0.5, 0.5)
-    love.graphics.setFont(sim.fontSmall)
-    love.graphics.print("H - Help | Space - Play/Pause | Drop CSV to load", 10, 5)
-
-    -- Help overlay
-    if sim.showHelp then
-        drawHelp()
+        imgui.End()
     end
 end
 
-function love.keypressed(key)
-    if key == "space" then
-        sim.playback.playing = not sim.playback.playing
-    elseif key == "h" then
-        sim.showHelp = not sim.showHelp
-    elseif key == "r" then
-        sim.playback.position = 0
-        sim.playback.time = 0
-        _G._mockCarPosition = 0
-    elseif key == "left" then
-        seekByTime(-1)
-    elseif key == "right" then
-        seekByTime(1)
-    elseif key == "," then
-        seekByTime(-1/60)
-    elseif key == "." then
-        seekByTime(1/60)
-    elseif key == "1" then
-        sim.playback.speed = 0.25
-    elseif key == "2" then
-        sim.playback.speed = 0.5
-    elseif key == "3" then
-        sim.playback.speed = 1.0
-    elseif key == "4" then
-        sim.playback.speed = 2.0
-    elseif key == "t" then
-        sim.showTimeline = not sim.showTimeline
-    elseif key == "escape" then
-        if sim.showHelp then
-            sim.showHelp = false
-        else
-            love.event.quit()
-        end
-    end
-end
-
-function love.filedropped(file)
-    local path = file:getFilename()
-    if path:match("%.csv$") then
-        loadLap(path)
-    end
-end
-
-function love.mousepressed(x, y, button)
-    if button == 1 then
-        local w, h = love.graphics.getDimensions()
-        -- Check timeline click
-        if sim.showTimeline and y > h - 90 then
-            local timelineX, timelineW = 10, w - 20
-            local barY, barH = h - 50, 20
-            if y >= barY and y <= barY + barH then
-                local relX = (x - timelineX) / timelineW
-                seekToPosition(relX)
-            end
-        end
-    end
-end
-
-function love.mousemoved(x, y, dx, dy)
-    if love.mouse.isDown(1) then
-        local w, h = love.graphics.getDimensions()
-        if sim.showTimeline and y > h - 90 then
-            local timelineX, timelineW = 10, w - 20
-            local relX = (x - timelineX) / timelineW
-            seekToPosition(relX)
-        end
-    end
-end
-
---------------------------------------------------------------------------------
--- Drawing Functions
---------------------------------------------------------------------------------
-
-function drawTraceWindow(x, y, w, h)
-    -- Window background
-    love.graphics.setColor(0.12, 0.12, 0.12, 0.95)
-    love.graphics.rectangle("fill", x, y, w, h, 4)
-    love.graphics.setColor(0.3, 0.3, 0.3)
-    love.graphics.rectangle("line", x, y, w, h, 4)
-
-    -- Title
-    love.graphics.setColor(0.15, 0.15, 0.15)
-    love.graphics.rectangle("fill", x, y, w, 24, 4)
-    love.graphics.setColor(0.8, 0.8, 0.8)
-    love.graphics.setFont(sim.fontSmall)
-    love.graphics.print("Main Traces", x + 8, y + 5)
-
-    if not sim.playback.lap then
-        love.graphics.setColor(0.5, 0.5, 0.5)
-        love.graphics.setFont(sim.font)
-        love.graphics.printf("No lap loaded\n\nDrop a CSV file to load", x, y + h/2 - 30, w, "center")
+function drawTraceWindow()
+    if not playback.lap then
+        imgui.Text("No lap loaded")
+        imgui.Text("Drop a CSV file onto the window to load it")
         return
     end
 
-    local lapData = sim.playback.lap
-    local pos = sim.playback.position
+    local lapData = playback.lap
+    local pos = playback.position
+    local contentSize = imgui.GetContentRegionAvail()
+    local w, h = contentSize.x, contentSize.y
 
-    -- Content area
-    local cx, cy = x + 10, y + 30
-    local cw, ch = w - 20, h - 40
-
-    -- Graph area
-    local graphW = cw * 0.7
-    local graphH = ch - 30
-
-    -- Draw graph background
-    love.graphics.setColor(0.06, 0.06, 0.06)
-    love.graphics.rectangle("fill", cx, cy, graphW, graphH)
-
-    -- Draw traces around current position
-    local windowSize = 120  -- samples
-    local centerIdx = math.floor(pos * lapData:length())
-    local startIdx = math.max(1, centerIdx - windowSize/2)
-    local endIdx = math.min(lapData:length(), startIdx + windowSize)
-    local n = endIdx - startIdx
-
-    if n > 2 then
-        local maxSpeed = 300
-        for i = startIdx, endIdx do
-            if (lapData.speed[i] or 0) > maxSpeed * 0.9 then
-                maxSpeed = (lapData.speed[i] or 0) * 1.1
-            end
-        end
-
-        -- Draw each trace type
-        local function drawTrace(getData, color, maxVal)
-            love.graphics.setColor(unpack(color))
-            love.graphics.setLineWidth(1.5)
-            local points = {}
-            for i = startIdx, endIdx do
-                local px = cx + (i - startIdx) / n * graphW
-                local val = getData(i) or 0
-                local py = cy + graphH - (val / maxVal) * graphH
-                table.insert(points, px)
-                table.insert(points, py)
-            end
-            if #points >= 4 then
-                love.graphics.line(points)
-            end
-        end
-
-        -- Speed (blue, faded)
-        drawTrace(function(i) return lapData.speed[i] end, {0.3, 0.5, 0.8, 0.5}, maxSpeed)
-
-        -- Throttle (green)
-        drawTrace(function(i) return lapData.throttle[i] end, {0.2, 0.8, 0.2, 0.9}, 1)
-
-        -- Brake (red)
-        drawTrace(function(i) return (lapData.brake[i] or 0) / 100 end, {0.9, 0.2, 0.2, 0.9}, 1)
-
-        -- Steering (yellow)
-        drawTrace(function(i) return lapData.steering[i] end, {0.8, 0.8, 0.2, 0.7}, 1)
-    end
-
-    -- Center line (current position)
-    local centerX = cx + graphW / 2
-    love.graphics.setColor(1, 1, 1, 0.3)
-    love.graphics.setLineWidth(1)
-    love.graphics.line(centerX, cy, centerX, cy + graphH)
-
-    -- Throttle/Brake bars
-    local barW = 35
-    local barX = cx + graphW + 20
-
+    -- Get values at current position
     local throttle = lapData:throttleAt(pos)
-    local brake = lapData:brakeAt(pos) / 100
-
-    -- Throttle
-    love.graphics.setColor(0.1, 0.1, 0.1)
-    love.graphics.rectangle("fill", barX, cy, barW, graphH)
-    love.graphics.setColor(0.2, 0.8, 0.2)
-    love.graphics.rectangle("fill", barX, cy + graphH * (1 - throttle), barW, graphH * throttle)
-    love.graphics.setColor(0.4, 0.4, 0.4)
-    love.graphics.rectangle("line", barX, cy, barW, graphH)
-
-    -- Brake
-    barX = barX + barW + 10
-    love.graphics.setColor(0.1, 0.1, 0.1)
-    love.graphics.rectangle("fill", barX, cy, barW, graphH)
-    love.graphics.setColor(0.9, 0.2, 0.2)
-    love.graphics.rectangle("fill", barX, cy + graphH * (1 - brake), barW, graphH * brake)
-    love.graphics.setColor(0.4, 0.4, 0.4)
-    love.graphics.rectangle("line", barX, cy, barW, graphH)
-
-    -- Legend
-    local legendY = cy + graphH + 5
-    love.graphics.setFont(sim.fontSmall)
-    love.graphics.setColor(0.2, 0.8, 0.2)
-    love.graphics.print("Throttle", cx + 5, legendY)
-    love.graphics.setColor(0.9, 0.2, 0.2)
-    love.graphics.print("Brake", cx + 70, legendY)
-    love.graphics.setColor(0.8, 0.8, 0.2)
-    love.graphics.print("Steering", cx + 120, legendY)
-    love.graphics.setColor(0.3, 0.5, 0.8)
-    love.graphics.print("Speed", cx + 190, legendY)
-end
-
-function drawInfoPanel(x, y, w, h)
-    -- Background
-    love.graphics.setColor(0.12, 0.12, 0.12, 0.95)
-    love.graphics.rectangle("fill", x, y, w, h, 4)
-    love.graphics.setColor(0.3, 0.3, 0.3)
-    love.graphics.rectangle("line", x, y, w, h, 4)
-
-    -- Title
-    love.graphics.setColor(0.15, 0.15, 0.15)
-    love.graphics.rectangle("fill", x, y, w, 24, 4)
-    love.graphics.setColor(0.8, 0.8, 0.8)
-    love.graphics.setFont(sim.fontSmall)
-    love.graphics.print("Current Data", x + 8, y + 5)
-
-    if not sim.playback.lap then
-        love.graphics.setColor(0.5, 0.5, 0.5)
-        love.graphics.print("--", x + w/2 - 10, y + h/2)
-        return
-    end
-
-    local lapData = sim.playback.lap
-    local pos = sim.playback.position
-
+    local brake = lapData:brakeAt(pos) / 100  -- Normalize
     local speed = lapData:speedAt(pos)
     local gear = lapData:gearAt(pos)
-    local throttle = lapData:throttleAt(pos) * 100
-    local brake = lapData:brakeAt(pos)
+    local steering = lapData:steeringAt(pos)
 
-    love.graphics.setFont(sim.font)
-    love.graphics.setColor(1, 1, 1)
+    -- Draw using ImGui
+    local draw_list = imgui.GetWindowDrawList()
+    local winPos = imgui.GetWindowPos()
+    local cursorPos = imgui.GetCursorScreenPos()
 
-    local cy = y + 35
-    love.graphics.print(string.format("Speed: %d km/h", math.floor(speed)), x + 10, cy)
-    cy = cy + 22
-    love.graphics.print(string.format("Gear: %d", gear), x + 10, cy)
-    cy = cy + 22
-    love.graphics.print(string.format("Throttle: %.0f%%", throttle), x + 10, cy)
-    cy = cy + 22
-    love.graphics.print(string.format("Brake: %.0f bar", brake), x + 10, cy)
+    -- Graph area
+    local graphW = w * 0.7
+    local graphH = h - 40
+    local graphX = cursorPos.x
+    local graphY = cursorPos.y
+
+    -- Background
+    draw_list:AddRectFilled(
+        imgui.ImVec2(graphX, graphY),
+        imgui.ImVec2(graphX + graphW, graphY + graphH),
+        imgui.GetColorU32(0.05, 0.05, 0.05, 1)
+    )
+
+    -- Draw traces (simplified - just current values as bars for now)
+    local barW = 40
+    local barX = graphX + graphW + 20
+
+    -- Throttle bar
+    draw_list:AddRectFilled(
+        imgui.ImVec2(barX, graphY + graphH * (1 - throttle)),
+        imgui.ImVec2(barX + barW, graphY + graphH),
+        imgui.GetColorU32(0.2, 0.8, 0.2, 1)
+    )
+    draw_list:AddRect(
+        imgui.ImVec2(barX, graphY),
+        imgui.ImVec2(barX + barW, graphY + graphH),
+        imgui.GetColorU32(0.4, 0.4, 0.4, 1)
+    )
+
+    -- Brake bar
+    barX = barX + barW + 10
+    draw_list:AddRectFilled(
+        imgui.ImVec2(barX, graphY + graphH * (1 - brake)),
+        imgui.ImVec2(barX + barW, graphY + graphH),
+        imgui.GetColorU32(0.9, 0.2, 0.2, 1)
+    )
+    draw_list:AddRect(
+        imgui.ImVec2(barX, graphY),
+        imgui.ImVec2(barX + barW, graphY + graphH),
+        imgui.GetColorU32(0.4, 0.4, 0.4, 1)
+    )
+
+    -- Text info
+    imgui.SetCursorPosY(h - 30)
+    imgui.Text(string.format("Speed: %d km/h  |  Gear: %d  |  Throttle: %.0f%%  |  Brake: %.0f%%",
+        math.floor(speed), gear, throttle * 100, brake * 100))
 end
 
-function drawTimeline(x, y, w, h)
-    -- Background
-    love.graphics.setColor(0.15, 0.15, 0.15, 0.95)
-    love.graphics.rectangle("fill", x, y, w, h, 4)
-    love.graphics.setColor(0.3, 0.3, 0.3)
-    love.graphics.rectangle("line", x, y, w, h, 4)
+function drawDeltaWindow()
+    if not playback.lap then
+        imgui.Text("--")
+        return
+    end
 
-    -- Status text
-    love.graphics.setFont(sim.fontSmall)
-    local statusColor = sim.playback.playing and {0.2, 0.8, 0.2} or {0.8, 0.5, 0.2}
-    love.graphics.setColor(unpack(statusColor))
-    love.graphics.print(sim.playback.playing and "Playing" or "Paused", x + 10, y + 8)
+    imgui.Text(string.format("Position: %.1f%%", playback.position * 100))
+    imgui.Text(string.format("Time: %.2fs / %.2fs", playback.time, playback.lapTime))
+    imgui.Text(string.format("Speed: %.1fx", playback.speed))
+    imgui.Text(playback.playing and "Playing" or "Paused")
+end
 
-    love.graphics.setColor(0.7, 0.7, 0.7)
-    love.graphics.print(string.format("%.2fx", sim.playback.speed), x + 80, y + 8)
+function drawTimeline()
+    local contentSize = imgui.GetContentRegionAvail()
+    local w, h = contentSize.x, contentSize.y
 
-    if not sim.playback.lap then
-        love.graphics.setColor(0.5, 0.5, 0.5)
-        love.graphics.print("No lap loaded - drop a CSV file", x + 150, y + 8)
+    -- Playback status
+    local statusText = playback.playing and "Playing" or "Paused"
+    local speedText = string.format("%.2fx", playback.speed)
+    imgui.Text(statusText .. "  |  " .. speedText)
+
+    if not playback.lap then
+        imgui.Text("No lap loaded - drop a CSV file to load")
         return
     end
 
     -- Time display
-    love.graphics.setColor(0.8, 0.8, 0.8)
-    local timeStr = string.format("%.2f / %.2f", sim.playback.time, sim.playback.lapTime)
-    love.graphics.print(timeStr, x + w - 100, y + 8)
+    local timeText = string.format("%.2f / %.2f", playback.time, playback.lapTime)
+    imgui.SameLine(w - 100)
+    imgui.Text(timeText)
 
-    -- Progress bar
-    local barY = y + 30
-    local barH = 20
-
-    love.graphics.setColor(0.1, 0.1, 0.1)
-    love.graphics.rectangle("fill", x + 10, barY, w - 20, barH, 3)
-
-    love.graphics.setColor(0.3, 0.5, 0.8)
-    love.graphics.rectangle("fill", x + 10, barY, (w - 20) * sim.playback.position, barH, 3)
-
-    -- Playhead
-    local playheadX = x + 10 + (w - 20) * sim.playback.position
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.rectangle("fill", playheadX - 2, barY - 3, 4, barH + 6, 2)
-
-    -- Buttons
-    local btnY = y + 55
-    local btnW, btnH = 60, 22
-
-    -- Play/Pause
-    love.graphics.setColor(0.25, 0.25, 0.25)
-    love.graphics.rectangle("fill", x + 10, btnY, btnW, btnH, 3)
-    love.graphics.setColor(0.8, 0.8, 0.8)
-    love.graphics.print(sim.playback.playing and "Pause" or "Play", x + 20, btnY + 4)
-
-    -- Speed buttons
-    local speeds = {0.25, 0.5, 1.0, 2.0}
-    local labels = {"0.25x", "0.5x", "1x", "2x"}
-    for i, spd in ipairs(speeds) do
-        local bx = x + 80 + (i-1) * 50
-        love.graphics.setColor(sim.playback.speed == spd and {0.3, 0.5, 0.8} or {0.25, 0.25, 0.25})
-        love.graphics.rectangle("fill", bx, btnY, 45, btnH, 3)
-        love.graphics.setColor(0.8, 0.8, 0.8)
-        love.graphics.print(labels[i], bx + 8, btnY + 4)
+    -- Progress slider
+    imgui.PushItemWidth(w)
+    local pos_arr = ffi.new("float[1]", playback.position)
+    if imgui.SliderFloat("##timeline", pos_arr, 0, 1, "%.3f") then
+        seekToPosition(pos_arr[0])
     end
+    imgui.PopItemWidth()
+
+    -- Play/Pause button
+    if imgui.Button(playback.playing and "Pause" or "Play", imgui.ImVec2(60, 0)) then
+        playback.playing = not playback.playing
+    end
+    imgui.SameLine()
+    if imgui.Button("Reset", imgui.ImVec2(60, 0)) then
+        playback.position = 0
+        playback.time = 0
+    end
+    imgui.SameLine()
+    imgui.Text("|")
+    imgui.SameLine()
+    if imgui.Button("0.25x", imgui.ImVec2(50, 0)) then playback.speed = 0.25 end
+    imgui.SameLine()
+    if imgui.Button("0.5x", imgui.ImVec2(50, 0)) then playback.speed = 0.5 end
+    imgui.SameLine()
+    if imgui.Button("1x", imgui.ImVec2(40, 0)) then playback.speed = 1.0 end
+    imgui.SameLine()
+    if imgui.Button("2x", imgui.ImVec2(40, 0)) then playback.speed = 2.0 end
 end
 
-function drawHelp()
-    local w, h = love.graphics.getDimensions()
+--------------------------------------------------------------------------------
+-- Cleanup
+--------------------------------------------------------------------------------
 
-    -- Overlay
-    love.graphics.setColor(0, 0, 0, 0.7)
-    love.graphics.rectangle("fill", 0, 0, w, h)
+local function cleanup()
+    if impl then impl:Destroy() end
+    if glContext then sdl.gL_DeleteContext(glContext) end
+    if window then sdl.destroyWindow(window) end
+    sdl.quit()
+end
 
-    -- Help box
-    local boxW, boxH = 420, 360
-    local boxX, boxY = (w - boxW) / 2, (h - boxH) / 2
+--------------------------------------------------------------------------------
+-- Main Loop
+--------------------------------------------------------------------------------
 
-    love.graphics.setColor(0.15, 0.15, 0.15)
-    love.graphics.rectangle("fill", boxX, boxY, boxW, boxH, 8)
-    love.graphics.setColor(0.4, 0.6, 1.0)
-    love.graphics.rectangle("line", boxX, boxY, boxW, boxH, 8)
+local function main()
+    print("AC Tracer Simulator starting...")
 
-    -- Title
-    love.graphics.setFont(sim.fontLarge)
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.printf("AC Tracer Simulator", boxX, boxY + 15, boxW, "center")
+    -- Initialize
+    initSDL()
+    loadAcTracerModules()
 
-    -- Controls
-    love.graphics.setFont(sim.font)
-    love.graphics.setColor(0.9, 0.9, 0.9)
-    local controls = {
-        "Space       Play/Pause",
-        "Left/Right  Seek +/- 1 second",
-        ",/.         Previous/Next frame",
-        "1/2/3/4     Speed (0.25x/0.5x/1x/2x)",
-        "R           Reset to start",
-        "T           Toggle timeline",
-        "H           Toggle this help",
-        "Escape      Close help / Quit",
-        "",
-        "Drop a CSV file onto the window to load.",
-        "",
-        "CSV files should be in MoTeC format or",
-        "AC Tracer's native export format.",
-    }
+    -- Try to load a lap from tracks folder
+    local tracksDir = parentDir .. "tracks/"
+    -- This would need directory scanning, which varies by binding
 
-    local lineY = boxY + 60
-    for _, line in ipairs(controls) do
-        love.graphics.print(line, boxX + 25, lineY)
-        lineY = lineY + 22
+    print("Ready. Press H for help, drop CSV to load.")
+
+    -- Main loop
+    local lastTime = sdl.getTicks() / 1000.0
+    while running do
+        local currentTime = sdl.getTicks() / 1000.0
+        local dt = currentTime - lastTime
+        lastTime = currentTime
+
+        processEvents()
+        updatePlayback(dt)
+        render()
     end
 
-    -- Close hint
-    love.graphics.setColor(0.5, 0.5, 0.5)
-    love.graphics.printf("Press H or Escape to close", boxX, boxY + boxH - 35, boxW, "center")
+    cleanup()
+    print("Goodbye!")
+end
+
+-- Run with error handling
+local ok, err = xpcall(main, debug.traceback)
+if not ok then
+    print("Error: " .. err)
+    cleanup()
+    os.exit(1)
 end

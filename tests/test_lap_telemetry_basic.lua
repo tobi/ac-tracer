@@ -1,24 +1,24 @@
 -- test_lap_telemetry_basic.lua - Basic integration test for lap_telemetry
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 suite("lap_telemetry")
 
 test("draw runs without UI interaction", function()
-    local originalCorner = package.loaded['corner_analysis']
-    local originalCsvExport = package.loaded['csv_export']
-    local originalLapPicker = package.loaded['lap_picker']
-    local originalMarkdown = package.loaded['markdown']
-    local originalLapTelemetry = package.loaded['lap_telemetry']
+    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalCsvExport = package.loaded['lib.lap.csv_export']
+    local originalLapPicker = package.loaded['lib.controls.lap_picker']
+    local originalMarkdown = package.loaded['lib.ui.markdown']
+    local originalLapTelemetry = package.loaded['lib.controls.lap_telemetry']
 
-    package.loaded['corner_analysis'] = {
+    package.loaded['lib.controls.corner_analysis'] = {
         getFrozenCornerNum = function() return 0 end,
         setViewedCorner = function() end,
     }
-    package.loaded['csv_export'] = { saveLap = function() return "path" end }
-    package.loaded['lap_picker'] = { drawPopover = function() end }
-    package.loaded['markdown'] = { copyToClipboard = function() return true, "ok" end }
-    package.loaded['lap_telemetry'] = nil
+    package.loaded['lib.lap.csv_export'] = { saveLap = function() return "path" end }
+    package.loaded['lib.controls.lap_picker'] = { drawPopover = function() end }
+    package.loaded['lib.ui.markdown'] = { copyToClipboard = function() return true, "ok" end }
+    package.loaded['lib.controls.lap_telemetry'] = nil
 
     ui.availableSpace = function() return vec2(800, 600) end
     ui.drawRectFilled = function() end
@@ -62,7 +62,7 @@ test("draw runs without UI interaction", function()
     ui.StyleColor = ui.StyleColor or { Text = 1 }
     ui.MouseButton = ui.MouseButton or { Left = 0, Right = 1 }
 
-    local lap_telemetry = require('lap_telemetry')
+    local lap_telemetry = require('lib.controls.lap_telemetry')
 
     local function buildLap(sessionId, baseSpeed)
         local l = lap.new("test_track", "test_car", sessionId)
@@ -98,9 +98,9 @@ test("draw runs without UI interaction", function()
 
     lap_telemetry.draw(0.016, context)
 
-    package.loaded['corner_analysis'] = originalCorner
-    package.loaded['csv_export'] = originalCsvExport
-    package.loaded['lap_picker'] = originalLapPicker
-    package.loaded['markdown'] = originalMarkdown
-    package.loaded['lap_telemetry'] = originalLapTelemetry
+    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.lap.csv_export'] = originalCsvExport
+    package.loaded['lib.controls.lap_picker'] = originalLapPicker
+    package.loaded['lib.ui.markdown'] = originalMarkdown
+    package.loaded['lib.controls.lap_telemetry'] = originalLapTelemetry
 end)

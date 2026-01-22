@@ -5,11 +5,11 @@ local mock = require('tests.mock_ac')
 suite("delta_bar")
 
 test("draw and reset run without errors", function()
-    local originalCorner = package.loaded['corner_analysis']
-    local originalState = package.loaded['state']
-    package.loaded['corner_analysis'] = { getRecentCornerScores = function() return {} end }
-    package.loaded['state'] = { getLapTimeOffset = function() return 0 end }
-    package.loaded['delta_bar'] = nil
+    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalState = package.loaded['lib.state']
+    package.loaded['lib.controls.corner_analysis'] = { getRecentCornerScores = function() return {} end }
+    package.loaded['lib.state'] = { getLapTimeOffset = function() return 0 end }
+    package.loaded['lib.controls.delta_bar'] = nil
 
     ui.availableSpace = ui.availableSpace or function() return vec2(200, 80) end
     ui.drawRectFilled = ui.drawRectFilled or function() end
@@ -26,7 +26,7 @@ test("draw and reset run without errors", function()
     ui.Font = ui.Font or { Title = 1, Monospace = 2, Small = 3 }
     ui.StyleColor = ui.StyleColor or { Text = 1 }
 
-    local delta_bar = require('delta_bar')
+    local delta_bar = require('lib.controls.delta_bar')
 
     local refLap = {
         length = function() return 20 end,
@@ -37,6 +37,6 @@ test("draw and reset run without errors", function()
     delta_bar.draw(0.5, {}, refLap, 0.3, { { number = 1 } })
     delta_bar.reset()
 
-    package.loaded['corner_analysis'] = originalCorner
-    package.loaded['state'] = originalState
+    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.state'] = originalState
 end)

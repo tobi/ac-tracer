@@ -1,7 +1,7 @@
 -- test_corner_notes.lua - Tests for corner analysis note generation
 -- Tests the analysis functions that generate notes for corner review
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 -- We need to test the note analysis functions from corner_analysis
 -- But they're local, so we'll test through the public API and lap flag methods

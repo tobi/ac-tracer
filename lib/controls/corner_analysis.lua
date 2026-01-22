@@ -1,14 +1,14 @@
 -- Corner Analysis - All corner-specific logic
 -- Analyzes corners in laps, tracks live corner data, compares to reference
 
-local lap = require('lap')
-local scoring = require('scoring')
-local settings = require('app_settings')
-local extended_brake = require('extended-brake')
-local theme = require('theme')
-local ui_utils = require('ui_utils')
-local wedge = require('wedge')
-local state = require('state')
+local lap = require('lib.lap')
+local scoring = require('lib.core.scoring')
+local settings = require('lib.settings')
+local extended_brake = require('lib.core.brake')
+local theme = require('lib.ui.theme')
+local ui_utils = require('lib.ui.utils')
+local wedge = require('lib.ui.wedge')
+local state = require('lib.state')
 
 local corner_analysis = {}
 

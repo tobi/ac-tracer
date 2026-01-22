@@ -1,7 +1,7 @@
 -- Tests for automatic corner detection from lap telemetry
 -- Compares detected corners against known track corner maps
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 --------------------------------------------------------------------------------
 -- Corner Detection Logic (copied from state.lua for testability)

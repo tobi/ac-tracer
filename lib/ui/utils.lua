@@ -1,8 +1,8 @@
 -- ui_utils.lua - Shared UI drawing utilities
 -- Common drawing helpers used across multiple windows
 
-local theme = require('theme')
-local settings = require('app_settings')
+local theme = require('lib.ui.theme')
+local settings = require('lib.settings')
 
 local ui_utils = {}
 

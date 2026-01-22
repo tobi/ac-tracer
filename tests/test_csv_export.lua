@@ -1,8 +1,8 @@
 -- test_csv_export.lua - Validate CSV export round-trip
 
-local lap = require('lap')
-local csv_export = require('csv_export')
-local file_utils = require('file_utils')
+local lap = require('lib.lap')
+local csv_export = require('lib.lap.csv_export')
+local file_utils = require('lib.core.files')
 
 suite("CSV Export - Round Trip")
 

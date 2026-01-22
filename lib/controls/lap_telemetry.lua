@@ -1,15 +1,15 @@
 -- Lap Telemetry - MoTeC-style professional telemetry analysis
 -- Uses centralized state for all lap data
 
-local lap = require('lap')
-local settings = require('app_settings')
-local corner_analysis = require('corner_analysis')
-local theme = require('theme')
-local file_utils = require('file_utils')
-local csv_export = require('csv_export')
-local lap_picker = require('lap_picker')
-local ui_utils = require('ui_utils')
-local markdown = require('markdown')
+local lap = require('lib.lap')
+local settings = require('lib.settings')
+local corner_analysis = require('lib.controls.corner_analysis')
+local theme = require('lib.ui.theme')
+local file_utils = require('lib.core.files')
+local csv_export = require('lib.lap.csv_export')
+local lap_picker = require('lib.controls.lap_picker')
+local ui_utils = require('lib.ui.utils')
+local markdown = require('lib.ui.markdown')
 
 local lap_telemetry = {}
 

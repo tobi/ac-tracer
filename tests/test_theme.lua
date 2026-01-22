@@ -3,9 +3,9 @@
 suite("theme")
 
 test("theme exposes expected sections and helpers", function()
-    local originalTheme = package.loaded['theme']
-    package.loaded['theme'] = nil
-    local theme = require('theme')
+    local originalTheme = package.loaded['lib.ui.theme']
+    package.loaded['lib.ui.theme'] = nil
+    local theme = require('lib.ui.theme')
 
     assert_not_nil(theme.bg)
     assert_not_nil(theme.text)
@@ -21,5 +21,5 @@ test("theme exposes expected sections and helpers", function()
     assert_equal(withAlpha.b, 0)
     assert_equal(withAlpha.mult, 0.5)
 
-    package.loaded['theme'] = originalTheme
+    package.loaded['lib.ui.theme'] = originalTheme
 end)

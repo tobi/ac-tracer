@@ -1,12 +1,12 @@
 -- state.lua - Centralized game state
 -- All state and persistence lives here. Other modules read from state.
 
-local lap = require('lap')
-local settings = require('app_settings')
-local history_storage = require('history_storage')
-local notification = require('sounds/notification')
-local csv_export = require('csv_export')
-local file_utils = require('file_utils')
+local lap = require('lib.lap')
+local settings = require('lib.settings')
+local history_storage = require('lib.core.history')
+local notification = require('sounds.notification')
+local csv_export = require('lib.lap.csv_export')
+local file_utils = require('lib.core.files')
 
 local state = {}
 

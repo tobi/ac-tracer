@@ -5,8 +5,8 @@ local lap = {}
 lap.__index = lap
 
 -- Extended brake module for better brake pressure data
-local extended_brake = require('extended-brake')
-local csv_parser = require('csv_parser')
+local extended_brake = require('lib.core.brake')
+local csv_parser = require('lib.lap.csv_parser')
 
 -- Constants
 lap.SAMPLE_RATE = 30  -- Hz (exported for other modules)

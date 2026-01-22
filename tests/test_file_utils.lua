@@ -3,8 +3,8 @@
 suite("file_utils")
 
 test("format helpers return expected strings", function()
-    package.loaded['file_utils'] = nil
-    local file_utils = require('file_utils')
+    package.loaded['lib.core.files'] = nil
+    local file_utils = require('lib.core.files')
 
     assert_equal(file_utils.formatFileSize(1024), "1KB")
     assert_equal(file_utils.formatFileSize(1024 * 1024), "1.0MB")
@@ -13,8 +13,8 @@ test("format helpers return expected strings", function()
 end)
 
 test("CSV escaping and parsing handle quotes", function()
-    package.loaded['file_utils'] = nil
-    local file_utils = require('file_utils')
+    package.loaded['lib.core.files'] = nil
+    local file_utils = require('lib.core.files')
 
     local escaped = file_utils.escapeCSV('hello, "world"')
     assert_equal(escaped, '"hello, ""world"""')
@@ -29,8 +29,8 @@ end)
 test("scanCSVFiles honors track filter", function()
     local originalDir = __dirname
     __dirname = "tests/tmp_scan"
-    package.loaded['file_utils'] = nil
-    local file_utils = require('file_utils')
+    package.loaded['lib.core.files'] = nil
+    local file_utils = require('lib.core.files')
 
     io.createDir("tests/tmp_scan")
     io.createDir("tests/tmp_scan/tracks")

@@ -1,6 +1,6 @@
 -- test_scoring.lua - Tests for scoring.lua module
 
-local scoring = require('scoring')
+local scoring = require('lib.core.scoring')
 
 --------------------------------------------------------------------------------
 -- positionDeltaToMeters tests

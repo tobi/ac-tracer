@@ -1,10 +1,10 @@
 -- delta_bar.lua - iRacing-style delta bar window
 -- Shows lap time, delta vs reference lap with color-coded bar
 
-local theme = require('theme')
-local corner_analysis = require('corner_analysis')
-local wedge = require('wedge')
-local state = require('state')
+local theme = require('lib.ui.theme')
+local corner_analysis = require('lib.controls.corner_analysis')
+local wedge = require('lib.ui.wedge')
+local state = require('lib.state')
 
 local delta_bar = {}
 

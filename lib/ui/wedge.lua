@@ -1,7 +1,7 @@
 -- wedge.lua - Score wedge rendering
 -- Provides both full-size gauge and compact wedge rendering
 
-local theme = require('theme')
+local theme = require('lib.ui.theme')
 
 local wedge = {}
 

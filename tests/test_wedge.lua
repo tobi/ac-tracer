@@ -23,7 +23,7 @@ test("draw functions execute without errors", function()
     ui.Font = ui.Font or { Title = 1, Small = 2 }
     ui.StyleColor = ui.StyleColor or { Text = 1 }
 
-    local wedge = require('wedge')
+    local wedge = require('lib.ui.wedge')
 
     wedge.drawGauge(50, 30, 12, 85)
     wedge.drawCompact(10, 10, 30, 16, 60)

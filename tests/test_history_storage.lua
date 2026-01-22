@@ -1,7 +1,7 @@
 -- test_history_storage.lua - Tests for history_storage.lua module
 
-local lap = require('lap')
-local history = require('history_storage')
+local lap = require('lib.lap')
+local history = require('lib.core.history')
 local mock = require('tests.mock_ac')
 
 local function makeLap(sessionId, timeMs)

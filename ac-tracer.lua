@@ -1,16 +1,16 @@
 -- AC Tracer - CSP high-performance telemetry app
 -- Main script using centralized state architecture
 
-local state = require('state')
-local lap = require('lap')
-local settings = require('app_settings')
-local corner_analysis = require('corner_analysis')
-local lap_telemetry = require('lap_telemetry')
-local extended_brake = require('extended-brake')
-local lap_picker = require('lap_picker')
-local delta_bar = require('delta_bar')
-local theme = require('theme')
-local ui_utils = require('ui_utils')
+local state = require('lib.state')
+local lap = require('lib.lap')
+local settings = require('lib.settings')
+local corner_analysis = require('lib.controls.corner_analysis')
+local lap_telemetry = require('lib.controls.lap_telemetry')
+local extended_brake = require('lib.core.brake')
+local lap_picker = require('lib.controls.lap_picker')
+local delta_bar = require('lib.controls.delta_bar')
+local theme = require('lib.ui.theme')
+local ui_utils = require('lib.ui.utils')
 
 -- History for trace display (rolling window)
 -- Note: maxPoints is recalculated each frame to support live settings changes

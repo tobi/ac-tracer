@@ -1,6 +1,6 @@
 -- test_corner_analysis_basic.lua - Basic tests for corner_analysis.lua
 
-local lap = require('lap')
+local lap = require('lib.lap')
 
 local function makeLap(sessionId, baseSpeed)
     local l = lap.new("test_track", "test_car", sessionId)
@@ -26,13 +26,13 @@ end
 suite("corner_analysis")
 
 test("analyzeCorner and compareCorners return data", function()
-    local originalState = package.loaded['state']
-    package.loaded['state'] = {
+    local originalState = package.loaded['lib.state']
+    package.loaded['lib.state'] = {
         onCheckpointLoad = function() end,
         getLapTimeOffset = function() return 0 end,
     }
-    package.loaded['corner_analysis'] = nil
-    local corner_analysis = require('corner_analysis')
+    package.loaded['lib.controls.corner_analysis'] = nil
+    local corner_analysis = require('lib.controls.corner_analysis')
 
     local currentLap = makeLap("session_a", 120)
     local refLap = makeLap("session_b", 125)
@@ -49,5 +49,5 @@ test("analyzeCorner and compareCorners return data", function()
     assert_not_nil(comparison)
     assert_equal(comparison.number, 1)
 
-    package.loaded['state'] = originalState
+    package.loaded['lib.state'] = originalState
 end)

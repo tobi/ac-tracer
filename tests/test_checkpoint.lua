@@ -1,11 +1,11 @@
 -- test_checkpoint.lua - Tests for checkpoint and delta outlap behavior
 
 local function loadStateFresh()
-    package.loaded['state'] = nil
-    package.loaded['history_storage'] = nil
-    package.loaded['corner_analysis'] = nil
-    package.loaded['lap'] = nil
-    return require('state')
+    package.loaded['lib.state'] = nil
+    package.loaded['lib.core.history'] = nil
+    package.loaded['lib.controls.corner_analysis'] = nil
+    package.loaded['lib.lap'] = nil
+    return require('lib.state')
 end
 
 local function resetUiLog()
@@ -89,7 +89,7 @@ test("keeps current car lap count on load", function()
     mock.clearStorage()
 
     local state = loadStateFresh()
-    local lap = require('lap')
+    local lap = require('lib.lap')
 
     state.currentLap = lap.new("test_track", "test_car", "session")
 
@@ -118,14 +118,14 @@ test("shows OUTLAP when lap count is zero", function()
     resetUiLog()
 
     -- Stub corner_analysis to avoid unrelated UI work
-    package.loaded['corner_analysis'] = {
+    package.loaded['lib.controls.corner_analysis'] = {
         getRecentCornerScores = function() return {} end
     }
-    package.loaded['delta_bar'] = nil
-    package.loaded['lap'] = nil
+    package.loaded['lib.controls.delta_bar'] = nil
+    package.loaded['lib.lap'] = nil
 
-    local lap = require('lap')
-    local delta_bar = require('delta_bar')
+    local lap = require('lib.lap')
+    local delta_bar = require('lib.controls.delta_bar')
 
     local reference = lap.new("test_track", "test_car", "session")
     reference.pos = { 0.0, 0.5, 1.0 }

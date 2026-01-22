@@ -1,9 +1,9 @@
 -- corner.lua - Corner detection module
 -- Uses state.lua for all storage and persistence
 
-local state = require('state')
-local theme = require('theme')
-local ui_utils = require('ui_utils')
+local state = require('lib.state')
+local theme = require('lib.ui.theme')
+local ui_utils = require('lib.ui.utils')
 
 local corner = {}
 
@@ -47,7 +47,7 @@ end
 -- Settings UI
 --------------------------------------------------------------------------------
 
-local settings = require('app_settings')
+local settings = require('lib.settings')
 
 local LINE_HEIGHT = 18
 

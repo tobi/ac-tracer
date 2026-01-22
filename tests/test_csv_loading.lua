@@ -2,7 +2,7 @@
 -- Tests that CSV files in ./tracks/ parse correctly and produce valid lap data
 
 -- The test runner loads mock_ac.lua which sets up the environment
-local lap = require('lap')
+local lap = require('lib.lap')
 
 --------------------------------------------------------------------------------
 -- Barcelona CSV Tests (Real car MoTeC export with Distance-based positioning)
@@ -450,7 +450,7 @@ suite("CSV Parser Unit Conversions")
 
 test("m/s² to G conversion factor is correct", function()
     -- 1G = 9.81 m/s², so 1 m/s² = 1/9.81 G ≈ 0.102 G
-    local csv_parser = require('csv_parser')
+    local csv_parser = require('lib.lap.csv_parser')
 
     -- Test the conversion factor if accessible
     -- 9.81 m/s² should equal 1.0 G
@@ -630,8 +630,8 @@ test("file_utils.scanCSVFiles finds MoTeC files", function()
         return  -- Skip if no directory functions
     end
     seedMotec()
-    
-    local file_utils = require('file_utils')
+
+    local file_utils = require('lib.core.files')
     
     -- Invalidate cache to force fresh scan
     file_utils.invalidateCache()

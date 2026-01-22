@@ -1,7 +1,7 @@
 -- csv_export.lua - Export lap data to MoTeC-style CSV for reference loading
 
-local lap = require('lap')
-local file_utils = require('file_utils')
+local lap = require('lib.lap')
+local file_utils = require('lib.core.files')
 
 local csv_export = {}
 
