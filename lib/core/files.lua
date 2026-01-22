@@ -192,7 +192,8 @@ function file_utils.scanCSVFiles(trackId)
             if files then
                 for _, filename in ipairs(files) do
                     local lowerName = filename:lower()
-                    if not seenFiles[lowerName] then
+                    -- Skip corners.csv files (not reference laps)
+                    if not seenFiles[lowerName] and lowerName ~= "corners.csv" then
                         seenFiles[lowerName] = true
                         local fullPath = dir.path .. filename
                         local includeFile = true

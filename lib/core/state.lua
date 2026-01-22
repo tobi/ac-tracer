@@ -218,7 +218,6 @@ local function getStorageKey(suffix)
 end
 
 local TRACKS_DIR = __dirname .. "/tracks"
-local LEGACY_CORNERS_DIR = __dirname .. "/corners"
 
 --- Get track folder path for current track
 ---@return string|nil Track folder path
@@ -232,12 +231,6 @@ local function getCornersPath()
     local trackFolder = getTrackFolder()
     if not trackFolder then return nil end
     return trackFolder .. "/corners.csv"
-end
-
---- Get legacy corner CSV path for migration (corners/<track>.csv)
-local function getLegacyCornersPath()
-    if not state.track then return nil end
-    return LEGACY_CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
 end
 
 --------------------------------------------------------------------------------
@@ -638,26 +631,10 @@ local function loadCornersFromPath(path)
 end
 
 --- Load corners from per-track CSV file (tracks/<track>/corners.csv)
---- Falls back to legacy location (corners/<track>.csv) for migration
 local function loadCornersFromFile()
     local path = getCornersPath()
     if not path then return false end
-
-    -- Try new location first: tracks/<track>/corners.csv
-    if loadCornersFromPath(path) then
-        return true
-    end
-
-    -- Fall back to legacy location: corners/<track>.csv
-    local legacyPath = getLegacyCornersPath()
-    if legacyPath and loadCornersFromPath(legacyPath) then
-        ac.log("AC Tracer: Loaded corners from legacy location, will save to new location")
-        -- Save to new location for migration
-        saveCornersToFile()
-        return true
-    end
-
-    return false
+    return loadCornersFromPath(path)
 end
 
 --------------------------------------------------------------------------------

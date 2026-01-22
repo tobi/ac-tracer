@@ -558,8 +558,6 @@ Bus Stop,0.567890,0.612345
 
 Example file: `tracks/ier_daytona/corners.csv` for the IER Daytona track.
 
-Legacy corner files (`corners/<track_id>.csv`) are automatically migrated to the new location on first load.
-
 ---
 
 ## Notes
