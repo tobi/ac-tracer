@@ -128,7 +128,7 @@ test("showTCMarkers defaults to false", function()
 end)
 
 test("telemetryShowLateralG defaults to false", function()
-    -- Lateral G was hidden by default in recent changes
+    -- Lateral G is hidden by default
     local value = settings.telemetryShowLateralG()
     assert_equal(value, false, "telemetryShowLateralG should default to false")
 end)

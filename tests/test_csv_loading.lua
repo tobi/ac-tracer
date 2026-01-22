@@ -288,7 +288,7 @@ test("barcelona is normalized to target sample rate", function()
     assert_not_nil(barcelonaLap, "Lap should be loaded")
     -- Original CSV is 10 Hz, should be resampled to lap.SAMPLE_RATE
     -- ~93s at 30 Hz = ~2790 samples
-    local sampleRate = require('lap').SAMPLE_RATE
+    local sampleRate = lap.SAMPLE_RATE
     local expectedMin = math.floor(90 * sampleRate * 0.9)
     local expectedMax = math.ceil(100 * sampleRate * 1.1)
     assert_true(barcelonaLap:length() >= expectedMin and barcelonaLap:length() <= expectedMax,
@@ -300,7 +300,7 @@ test("daytona is normalized to target sample rate", function()
     assert_not_nil(daytonaLap, "Lap should be loaded")
     -- Original CSV is 10 Hz, should be resampled to lap.SAMPLE_RATE
     -- ~100s at 30 Hz = ~3000 samples
-    local sampleRate = require('lap').SAMPLE_RATE
+    local sampleRate = lap.SAMPLE_RATE
     local expectedMin = math.floor(95 * sampleRate * 0.9)
     local expectedMax = math.ceil(110 * sampleRate * 1.1)
     assert_true(daytonaLap:length() >= expectedMin and daytonaLap:length() <= expectedMax,

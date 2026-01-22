@@ -69,7 +69,7 @@ local config = ac.storage({
     -- Telemetry window
     telemetryAutoHide = true,
     telemetryAutoHideSpeed = 20,
-    telemetryShowLateralG = true,  -- Show lateral G trace in telemetry
+    telemetryShowLateralG = false,  -- Show lateral G trace in telemetry
 
     -- Flag markers (shown in trace window and telemetry)
     showTCMarkers = false,
