@@ -217,12 +217,27 @@ local function getStorageKey(suffix)
     return 'ac_tracer_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
 end
 
-local CORNERS_DIR = __dirname .. "/corners"
+local TRACKS_DIR = __dirname .. "/tracks"
+local LEGACY_CORNERS_DIR = __dirname .. "/corners"
 
---- Get corner CSV path for current track
-local function getCornersPath()
+--- Get track folder path for current track
+---@return string|nil Track folder path
+local function getTrackFolder()
     if not state.track then return nil end
-    return CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
+    return TRACKS_DIR .. "/" .. state.track:gsub("[/\\:]", "_")
+end
+
+--- Get corner CSV path for current track (tracks/<track>/corners.csv)
+local function getCornersPath()
+    local trackFolder = getTrackFolder()
+    if not trackFolder then return nil end
+    return trackFolder .. "/corners.csv"
+end
+
+--- Get legacy corner CSV path for migration (corners/<track>.csv)
+local function getLegacyCornersPath()
+    if not state.track then return nil end
+    return LEGACY_CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
 end
 
 --------------------------------------------------------------------------------
@@ -531,10 +546,11 @@ local function parseCSVLine(line)
     return fields
 end
 
---- Save corners to per-track CSV file (corners/<track>.csv)
+--- Save corners to per-track CSV file (tracks/<track>/corners.csv)
 local function saveCornersToFile()
+    local trackFolder = getTrackFolder()
     local path = getCornersPath()
-    if not path then
+    if not trackFolder or not path then
         ac.log("AC Tracer: Cannot save corners - no track path")
         return false
     end
@@ -546,8 +562,9 @@ local function saveCornersToFile()
     -- Remove overlapping corners before saving
     state.trackCorners = removeOverlappingCorners(state.trackCorners)
 
-    -- Ensure corners directory exists
-    io.createDir(CORNERS_DIR)
+    -- Ensure tracks directory and track subdirectory exist
+    io.createDir(TRACKS_DIR)
+    io.createDir(trackFolder)
 
     -- Write CSV for this track only
     local f = io.open(path, "w")
@@ -577,11 +594,10 @@ local function saveCornersToFile()
     return true
 end
 
---- Load corners from per-track CSV file (corners/<track>.csv)
-local function loadCornersFromFile()
-    local path = getCornersPath()
-    if not path then return false end
-
+--- Load corners from CSV file, trying new location first then legacy
+---@param path string CSV file path to load from
+---@return boolean success
+local function loadCornersFromPath(path)
     local f = io.open(path, "r")
     if not f then return false end
 
@@ -594,7 +610,7 @@ local function loadCornersFromFile()
             firstLine = false  -- Skip header
         elseif line ~= "" then
             local fields = parseCSVLine(line)
-            -- New format: name,start,end (no track column)
+            -- Format: name,start,end (no track column)
             if #fields >= 3 then
                 local startPos = tonumber(fields[2])
                 local endPos = tonumber(fields[3])
@@ -618,6 +634,29 @@ local function loadCornersFromFile()
         ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from " .. path)
         return true
     end
+    return false
+end
+
+--- Load corners from per-track CSV file (tracks/<track>/corners.csv)
+--- Falls back to legacy location (corners/<track>.csv) for migration
+local function loadCornersFromFile()
+    local path = getCornersPath()
+    if not path then return false end
+
+    -- Try new location first: tracks/<track>/corners.csv
+    if loadCornersFromPath(path) then
+        return true
+    end
+
+    -- Fall back to legacy location: corners/<track>.csv
+    local legacyPath = getLegacyCornersPath()
+    if legacyPath and loadCornersFromPath(legacyPath) then
+        ac.log("AC Tracer: Loaded corners from legacy location, will save to new location")
+        -- Save to new location for migration
+        saveCornersToFile()
+        return true
+    end
+
     return false
 end
 

@@ -61,23 +61,61 @@ local function getUserDocumentsLapDir()
     return profile .. "\\Documents\\AC-Laps\\"
 end
 
-local function buildSearchPaths()
-    local paths = {
-        { path = __dirname .. "/tracks/", source = "tracks" },
-        { path = "C:\\MoTeC\\Logged Data\\", source = "motec" },
-    }
+--- Get track folder path for a track ID
+---@param trackId string Track ID
+---@return string Track folder path under tracks/
+local function getTrackFolder(trackId)
+    if not trackId then return nil end
+    return __dirname .. "/tracks/" .. trackId:gsub("[/\\:]", "_") .. "/"
+end
+
+--- Build search paths for CSV files, prioritizing track-specific folders
+---@param trackId string|nil Track ID to look for track-specific folder
+---@return table Array of {path, source}
+local function buildSearchPaths(trackId)
+    local paths = {}
+
+    -- If track ID is provided, add track-specific folder first
+    if trackId then
+        local trackFolder = getTrackFolder(trackId)
+        table.insert(paths, { path = trackFolder, source = "tracks" })
+    end
+
+    -- Add generic tracks folder (legacy location)
+    table.insert(paths, { path = __dirname .. "/tracks/", source = "tracks" })
+
+    -- Add MoTeC standard location
+    table.insert(paths, { path = "C:\\MoTeC\\Logged Data\\", source = "motec" })
+
+    -- Add user documents folder at front if exists
     local userDir = getUserDocumentsLapDir()
     if userDir then
         table.insert(paths, 1, { path = userDir, source = "documents" })
     end
+
     return paths
 end
 
 --- Get default lap directory path
+---@param trackId string|nil Track ID for track-specific folder
 ---@return string Default lap directory path
-function file_utils.getLapDirectory()
+function file_utils.getLapDirectory(trackId)
     local userDir = getUserDocumentsLapDir()
-    return userDir or (__dirname .. "/tracks/")
+    if userDir then return userDir end
+
+    -- Return track-specific folder if track ID provided
+    if trackId then
+        return getTrackFolder(trackId)
+    end
+
+    return __dirname .. "/tracks/"
+end
+
+--- Get track folder path (exported for other modules)
+---@param trackId string Track ID
+---@return string|nil Track folder path or nil if no track ID
+function file_utils.getTrackFolder(trackId)
+    return getTrackFolder(trackId)
 end
 
 local function normalizeTrackName(name)
@@ -148,7 +186,7 @@ function file_utils.scanCSVFiles(trackId)
     csvFilesCache = {}
     local seenFiles = {}  -- Track by lowercase to avoid duplicates
 
-    for _, dir in ipairs(buildSearchPaths()) do
+    for _, dir in ipairs(buildSearchPaths(trackId)) do
         if io.dirExists(dir.path) then
             local files = io.scanDir(dir.path, "*.csv")
             if files then
