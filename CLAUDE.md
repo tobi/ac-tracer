@@ -531,22 +531,23 @@ This pattern:
 
 ```
 ac-tracer/
-├── corners/
-│   └── <track_id>.csv        # Corner definitions (one file per track)
 ├── tracks/
-│   └── trackname.csv         # Reference lap CSVs (MoTeC export or local)
+│   └── <track_id>/           # One folder per track
+│       ├── corners.csv       # Corner definitions for this track
+│       └── *.csv             # Reference lap CSVs (MoTeC export or local)
 └── ...
 ```
 
 ### CSV Search Paths
 
-Reference lap CSVs are searched in these directories:
-1. `./tracks/` - Local to the plugin
-2. `C:\MoTeC\Logged Data\` - Standard MoTeC export location
+Reference lap CSVs are searched in these directories (in order):
+1. `./tracks/<track_id>/` - Track-specific folder (preferred)
+2. `./tracks/` - Legacy location (for backwards compatibility)
+3. `C:\MoTeC\Logged Data\` - Standard MoTeC export location
 
-### Corner Files (`corners/<track_id>.csv`)
+### Corner Files (`tracks/<track_id>/corners.csv`)
 
-Corner definitions are saved per-track in the `corners/` directory. Each track has its own CSV file named after the track ID:
+Corner definitions are saved per-track in the track's folder:
 
 ```csv
 name,start,end
@@ -555,7 +556,7 @@ Karussell,0.234567,0.256789
 Bus Stop,0.567890,0.612345
 ```
 
-Example file: `corners/ier_daytona.csv` for the IER Daytona track.
+Example file: `tracks/ier_daytona/corners.csv` for the IER Daytona track.
 
 ---
 
@@ -565,7 +566,7 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - throttle, clutch, steering are 0.0-1.0; brake is in bar
 - **Time in milliseconds** - internal storage uses ms for precision
-- **Corner files** - saved as `./corners/<track_id>.csv` (per-track)
+- **Corner files** - saved as `./tracks/<track_id>/corners.csv` (per-track folder)
 - **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position * 100 bar
 - **Front/rear brake** - `brake` = front, `brake_r` = rear (or same as front if no DLL/CSV data)
 
