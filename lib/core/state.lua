@@ -4,7 +4,7 @@
 local lap = require('lib.lap')
 local settings = require('lib.core.settings')
 local history_storage = require('lib.core.history')
-local notification = require('sounds.notification')
+local notification = require('lib.sound.notification')
 local csv_export = require('lib.lap.csv_export')
 local file_utils = require('lib.core.files')
 
@@ -76,13 +76,9 @@ local brakeBeep = {
     lastBeepTime = 0,        -- Time of last beep (to prevent spam)
 }
 
--- Beep times before brakepoint (in seconds, counting down)
--- beep 1 at ~1.5s, beep 2 at ~1.0s, beep 3 at ~0.5s, final BEEP at brakepoint
+-- Countdown times before brakepoint (in seconds)
+-- sound_1 at ~1.5s, sound_2 at ~1.0s, sound_3 at ~0.5s, sound_4 at brakepoint
 local BEEP_TIMES = { 1.5, 1.0, 0.5, 0 }
--- Pitch multipliers for each beep (increasing pitch, final beep much higher)
-local BEEP_PITCHES = { 0.8, 1.0, 1.3, 2.0 }
--- Volume multipliers for each beep (final beep louder)
-local BEEP_VOLUMES = { 0.8, 0.9, 1.0, 1.4 }
 
 --- Check if a position is inside a corner
 ---@param pos number Spline position (0-1)
@@ -1253,13 +1249,14 @@ function state.update(dt, car)
             local speedMs = car.speedKmh / 3.6
             local timeToBrake = speedMs > 1 and (distMeters / speedMs) or 999
             
-            -- Play beeps at countdown times
+            -- Play countdown sounds at time thresholds
+            -- sound_1 at 1.5s, sound_2 at 1.0s, sound_3 at 0.5s, sound_4 at brake point
             local now = os.clock()
             for i, timeThreshold in ipairs(BEEP_TIMES) do
                 if brakeBeep.beepIndex < i and timeToBrake <= timeThreshold then
                     -- Time check to prevent double-beeps
                     if (now - brakeBeep.lastBeepTime) > 0.1 then
-                        notification.playBeep(BEEP_PITCHES[i], BEEP_VOLUMES[i])
+                        notification.playCountdownSound(i)
                         brakeBeep.beepIndex = i
                         brakeBeep.lastBeepTime = now
                     end
