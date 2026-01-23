@@ -2,7 +2,7 @@
 -- Uses ac.storage for automatic persistence (no manual save needed)
 -- All settings accessed via accessor functions for live updates
 
-local lap_picker = require('lib.controls.lap_picker')
+local lap_picker = require('lib.windows.lap_picker')
 local theme = require('lib.ui.theme')
 
 -- Deferred require to avoid circular dependency (ui_utils requires settings)

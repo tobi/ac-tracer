@@ -2,9 +2,9 @@
 -- Shows lap time, delta vs reference lap with color-coded bar
 
 local theme = require('lib.ui.theme')
-local corner_analysis = require('lib.controls.corner_analysis')
+local corner_analysis = require('lib.windows.corner_analysis')
 local wedge = require('lib.ui.wedge')
-local state = require('lib.state')
+local state = require('lib.core.state')
 
 local delta_bar = {}
 

@@ -2,12 +2,12 @@
 -- Uses centralized state for all lap data
 
 local lap = require('lib.lap')
-local settings = require('lib.settings')
-local corner_analysis = require('lib.controls.corner_analysis')
+local settings = require('lib.core.settings')
+local corner_analysis = require('lib.windows.corner_analysis')
 local theme = require('lib.ui.theme')
 local file_utils = require('lib.core.files')
 local csv_export = require('lib.lap.csv_export')
-local lap_picker = require('lib.controls.lap_picker')
+local lap_picker = require('lib.windows.lap_picker')
 local ui_utils = require('lib.ui.utils')
 local markdown = require('lib.ui.markdown')
 

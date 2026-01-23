@@ -10,7 +10,7 @@ local file_utils = require('lib.core.files')
 local state = nil
 local function getState()
     if not state then
-        state = require('lib.state')
+        state = require('lib.core.state')
     end
     return state
 end

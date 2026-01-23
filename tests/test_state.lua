@@ -5,8 +5,8 @@ local lap = require('lib.lap')
 local function withState(testFn, options)
     options = options or {}
     local original = {
-        state = package.loaded['lib.state'],
-        settings = package.loaded['lib.settings'],
+        state = package.loaded['lib.core.state'],
+        settings = package.loaded['lib.core.settings'],
         history_storage = package.loaded['lib.core.history'],
         notification = package.loaded['sounds/notification'],
         csv_export = package.loaded['lib.lap.csv_export'],
@@ -34,21 +34,21 @@ local function withState(testFn, options)
     history_storage.getLapsFromSession = function() return {} end
     history_storage.getLapsNotFromSession = function() return {} end
 
-    package.loaded['lib.settings'] = settings
+    package.loaded['lib.core.settings'] = settings
     package.loaded['lib.core.history'] = history_storage
     package.loaded['sounds/notification'] = { init = function() end, playSave = function() end, playLoad = function() end }
     package.loaded['lib.lap.csv_export'] = { saveLap = function() return "path" end }
     package.loaded['lib.core.files'] = { scanCSVFiles = function() return {} end, formatLapTime = function() return "" end }
-    package.loaded['lib.state'] = nil
+    package.loaded['lib.core.state'] = nil
 
     io.open = options.ioOpen or function() return nil end
     io.createDir = options.ioCreateDir or function() return true end
 
-    local state = require('lib.state')
+    local state = require('lib.core.state')
     testFn(state, settings, history_storage)
 
-    package.loaded['lib.state'] = original.state
-    package.loaded['lib.settings'] = original.settings
+    package.loaded['lib.core.state'] = original.state
+    package.loaded['lib.core.settings'] = original.settings
     package.loaded['lib.core.history'] = original.history_storage
     package.loaded['sounds/notification'] = original.notification
     package.loaded['lib.lap.csv_export'] = original.csv_export

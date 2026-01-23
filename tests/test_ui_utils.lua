@@ -2,14 +2,14 @@
 -- Note: Only tests functions that don't require CSP UI APIs
 
 -- Clear cached modules to ensure fresh load with mock environment
-package.loaded['lib.settings'] = nil
+package.loaded['lib.core.settings'] = nil
 package.loaded['lib.ui.utils'] = nil
 package.loaded['lib.controls.lap_picker'] = nil
 package.loaded['lib.core.files'] = nil
 package.loaded['lib.ui.theme'] = nil
 
 local ui_utils = require('lib.ui.utils')
-local settings = require('lib.settings')
+local settings = require('lib.core.settings')
 
 --------------------------------------------------------------------------------
 -- Speed Display Tests

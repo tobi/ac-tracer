@@ -2,7 +2,7 @@
 -- All state and persistence lives here. Other modules read from state.
 
 local lap = require('lib.lap')
-local settings = require('lib.settings')
+local settings = require('lib.core.settings')
 local history_storage = require('lib.core.history')
 local notification = require('sounds.notification')
 local csv_export = require('lib.lap.csv_export')

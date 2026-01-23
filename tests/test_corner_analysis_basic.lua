@@ -31,8 +31,8 @@ test("analyzeCorner and compareCorners return data", function()
         onCheckpointLoad = function() end,
         getLapTimeOffset = function() return 0 end,
     }
-    package.loaded['lib.controls.corner_analysis'] = nil
-    local corner_analysis = require('lib.controls.corner_analysis')
+    package.loaded['lib.windows.corner_analysis'] = nil
+    local corner_analysis = require('lib.windows.corner_analysis')
 
     local currentLap = makeLap("session_a", 120)
     local refLap = makeLap("session_b", 125)

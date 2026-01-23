@@ -4,7 +4,7 @@ suite("lap_picker")
 
 test("refresh calls file_utils.invalidateCache", function()
     local originalFileUtils = package.loaded['lib.core.files']
-    local originalLapPicker = package.loaded['lib.controls.lap_picker']
+    local originalLapPicker = package.loaded['lib.windows.lap_picker']
 
     local calls = 0
     package.loaded['lib.core.files'] = {
@@ -14,13 +14,13 @@ test("refresh calls file_utils.invalidateCache", function()
         scanCSVFiles = function() return {} end,
     }
 
-    package.loaded['lib.controls.lap_picker'] = nil
-    local lap_picker = require('lib.controls.lap_picker')
+    package.loaded['lib.windows.lap_picker'] = nil
+    local lap_picker = require('lib.windows.lap_picker')
 
     lap_picker.refresh()
     assert_equal(calls, 1)
     assert_true(lap_picker.isLoading() == false)
 
     package.loaded['lib.core.files'] = originalFileUtils
-    package.loaded['lib.controls.lap_picker'] = originalLapPicker
+    package.loaded['lib.windows.lap_picker'] = originalLapPicker
 end)

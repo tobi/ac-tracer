@@ -3,12 +3,12 @@
 
 local lap = require('lib.lap')
 local scoring = require('lib.core.scoring')
-local settings = require('lib.settings')
+local settings = require('lib.core.settings')
 local extended_brake = require('lib.core.brake')
 local theme = require('lib.ui.theme')
 local ui_utils = require('lib.ui.utils')
 local wedge = require('lib.ui.wedge')
-local state = require('lib.state')
+local state = require('lib.core.state')
 
 local corner_analysis = {}
 

@@ -26,11 +26,11 @@ end
 suite("markdown")
 
 test("generate outputs expected sections", function()
-    local originalState = package.loaded['lib.state']
-    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalState = package.loaded['lib.core.state']
+    local originalCorner = package.loaded['lib.windows.corner_analysis']
     local originalMarkdown = package.loaded['lib.ui.markdown']
 
-    package.loaded['lib.state'] = {
+    package.loaded['lib.core.state'] = {
         track = "test_track",
         car = "test_car",
         trackCorners = {
@@ -38,7 +38,7 @@ test("generate outputs expected sections", function()
         }
     }
 
-    package.loaded['lib.controls.corner_analysis'] = {
+    package.loaded['lib.windows.corner_analysis'] = {
         analyzeCorner = function()
             return {
                 entrySpeed = 100,
@@ -87,23 +87,23 @@ test("generate outputs expected sections", function()
     assert_true(output:find("## Lap Comparison") ~= nil)
     assert_true(output:find("### T1") ~= nil)
 
-    package.loaded['lib.state'] = originalState
-    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.core.state'] = originalState
+    package.loaded['lib.windows.corner_analysis'] = originalCorner
     package.loaded['lib.ui.markdown'] = originalMarkdown
 end)
 
 test("copyToClipboard returns success and message", function()
-    local originalState = package.loaded['lib.state']
-    local originalCorner = package.loaded['lib.controls.corner_analysis']
+    local originalState = package.loaded['lib.core.state']
+    local originalCorner = package.loaded['lib.windows.corner_analysis']
     local originalMarkdown = package.loaded['lib.ui.markdown']
     local originalClipboard = ac.setClipboardText
 
-    package.loaded['lib.state'] = {
+    package.loaded['lib.core.state'] = {
         track = "test_track",
         car = "test_car",
         trackCorners = { { number = 1, name = "T1", startPos = 0.1, endPos = 0.2 } }
     }
-    package.loaded['lib.controls.corner_analysis'] = {
+    package.loaded['lib.windows.corner_analysis'] = {
         analyzeCorner = function() return nil end,
         compareCorners = function() return nil end
     }
@@ -119,7 +119,7 @@ test("copyToClipboard returns success and message", function()
     assert_true(msg:find("Copied to clipboard") ~= nil)
 
     ac.setClipboardText = originalClipboard
-    package.loaded['lib.state'] = originalState
-    package.loaded['lib.controls.corner_analysis'] = originalCorner
+    package.loaded['lib.core.state'] = originalState
+    package.loaded['lib.windows.corner_analysis'] = originalCorner
     package.loaded['lib.ui.markdown'] = originalMarkdown
 end)

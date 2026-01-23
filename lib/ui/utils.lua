@@ -2,7 +2,7 @@
 -- Common drawing helpers used across multiple windows
 
 local theme = require('lib.ui.theme')
-local settings = require('lib.settings')
+local settings = require('lib.core.settings')
 
 local ui_utils = {}
 

@@ -177,6 +177,10 @@ ac.getTrackID = function()
     return "test_track"
 end
 
+ac.getCarID = function(index)
+    return "test_car"
+end
+
 ac.getCarName = function(index, withYear)
     return "Test Car"
 end

@@ -1,11 +1,11 @@
 -- test_checkpoint.lua - Tests for checkpoint and delta outlap behavior
 
 local function loadStateFresh()
-    package.loaded['lib.state'] = nil
+    package.loaded['lib.core.state'] = nil
     package.loaded['lib.core.history'] = nil
-    package.loaded['lib.controls.corner_analysis'] = nil
+    package.loaded['lib.windows.corner_analysis'] = nil
     package.loaded['lib.lap'] = nil
-    return require('lib.state')
+    return require('lib.core.state')
 end
 
 local function resetUiLog()
@@ -118,14 +118,14 @@ test("shows OUTLAP when lap count is zero", function()
     resetUiLog()
 
     -- Stub corner_analysis to avoid unrelated UI work
-    package.loaded['lib.controls.corner_analysis'] = {
+    package.loaded['lib.windows.corner_analysis'] = {
         getRecentCornerScores = function() return {} end
     }
-    package.loaded['lib.controls.delta_bar'] = nil
+    package.loaded['lib.windows.delta_bar'] = nil
     package.loaded['lib.lap'] = nil
 
     local lap = require('lib.lap')
-    local delta_bar = require('lib.controls.delta_bar')
+    local delta_bar = require('lib.windows.delta_bar')
 
     local reference = lap.new("test_track", "test_car", "session")
     reference.pos = { 0.0, 0.5, 1.0 }

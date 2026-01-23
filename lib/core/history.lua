@@ -2,7 +2,7 @@
 -- Handles lap history persistence using ac.storage with stringify for complex data
 
 local lap = require('lib.lap')
-local settings = require('lib.settings')
+local settings = require('lib.core.settings')
 
 local M = {}
 
