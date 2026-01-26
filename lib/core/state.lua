@@ -74,11 +74,13 @@ local brakeBeep = {
     lastBrakePos = nil,      -- Last brakepoint we processed (to avoid repeating)
     beepIndex = 0,           -- Which beep in countdown (0 = not started, 1-4 = beeps)
     lastBeepTime = 0,        -- Time of last beep (to prevent spam)
+    beepPositions = {},      -- Positions for each beep trigger (calculated from ref lap)
 }
 
--- Countdown times before brakepoint (in seconds)
--- sound_1 at ~1.5s, sound_2 at ~1.0s, sound_3 at ~0.5s, sound_4 at brakepoint
-local BEEP_TIMES = { 1.5, 1.0, 0.5, 0 }
+-- Countdown interval (seconds before brakepoint, using ref lap timing)
+-- sound_1 at 2.25s, sound_2 at 1.5s, sound_3 at 0.75s, sound_4 at brakepoint
+local BEEP_INTERVAL = 0.75  -- 0.75s between each beep
+local BEEP_OFFSETS = { 2.25, 1.5, 0.75, 0 }  -- Time before brake point for each sound
 
 --- Check if a position is inside a corner
 ---@param pos number Spline position (0-1)
@@ -102,91 +104,126 @@ local function getCornerAtPosition(pos, corners)
 end
 
 --- Find the first brakepoint inside each corner from a lap
---- Returns a sorted list of brakepoints (one per corner, the first brake touch)
+--- Returns a sorted list of brakepoints with precomputed beep trigger positions
 ---@param lapData table Lap instance
 ---@param corners table Array of corner definitions
----@return table Array of {pos, cornerNum} sorted by position
+---@return table Array of {pos, cornerNum, beepPositions} sorted by position
 local function findCornerBrakepoints(lapData, corners)
     if not lapData or lapData:length() < 10 then return {} end
     if not corners or #corners == 0 then return {} end
 
     -- Threshold for detecting intentional braking (not just light touches)
     local BRAKE_TOUCH_THRESHOLD = 2  -- 2 bar = light but intentional braking
-    
+
     -- Track which corners we've already found a brakepoint for
     local cornerBrakepoints = {}  -- cornerNum -> brakepoint position
-    
+
     -- Scan the lap looking for first brake application in each corner
     local wasUnderThreshold = true  -- Start as if we weren't braking
-    
+
     for i = 1, lapData:length() do
         local brake = lapData.brake[i] or 0
         local pos = lapData.pos[i]
         if not pos then goto continue end
-        
+
         -- Check if this position is inside a corner
         local corner = getCornerAtPosition(pos, corners)
-        
+
         if brake < BRAKE_TOUCH_THRESHOLD then
             wasUnderThreshold = true
         elseif wasUnderThreshold and brake >= BRAKE_TOUCH_THRESHOLD then
             -- First brake touch detected
             wasUnderThreshold = false
-            
+
             -- Only record if inside a corner and we haven't recorded this corner yet
             if corner and not cornerBrakepoints[corner.number] then
                 cornerBrakepoints[corner.number] = pos
             end
         end
-        
+
         ::continue::
     end
-    
-    -- Convert to sorted array
+
+    -- Convert to sorted array and precompute beep trigger positions
     local result = {}
-    for cornerNum, pos in pairs(cornerBrakepoints) do
-        table.insert(result, { pos = pos, cornerNum = cornerNum })
+    for cornerNum, brakePos in pairs(cornerBrakepoints) do
+        local entry = {
+            pos = brakePos,
+            cornerNum = cornerNum,
+            beepPositions = {},  -- Precomputed trigger positions for countdown sounds
+        }
+
+        -- Calculate beep positions based on ref lap timing (0.75s intervals)
+        local brakeTime = lapData:getTimeAtPos(brakePos)
+        if brakeTime then
+            for i, offset in ipairs(BEEP_OFFSETS) do
+                local triggerTime = brakeTime - offset
+                if triggerTime >= 0 then
+                    entry.beepPositions[i] = lapData:getPosAtTime(triggerTime)
+                end
+            end
+        end
+
+        table.insert(result, entry)
     end
     table.sort(result, function(a, b) return a.pos < b.pos end)
-    
+
     return result
 end
 
--- Cache for corner brakepoints (recalculated when lap changes)
+-- Cache for corner brakepoints (recalculated when lap or corners change)
 local cachedBrakepoints = nil
 local cachedBrakepointsLap = nil
+local cachedBrakepointsCorners = nil
+
+--- Invalidate brakepoint cache (called when corners change)
+local function invalidateBrakepointCache()
+    cachedBrakepoints = nil
+    cachedBrakepointsLap = nil
+    cachedBrakepointsCorners = nil
+end
+
+--- Ensure brakepoint cache is up to date
+---@param lapData table Lap instance
+local function ensureBrakepointCache(lapData)
+    if not lapData or lapData:length() < 10 then
+        cachedBrakepoints = {}
+        return
+    end
+
+    -- Recalculate if lap or corners changed
+    if cachedBrakepointsLap ~= lapData or cachedBrakepointsCorners ~= state.trackCorners then
+        cachedBrakepoints = findCornerBrakepoints(lapData, state.trackCorners)
+        cachedBrakepointsLap = lapData
+        cachedBrakepointsCorners = state.trackCorners
+    end
+end
 
 --- Find the next brakepoint from a lap after the given position
 ---@param lapData table Lap instance
 ---@param currentPos number Current spline position (0-1)
----@return number|nil Brakepoint position, or nil if not found
+---@return table|nil Brakepoint entry {pos, cornerNum, beepPositions}, or nil if not found
 local function findNextBrakepoint(lapData, currentPos)
-    if not lapData or lapData:length() < 10 then return nil end
-    
-    -- Recalculate brakepoints if lap changed
-    if cachedBrakepointsLap ~= lapData then
-        cachedBrakepoints = findCornerBrakepoints(lapData, state.trackCorners)
-        cachedBrakepointsLap = lapData
-    end
-    
+    ensureBrakepointCache(lapData)
+
     if not cachedBrakepoints or #cachedBrakepoints == 0 then return nil end
-    
+
     -- Find the next brakepoint ahead of current position
-    local bestPos = nil
+    local best = nil
     local bestDistance = 2  -- > 1 means we haven't found anything
-    
+
     for _, bp in ipairs(cachedBrakepoints) do
         local distance = bp.pos - currentPos
         if distance < 0 then distance = distance + 1 end
-        
+
         -- Only consider brakepoints ahead of us (small buffer to avoid the one we just passed)
         if distance > 0.005 and distance < bestDistance then
             bestDistance = distance
-            bestPos = bp.pos
+            best = bp
         end
     end
-    
-    return bestPos
+
+    return best
 end
 
 --------------------------------------------------------------------------------
@@ -570,6 +607,7 @@ local function saveCornersToFile()
 
     f:close()
     ac.log("AC Tracer: Saved " .. #state.trackCorners .. " corners to " .. path)
+    invalidateBrakepointCache()  -- Corners changed, recalculate brakepoints
     return true
 end
 
@@ -612,6 +650,7 @@ local function loadCornersFromFile()
 
     if #state.trackCorners > 0 then
         ac.log("AC Tracer: Loaded " .. #state.trackCorners .. " corners from " .. path)
+        invalidateBrakepointCache()  -- Corners loaded, recalculate brakepoints
         return true
     end
     return false
@@ -1214,53 +1253,56 @@ function state.update(dt, car)
     -- Update position
     state.trackPosition = car.splinePosition
     
-    -- Brake beep system (uses comparison lap)
+    -- Brake beep system (uses comparison lap for position-based triggers)
     local brakeBeepEnabled = settings.brakeBeepMode() == "on"
     local beepLap = state.getComparisonLap()
     if brakeBeepEnabled and car.speedKmh > 30 and beepLap and beepLap:length() > 10 then
-        local trackLength = sim.trackLengthM or 5000
         local currentPos = car.splinePosition
-        
+
         -- Find next brakepoint if we don't have one or passed the current one
+        local needNewBrakepoint = false
         if not brakeBeep.nextBrakePos then
-            brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
-            brakeBeep.beepIndex = 0
+            needNewBrakepoint = true
         else
             -- Check if we passed the brakepoint
             local distToBrake = brakeBeep.nextBrakePos - currentPos
             if distToBrake < 0 then distToBrake = distToBrake + 1 end
-            
+
             -- If we passed it (or very close), find next one
             if distToBrake > 0.5 or distToBrake < 0.003 then
-                brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
-                brakeBeep.nextBrakePos = findNextBrakepoint(beepLap, currentPos)
-                brakeBeep.beepIndex = 0
+                needNewBrakepoint = true
             end
         end
-        
-        -- Calculate time to brakepoint based on current speed
-        if brakeBeep.nextBrakePos then
-            local distToBrake = brakeBeep.nextBrakePos - currentPos
-            if distToBrake < 0 then distToBrake = distToBrake + 1 end
-            local distMeters = distToBrake * trackLength
-            
-            -- Convert distance to time: time = distance / speed
-            -- Speed is in km/h, convert to m/s (divide by 3.6)
-            local speedMs = car.speedKmh / 3.6
-            local timeToBrake = speedMs > 1 and (distMeters / speedMs) or 999
-            
-            -- Play countdown sounds at time thresholds
-            -- sound_1 at 1.5s, sound_2 at 1.0s, sound_3 at 0.5s, sound_4 at brake point
+
+        if needNewBrakepoint then
+            brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
+            -- findNextBrakepoint returns full entry with precomputed beepPositions
+            local nextBp = findNextBrakepoint(beepLap, currentPos)
+            brakeBeep.nextBrakePos = nextBp and nextBp.pos or nil
+            brakeBeep.beepPositions = nextBp and nextBp.beepPositions or {}
+            brakeBeep.beepIndex = 0
+        end
+
+        -- Check position-based triggers (beep when we cross each trigger position)
+        if brakeBeep.nextBrakePos and brakeBeep.beepPositions then
             local now = os.clock()
-            for i, timeThreshold in ipairs(BEEP_TIMES) do
-                if brakeBeep.beepIndex < i and timeToBrake <= timeThreshold then
-                    -- Time check to prevent double-beeps
-                    if (now - brakeBeep.lastBeepTime) > 0.1 then
-                        notification.playCountdownSound(i)
-                        brakeBeep.beepIndex = i
-                        brakeBeep.lastBeepTime = now
+            for i = 1, 4 do
+                local triggerPos = brakeBeep.beepPositions[i]
+                if triggerPos and brakeBeep.beepIndex < i then
+                    -- Check if we've passed or reached this trigger position
+                    local distToTrigger = triggerPos - currentPos
+                    if distToTrigger < 0 then distToTrigger = distToTrigger + 1 end
+
+                    -- Trigger when we're at or past the position (within reasonable range)
+                    if distToTrigger > 0.5 or distToTrigger < 0.01 then
+                        -- Time check to prevent double-beeps
+                        if (now - brakeBeep.lastBeepTime) > 0.1 then
+                            notification.playCountdownSound(i)
+                            brakeBeep.beepIndex = i
+                            brakeBeep.lastBeepTime = now
+                        end
+                        break
                     end
-                    break
                 end
             end
         end
@@ -1268,6 +1310,7 @@ function state.update(dt, car)
         -- Reset beep state when disabled or car is slow
         brakeBeep.nextBrakePos = nil
         brakeBeep.beepIndex = 0
+        brakeBeep.beepPositions = {}
     end
 end
 

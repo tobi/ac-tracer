@@ -596,6 +596,41 @@ function lap:getTimeAtPos(targetPos)
     return (index - 1) / lap.SAMPLE_RATE
 end
 
+--- Get interpolated track position at a specific lap time (in seconds)
+--- Inverse of getTimeAtPos - useful for finding positions at specific times
+---@param targetTime number Time in seconds from lap start
+---@return number|nil Spline position (0.0 to 1.0)
+function lap:getPosAtTime(targetTime)
+    if not self.times or #self.times < 2 then return nil end
+    if targetTime < 0 then return nil end
+
+    -- Binary search for the time bracket
+    local lo, hi = 1, #self.times
+    while hi - lo > 1 do
+        local mid = math.floor((lo + hi) / 2)
+        if self.times[mid] <= targetTime then
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+
+    -- Interpolate position between the two samples
+    local t1, t2 = self.times[lo], self.times[hi]
+    local p1, p2 = self.pos[lo], self.pos[hi]
+
+    if t1 == t2 then return p1 end
+
+    local t = math.clamp((targetTime - t1) / (t2 - t1), 0, 1)
+    local pos = p1 + (p2 - p1) * t
+
+    -- Handle wrap-around (pos should stay in 0-1 range)
+    if pos < 0 then pos = pos + 1 end
+    if pos > 1 then pos = pos - 1 end
+
+    return pos
+end
+
 --- Get time delta vs reference lap at current position
 ---@param refLap table Reference lap instance
 ---@param currentPos number Current spline position
