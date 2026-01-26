@@ -529,14 +529,38 @@ end
 --------------------------------------------------------------------------------
 
 --- Binary search to find indices surrounding a target position
+--- Optimized: accepts optional hint index for sequential access patterns
 ---@param positions table Array of spline positions
 ---@param targetPos number Target position (0.0 to 1.0)
+---@param hintIdx number|nil Optional starting index hint (for sequential access)
 ---@return number|nil lo Lower index
 ---@return number|nil hi Upper index
-local function findIndicesAtPos(positions, targetPos)
+local function findIndicesAtPos(positions, targetPos, hintIdx)
     if not positions or #positions < 2 then return nil, nil end
-    
-    local lo, hi = 1, #positions
+
+    local n = #positions
+
+    -- Optimization: if hint is provided, check if target is nearby
+    if hintIdx and hintIdx >= 1 and hintIdx < n then
+        local hintPos = positions[hintIdx]
+        local nextPos = positions[hintIdx + 1]
+
+        -- Check if target is between hint and hint+1 (common sequential case)
+        if hintPos and nextPos and targetPos >= hintPos and targetPos <= nextPos then
+            return hintIdx, hintIdx + 1
+        end
+
+        -- Check one position forward (for incrementing sequential access)
+        if hintIdx + 1 < n then
+            local nextNextPos = positions[hintIdx + 2]
+            if nextPos and nextNextPos and targetPos >= nextPos and targetPos <= nextNextPos then
+                return hintIdx + 1, hintIdx + 2
+            end
+        end
+    end
+
+    -- Fall back to binary search
+    local lo, hi = 1, n
     while hi - lo > 1 do
         local mid = math.floor((lo + hi) / 2)
         if positions[mid] <= targetPos then
@@ -549,21 +573,25 @@ local function findIndicesAtPos(positions, targetPos)
 end
 
 --- Internal: interpolate a dense array at position
+--- Uses lap's _lastSearchIdx for sequential access optimization
 ---@param data table Array of values
 ---@param targetPos number Spline position (0.0 to 1.0)
 ---@return number|nil Interpolated value
 local function interpolateAt(self, data, targetPos)
     if not data or #data < 2 then return nil end
-    
-    local lo, hi = findIndicesAtPos(self.pos, targetPos)
+
+    local lo, hi = findIndicesAtPos(self.pos, targetPos, self._lastSearchIdx)
     if not lo then return nil end
-    
+
+    -- Cache the found index for sequential access optimization
+    self._lastSearchIdx = lo
+
     local p1, p2 = self.pos[lo], self.pos[hi]
     local v1, v2 = data[lo], data[hi]
-    
+
     -- Handle edge case
     if p1 == p2 then return v1 end
-    
+
     -- Linear interpolation
     local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
     return v1 + (v2 - v1) * t
@@ -740,6 +768,7 @@ function lap:timeAt(pos) return self:getTimeAtPos(pos) end
 --------------------------------------------------------------------------------
 
 --- Get traces for display, matched to specified positions
+--- Cached: returns cached result if positions array content unchanged
 ---@param positions table Array of spline positions to match
 ---@param maxBar number? Max brake pressure for normalization (default 100)
 ---@return table|nil traces { throttle={}, brake={}, clutch={}, steering={}, speed={}, gear={} }
@@ -747,6 +776,23 @@ function lap:getTracesAt(positions, maxBar)
     if not positions or #positions < 1 then return nil end
 
     maxBar = maxBar or 100  -- Default to 100 bar for normalization
+
+    -- Cache check for completed laps: verify positions content hasn't changed
+    -- Check array length, first position, and last position for fast validation
+    local posCount = #positions
+    local posFirst = positions[1]
+    local posLast = positions[posCount]
+
+    if self._tracesCache
+        and self._tracesCacheMaxBar == maxBar
+        and self._tracesCachePosCount == posCount
+        and self._tracesCachePosFirst == posFirst
+        and self._tracesCachePosLast == posLast then
+        return self._tracesCache
+    end
+
+    -- Reset sequential search hint for fresh trace extraction
+    self._lastSearchIdx = nil
 
     local traces = {
         throttle = {},
@@ -757,7 +803,7 @@ function lap:getTracesAt(positions, maxBar)
         gear = {}
     }
 
-    for i = 1, #positions do
+    for i = 1, posCount do
         local pos = positions[i]
         table.insert(traces.throttle, self:throttleAt(pos) or 0)
         table.insert(traces.brake, self:brakePercentAt(pos, maxBar) or 0)
@@ -765,6 +811,15 @@ function lap:getTracesAt(positions, maxBar)
         table.insert(traces.steering, self:steeringAt(pos) or 0.5)
         table.insert(traces.speed, self:speedAt(pos) or 0)
         table.insert(traces.gear, self:gearAt(pos) or 0)
+    end
+
+    -- Cache the result (only for completed laps to avoid stale cache during recording)
+    if self.completed then
+        self._tracesCache = traces
+        self._tracesCacheMaxBar = maxBar
+        self._tracesCachePosCount = posCount
+        self._tracesCachePosFirst = posFirst
+        self._tracesCachePosLast = posLast
     end
 
     return traces

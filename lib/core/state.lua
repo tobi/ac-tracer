@@ -1511,10 +1511,22 @@ function state.analyzeCorners(lapData)
     return analysis
 end
 
+-- Corner lookup cache (memoization)
+local _lastCornerPos = nil
+local _lastCornerResult = nil
+local _lastCornerCornersRef = nil
+
 --- Get corner at a specific position
+--- Cached: returns cached result if position unchanged and corners haven't changed
 ---@param pos number Spline position
 ---@return table|nil Corner definition
 function state.getCornerAt(pos)
+    -- Cache check: if same position and corners reference unchanged
+    if _lastCornerPos == pos and _lastCornerCornersRef == state.trackCorners then
+        return _lastCornerResult
+    end
+
+    local result = nil
     for _, c in ipairs(state.trackCorners) do
         -- Skip corners with nil positions (placeholders for numbering)
         if c.startPos and c.endPos then
@@ -1525,11 +1537,18 @@ function state.getCornerAt(pos)
                 inside = pos >= c.startPos or pos <= c.endPos
             end
             if inside then
-                return c
+                result = c
+                break
             end
         end
     end
-    return nil
+
+    -- Cache the result
+    _lastCornerPos = pos
+    _lastCornerResult = result
+    _lastCornerCornersRef = state.trackCorners
+
+    return result
 end
 
 --- Check if position is in a corner
@@ -1552,15 +1571,92 @@ function state.getCornerInfo(num)
     return nil
 end
 
+-- Corners for positions cache (memoization)
+local _cornersPosCache = nil
+local _cornersPosPosCount = nil
+local _cornersPosPosFirst = nil
+local _cornersPosPosLast = nil
+local _cornersPosCorners = nil
+
 --- Get corner numbers for array of positions
+--- Cached: returns cached result if positions content and corners unchanged
 ---@param positions table Array of spline positions
 ---@return table Array of corner numbers (0 for not in corner)
 function state.getCornersForPositions(positions)
     if not positions or #positions < 1 then return nil end
-    local result = {}
-    for i = 1, #positions do
-        result[i] = state.isInCorner(positions[i])
+
+    -- Cache check: verify positions content by checking length and bounds
+    local posCount = #positions
+    local posFirst = positions[1]
+    local posLast = positions[posCount]
+
+    if _cornersPosCache
+        and _cornersPosCorners == state.trackCorners
+        and _cornersPosPosCount == posCount
+        and _cornersPosPosFirst == posFirst
+        and _cornersPosPosLast == posLast then
+        return _cornersPosCache
     end
+
+    local result = {}
+    -- Optimize: instead of calling isInCorner (which calls getCornerAt) for each,
+    -- do a direct loop with cached corner result
+    local lastCorner = nil
+    local lastCornerStart = nil
+    local lastCornerEnd = nil
+    local lastCornerNum = 0
+
+    for i = 1, posCount do
+        local pos = positions[i]
+        local cornerNum = 0
+
+        -- Quick check if still in last corner (common for sequential positions)
+        if lastCorner then
+            local inside
+            if lastCornerStart <= lastCornerEnd then
+                inside = pos >= lastCornerStart and pos <= lastCornerEnd
+            else
+                inside = pos >= lastCornerStart or pos <= lastCornerEnd
+            end
+            if inside then
+                cornerNum = lastCornerNum
+            else
+                lastCorner = nil
+            end
+        end
+
+        -- If not in cached corner, search all corners
+        if cornerNum == 0 then
+            for _, c in ipairs(state.trackCorners) do
+                if c.startPos and c.endPos then
+                    local inside
+                    if c.startPos <= c.endPos then
+                        inside = pos >= c.startPos and pos <= c.endPos
+                    else
+                        inside = pos >= c.startPos or pos <= c.endPos
+                    end
+                    if inside then
+                        cornerNum = c.number
+                        lastCorner = c
+                        lastCornerStart = c.startPos
+                        lastCornerEnd = c.endPos
+                        lastCornerNum = c.number
+                        break
+                    end
+                end
+            end
+        end
+
+        result[i] = cornerNum
+    end
+
+    -- Cache the result
+    _cornersPosCache = result
+    _cornersPosPosCount = posCount
+    _cornersPosPosFirst = posFirst
+    _cornersPosPosLast = posLast
+    _cornersPosCorners = state.trackCorners
+
     return result
 end
 
