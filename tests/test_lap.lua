@@ -1087,3 +1087,179 @@ test("serialize produces compact output for sparse fuel", function()
     assert_near(restored:fuelAt(0.25), 50, 0.1, "fuel at 0.25 should be ~50")
     assert_near(restored:fuelAt(0.75), 48, 0.1, "fuel at 0.75 should be ~48")
 end)
+
+
+--------------------------------------------------------------------------------
+-- Memoization / Caching Behavior Tests
+-- These tests verify that cached data is correctly invalidated when lap data changes
+--------------------------------------------------------------------------------
+
+suite("lap.memoization")
+
+test("getTracesAt returns fresh data after prune, not stale cache", function()
+    local l = lap.new("track", "car")
+    l.completed = true  -- Enable caching
+
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.speed = { 100, 110, 120, 130, 140 }
+    l.throttle = { 0.5, 0.6, 0.7, 0.8, 0.9 }
+    l.brake = { 0, 10, 20, 30, 40 }
+    l.brake_r = { 0, 10, 20, 30, 40 }
+    l.clutch = { 0, 0, 0, 0, 0 }
+    l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
+    l.gear = { 3, 3, 4, 4, 5 }
+    l.times = { 1, 2, 3, 4, 5 }
+    l.fuel = {}
+    l.gforce = {}
+    l.flags = { 0, 0, 0, 0, 0 }
+
+    -- Get traces at all positions - this populates the cache
+    local positions = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    local traces1 = l:getTracesAt(positions)
+    assert_equal(traces1.speed[5], 140, "Last speed should be 140")
+    assert_equal(traces1.gear[5], 5, "Last gear should be 5")
+
+    -- Prune the lap (simulating TimeShift rewind)
+    l:pruneToPosition(0.25)
+
+    -- Get traces again with fewer positions
+    -- BUG: Without cache invalidation, this would return stale cached data
+    local traces2 = l:getTracesAt({ 0.1, 0.2 })
+    assert_equal(#traces2.speed, 2, "Should only have 2 speed values after prune")
+
+    -- Verify the values are correct for the pruned data
+    assert_equal(traces2.speed[1], 100, "First speed should still be 100")
+    assert_equal(traces2.speed[2], 110, "Second speed should be 110")
+end)
+
+test("clone creates independent lap without inherited cache", function()
+    local original = lap.new("track", "car")
+    original.completed = true
+
+    original.pos = { 0.1, 0.2, 0.3 }
+    original.speed = { 100, 110, 120 }
+    original.throttle = { 0.5, 0.6, 0.7 }
+    original.brake = { 10, 20, 30 }
+    original.brake_r = { 10, 20, 30 }
+    original.clutch = { 0, 0, 0 }
+    original.steering = { 0.5, 0.5, 0.5 }
+    original.gear = { 3, 3, 3 }
+    original.times = { 1, 2, 3 }
+    original.fuel = {}
+    original.gforce = {}
+    original.flags = { 0, 0, 0 }
+
+    -- Populate cache on original
+    local traces1 = original:getTracesAt({ 0.1, 0.2, 0.3 })
+    assert_not_nil(original._tracesCache, "Original should have cache")
+
+    -- Clone the lap
+    local cloned = original:clone()
+
+    -- BUG: If clone copies cache, cloned lap would have stale data
+    assert_nil(cloned._tracesCache, "Cloned lap should NOT inherit cache")
+    assert_nil(cloned._lastSearchIdx, "Cloned lap should NOT inherit search index")
+
+    -- Modify cloned lap data
+    cloned.speed[1] = 200
+
+    -- Get traces from cloned - should reflect modified data
+    local traces2 = cloned:getTracesAt({ 0.1 })
+    assert_equal(traces2.speed[1], 200, "Cloned traces should reflect modified speed")
+
+    -- Original should be unaffected
+    local traces3 = original:getTracesAt({ 0.1 })
+    assert_equal(traces3.speed[1], 100, "Original traces should be unchanged")
+end)
+
+test("getTracesAt cache validates by position content, not reference", function()
+    local l = lap.new("track", "car")
+    l.completed = true
+
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.speed = { 100, 110, 120, 130, 140 }
+    l.throttle = { 0.5, 0.6, 0.7, 0.8, 0.9 }
+    l.brake = { 0, 10, 20, 30, 40 }
+    l.brake_r = { 0, 10, 20, 30, 40 }
+    l.clutch = { 0, 0, 0, 0, 0 }
+    l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
+    l.gear = { 3, 3, 4, 4, 5 }
+    l.times = { 1, 2, 3, 4, 5 }
+    l.fuel = {}
+    l.gforce = {}
+    l.flags = { 0, 0, 0, 0, 0 }
+
+    -- Use a mutable positions array (like the real trace window does)
+    local positions = { 0.1, 0.2, 0.3 }
+    local traces1 = l:getTracesAt(positions)
+    assert_equal(#traces1.speed, 3)
+
+    -- Modify the positions array in place (simulating trace window scrolling)
+    positions[1] = 0.2
+    positions[2] = 0.3
+    positions[3] = 0.4
+
+    -- BUG: If cache only checks array reference, we'd get stale data
+    local traces2 = l:getTracesAt(positions)
+
+    -- Verify we get correct data for new positions
+    assert_equal(#traces2.speed, 3)
+    -- Speed at pos 0.4 should be 130, not 100 (which was at pos 0.1)
+    assert_equal(traces2.speed[3], 130, "Should get speed at new position 0.4")
+end)
+
+test("sequential position optimization works correctly", function()
+    local l = lap.new("track", "car")
+
+    -- Create a lap with many samples
+    l.pos = {}
+    l.speed = {}
+    for i = 1, 100 do
+        l.pos[i] = i / 100
+        l.speed[i] = 100 + i
+    end
+
+    -- Access positions sequentially (like trace rendering does)
+    local speeds = {}
+    for i = 1, 50 do
+        speeds[i] = l:speedAt(i / 100)
+    end
+
+    -- Verify sequential access gives correct results
+    assert_equal(speeds[1], 101, "Speed at pos 0.01 should be 101")
+    assert_equal(speeds[25], 125, "Speed at pos 0.25 should be 125")
+    assert_equal(speeds[50], 150, "Speed at pos 0.50 should be 150")
+
+    -- Jump backwards and access (tests that hint doesn't cause incorrect results)
+    local speedAtStart = l:speedAt(0.05)
+    assert_equal(speedAtStart, 105, "Speed at pos 0.05 after jump should be 105")
+
+    -- Access out of order
+    local outOfOrder = {
+        l:speedAt(0.80),
+        l:speedAt(0.20),
+        l:speedAt(0.60),
+    }
+    assert_equal(outOfOrder[1], 180, "Speed at 0.80")
+    assert_equal(outOfOrder[2], 120, "Speed at 0.20")
+    assert_equal(outOfOrder[3], 160, "Speed at 0.60")
+end)
+
+test("maxBrakeBars cache invalidated on prune", function()
+    local l = lap.new("track", "car")
+    l.completed = true
+
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.brake = { 10, 50, 90, 40, 20 }
+
+    -- Get max brake - should be 90
+    local max1 = l:maxBrakeBars()
+    assert_equal(max1, 90, "Max brake should be 90")
+
+    -- Prune to remove the 90 bar sample
+    l:pruneToPosition(0.25)
+
+    -- BUG: Without cache invalidation, this would still return 90
+    local max2 = l:maxBrakeBars()
+    assert_equal(max2, 80, "Max brake after prune should be 80 (minimum)")
+end)

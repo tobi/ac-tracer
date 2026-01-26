@@ -168,3 +168,85 @@ test("ghost accessors read from comparison lap", function()
         assert_equal(apexSpeed, 100)
     end)
 end)
+
+test("getCornerAt returns correct corner after corners change", function()
+    withState(function(state)
+        state.trackCorners = {
+            { number = 1, startPos = 0.1, endPos = 0.2, name = "T1" },
+            { number = 2, startPos = 0.3, endPos = 0.4, name = "T2" },
+        }
+
+        -- Query corner at position 0.15 - should be in T1
+        local corner1 = state.getCornerAt(0.15)
+        assert_not_nil(corner1)
+        assert_equal(corner1.name, "T1")
+
+        -- Modify corners (simulate user editing)
+        state.trackCorners = {
+            { number = 1, startPos = 0.5, endPos = 0.6, name = "T1-Moved" },
+        }
+
+        -- BUG: Without cache invalidation on corners change, this could return stale T1
+        local corner2 = state.getCornerAt(0.15)
+        assert_nil(corner2, "Position 0.15 should not be in any corner after move")
+
+        local corner3 = state.getCornerAt(0.55)
+        assert_not_nil(corner3)
+        assert_equal(corner3.name, "T1-Moved")
+    end)
+end)
+
+test("getCornersForPositions updates when positions change", function()
+    withState(function(state)
+        state.trackCorners = {
+            { number = 1, startPos = 0.1, endPos = 0.2, name = "T1" },
+            { number = 2, startPos = 0.5, endPos = 0.6, name = "T2" },
+        }
+
+        -- Use a mutable array (like trace window does)
+        local positions = { 0.15, 0.25, 0.55 }
+        local corners1 = state.getCornersForPositions(positions)
+
+        assert_equal(corners1[1], 1, "Pos 0.15 should be in corner 1")
+        assert_equal(corners1[2], 0, "Pos 0.25 should not be in corner")
+        assert_equal(corners1[3], 2, "Pos 0.55 should be in corner 2")
+
+        -- Modify positions array in place
+        positions[1] = 0.55
+        positions[2] = 0.15
+        positions[3] = 0.35
+
+        -- BUG: If cache only checks reference, we'd get stale mapping
+        local corners2 = state.getCornersForPositions(positions)
+
+        assert_equal(corners2[1], 2, "Pos 0.55 should be in corner 2")
+        assert_equal(corners2[2], 1, "Pos 0.15 should be in corner 1")
+        assert_equal(corners2[3], 0, "Pos 0.35 should not be in corner")
+    end)
+end)
+
+test("getCornersForPositions updates when corners definition changes", function()
+    withState(function(state)
+        state.trackCorners = {
+            { number = 1, startPos = 0.1, endPos = 0.2, name = "T1" },
+        }
+
+        local positions = { 0.15, 0.55 }
+        local corners1 = state.getCornersForPositions(positions)
+
+        assert_equal(corners1[1], 1, "Pos 0.15 should be in corner 1")
+        assert_equal(corners1[2], 0, "Pos 0.55 should not be in corner")
+
+        -- Add a new corner
+        state.trackCorners = {
+            { number = 1, startPos = 0.1, endPos = 0.2, name = "T1" },
+            { number = 2, startPos = 0.5, endPos = 0.6, name = "T2" },
+        }
+
+        -- BUG: If cache doesn't check corners reference, we'd miss the new corner
+        local corners2 = state.getCornersForPositions(positions)
+
+        assert_equal(corners2[1], 1, "Pos 0.15 still in corner 1")
+        assert_equal(corners2[2], 2, "Pos 0.55 should now be in corner 2")
+    end)
+end)
