@@ -144,6 +144,44 @@ _G.mock = mock
 -- Verifies all Lua files compile without errors (catches typos, missing end, etc.)
 --------------------------------------------------------------------------------
 
+-- Find all .lua files in a directory (cross-platform)
+local function findLuaFiles(dir, exclude_patterns)
+    local files = {}
+    exclude_patterns = exclude_patterns or {}
+
+    local function shouldExclude(path)
+        for _, pattern in ipairs(exclude_patterns) do
+            if path:match(pattern) then return true end
+        end
+        return false
+    end
+
+    -- Try Unix find first, fall back to Windows dir
+    local cmd
+    if package.config:sub(1,1) == '/' then
+        -- Unix/macOS
+        cmd = string.format('find "%s" -name "*.lua" -type f 2>/dev/null', dir)
+    else
+        -- Windows
+        cmd = string.format('dir /s /b "%s\\*.lua" 2>nul', dir)
+    end
+
+    local handle = io.popen(cmd)
+    if handle then
+        for line in handle:lines() do
+            -- Normalize path separators
+            local path = line:gsub("\\", "/")
+            if not shouldExclude(path) then
+                table.insert(files, path)
+            end
+        end
+        handle:close()
+    end
+
+    table.sort(files)
+    return files
+end
+
 local function checkSyntax(files)
     local errors = {}
     for _, file in ipairs(files) do
@@ -158,37 +196,39 @@ end
 local function runSyntaxChecks()
     print("\n=== Syntax Check ===")
 
-    -- All source files to check (excluding tests and reference docs)
-    local source_files = {
-        -- Main entry point
-        "ac-tracer.lua",
-        -- Core modules
-        "lib/init.lua",
-        "lib/core/state.lua",
-        "lib/core/settings.lua",
-        "lib/core/scoring.lua",
-        "lib/core/history.lua",
-        "lib/core/files.lua",
-        "lib/core/brake.lua",
-        -- Lap module
-        "lib/lap/init.lua",
-        "lib/lap/csv_parser.lua",
-        "lib/lap/csv_export.lua",
-        -- UI modules
-        "lib/ui/theme.lua",
-        "lib/ui/utils.lua",
-        "lib/ui/wedge.lua",
-        "lib/ui/markdown.lua",
-        -- Window modules
-        "lib/windows/main.lua",
-        "lib/windows/corner.lua",
-        "lib/windows/corner_analysis.lua",
-        "lib/windows/lap_telemetry.lua",
-        "lib/windows/lap_picker.lua",
-        "lib/windows/delta_bar.lua",
-        -- Sound module
-        "lib/sound/notification.lua",
+    -- Find all source files, excluding tests and reference docs
+    local exclude_patterns = {
+        "^tests/",           -- Test files (checked separately)
+        "%.claude/",         -- Claude skills/reference
+        "/reference/",       -- Reference documentation
     }
+
+    -- Get all .lua files from lib/ and root
+    local source_files = {}
+
+    -- Add root-level .lua files
+    local root_files = findLuaFiles(".", {
+        "^%./tests/",
+        "^%./%.claude/",
+        "^%./lib/",  -- Will add lib separately with recursion
+    })
+    for _, f in ipairs(root_files) do
+        -- Only include .lua files directly in root (not subdirs)
+        if f:match("^%./[^/]+%.lua$") then
+            table.insert(source_files, f)
+        end
+    end
+
+    -- Add lib/ files recursively
+    local lib_files = findLuaFiles("lib", {})
+    for _, f in ipairs(lib_files) do
+        table.insert(source_files, f)
+    end
+
+    if #source_files == 0 then
+        print("  [WARN] No source files found for syntax check")
+        return true
+    end
 
     local errors = checkSyntax(source_files)
 
