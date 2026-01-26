@@ -1,7 +1,2 @@
-[tools]
-opencode = "latest"
-luajit = "latest"
-
 [tasks.test]
-description = "Run unit tests"
 run = "luajit tests/test_runner.lua"

@@ -675,14 +675,20 @@ All modules use `state` and `lap` directly via `require()`. No init functions, n
 
 ### Running Tests Locally
 
-Tests use LuaJIT via nix-shell (CSP uses LuaJIT internally):
+Tests use LuaJIT via mise (CSP uses LuaJIT internally):
 
 ```bash
+# Install tools (one-time setup)
+mise install
+
 # Run all tests
-nix-shell -p luajit --command "luajit tests/test_runner.lua"
+mise run test
+
+# Or directly
+luajit tests/test_runner.lua
 
 # Check syntax of specific files
-nix-shell -p luajit --command "luajit -bl state.lua > /dev/null && echo OK"
+luajit -bl state.lua > /dev/null && echo OK
 ```
 
 Windows (PowerShell or CMD):
