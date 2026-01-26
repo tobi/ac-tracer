@@ -1961,6 +1961,11 @@ function state.loadCheckpoint()
     -- Reset overlap tracking
     lap.resetOverlapTracking()
 
+    -- Invalidate position-based caches (position has changed)
+    _lastCornerPos = nil
+    _lastCornerResult = nil
+    _cornersPosCache = nil
+
     -- Notify registered callbacks (corner_analysis, etc.)
     notifyCheckpointCallbacks(state.checkpoint.pos)
 

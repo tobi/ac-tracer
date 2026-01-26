@@ -529,10 +529,45 @@ test("removes samples after position", function()
     l.flags = { 0, 0, 0, 0, 0 }
     
     local removed = l:pruneToPosition(0.25)
-    
+
     assert_equal(removed, 3, "Should remove 3 samples")
     assert_equal(l:length(), 2)
     assert_equal(l.pos[2], 0.2)
+end)
+
+test("pruneToPosition invalidates caches", function()
+    local l = lap.new("track", "car")
+    l.completed = true  -- Enable caching
+
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    l.speed = { 100, 110, 120, 130, 140 }
+    l.throttle = { 0.5, 0.6, 0.7, 0.8, 0.9 }
+    l.brake = { 0, 10, 20, 30, 40 }
+    l.brake_r = { 0, 10, 20, 30, 40 }
+    l.clutch = { 0, 0, 0, 0, 0 }
+    l.steering = { 0.5, 0.5, 0.5, 0.5, 0.5 }
+    l.gear = { 3, 3, 3, 3, 3 }
+    l.times = { 1, 2, 3, 4, 5 }
+    l.fuel = { 50, 50, 50, 50, 50 }
+    l.gforce = {}
+    l.flags = { 0, 0, 0, 0, 0 }
+
+    -- Get traces to populate cache
+    local positions = { 0.1, 0.2, 0.3, 0.4, 0.5 }
+    local traces1 = l:getTracesAt(positions)
+    assert_equal(#traces1.speed, 5)
+
+    -- Cache should be populated
+    assert_not_nil(l._tracesCache)
+
+    -- Prune should invalidate cache
+    l:pruneToPosition(0.25)
+    assert_nil(l._tracesCache)
+    assert_nil(l._lastSearchIdx)
+
+    -- New traces should reflect pruned data
+    local traces2 = l:getTracesAt({ 0.1, 0.2 })
+    assert_equal(#traces2.speed, 2)
 end)
 
 

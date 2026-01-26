@@ -521,6 +521,15 @@ function lap:pruneToPosition(targetPos)
         end
     end
 
+    -- Invalidate memoization caches (data has changed)
+    self._tracesCache = nil
+    self._tracesCacheMaxBar = nil
+    self._tracesCachePosCount = nil
+    self._tracesCachePosFirst = nil
+    self._tracesCachePosLast = nil
+    self._lastSearchIdx = nil
+    self._maxBrakeBar = nil  -- Also clear cached max brake
+
     return samplesToRemove
 end
 
