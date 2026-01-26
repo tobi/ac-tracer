@@ -139,6 +139,81 @@ _G.assert_type = tests.assertType
 _G.assert_table_length = tests.assertTableLength
 _G.mock = mock
 
+--------------------------------------------------------------------------------
+-- Syntax Check Phase
+-- Verifies all Lua files compile without errors (catches typos, missing end, etc.)
+--------------------------------------------------------------------------------
+
+local function checkSyntax(files)
+    local errors = {}
+    for _, file in ipairs(files) do
+        local fn, err = loadfile(file)
+        if not fn then
+            table.insert(errors, { file = file, error = err })
+        end
+    end
+    return errors
+end
+
+local function runSyntaxChecks()
+    print("\n=== Syntax Check ===")
+
+    -- All source files to check (excluding tests and reference docs)
+    local source_files = {
+        -- Main entry point
+        "ac-tracer.lua",
+        -- Core modules
+        "lib/init.lua",
+        "lib/core/state.lua",
+        "lib/core/settings.lua",
+        "lib/core/scoring.lua",
+        "lib/core/history.lua",
+        "lib/core/files.lua",
+        "lib/core/brake.lua",
+        -- Lap module
+        "lib/lap/init.lua",
+        "lib/lap/csv_parser.lua",
+        "lib/lap/csv_export.lua",
+        -- UI modules
+        "lib/ui/theme.lua",
+        "lib/ui/utils.lua",
+        "lib/ui/wedge.lua",
+        "lib/ui/markdown.lua",
+        -- Window modules
+        "lib/windows/main.lua",
+        "lib/windows/corner.lua",
+        "lib/windows/corner_analysis.lua",
+        "lib/windows/lap_telemetry.lua",
+        "lib/windows/lap_picker.lua",
+        "lib/windows/delta_bar.lua",
+        -- Sound module
+        "lib/sound/notification.lua",
+    }
+
+    local errors = checkSyntax(source_files)
+
+    if #errors == 0 then
+        print(string.format("  [PASS] All %d source files have valid syntax", #source_files))
+        tests.passed = tests.passed + 1
+        return true
+    else
+        for _, err in ipairs(errors) do
+            print(string.format("  [FAIL] %s", err.file))
+            print(string.format("         %s", err.error))
+            tests.failed = tests.failed + 1
+            table.insert(tests.errors, { name = "Syntax: " .. err.file, error = err.error })
+        end
+        return false
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Run Tests
+--------------------------------------------------------------------------------
+
+-- Run syntax checks first
+runSyntaxChecks()
+
 -- Run test files
 local test_files = { ... }
 if #test_files == 0 then
