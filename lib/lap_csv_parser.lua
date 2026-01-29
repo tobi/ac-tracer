@@ -1,4 +1,4 @@
--- csv_parser.lua - CSV import parser for lap telemetry
+-- lap_csv_parser.lua - CSV import parser for lap telemetry
 -- Supports MoTeC CSV format (AC sim exports and real car exports)
 
 local csv_parser = {}
@@ -538,7 +538,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                             local pressureR = tonumber(fields.brakePressureR) or 0
                             brakeBarR = pressureR * config.brakePressureFactor
                         end
-                        
+
                         -- Clamp brake to >= 0 (no upper limit - real cars can have 100+ bar)
                         brakeBar = math.max(0, brakeBar)
                         brakeBarR = math.max(0, brakeBarR)
@@ -551,7 +551,7 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         end
                         -- Clamp throttle to 0-1 (real car data may have negative values during engine braking)
                         throttle = math.max(0, math.min(1, throttle))
-                        
+
                         if clutch > 1 then clutch = clutch / 100 end
                         clutch = math.max(0, math.min(1, clutch))
 
@@ -771,7 +771,7 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedT
     end
 
     if useBrakePressure then
-        ac.log("csv_parser: Using front brake pressure (unit: " .. (brakePressureUnit or "bar") .. 
+        ac.log("csv_parser: Using front brake pressure (unit: " .. (brakePressureUnit or "bar") ..
             ", factor to bar: " .. brakePressureFactor .. ")")
         if useBrakePressureR then
             ac.log("csv_parser: Using rear brake pressure")

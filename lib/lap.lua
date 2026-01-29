@@ -6,7 +6,7 @@ lap.__index = lap
 
 -- Extended brake module for better brake pressure data
 local extended_brake = require('lib.core.brake')
-local csv_parser = require('lib.lap.csv_parser')
+local csv_parser = require('lib.lap_csv_parser')
 
 -- Constants
 lap.SAMPLE_RATE = 30  -- Hz (exported for other modules)
@@ -254,24 +254,24 @@ end
 ---@return number flagBits Bitmask of lap.FLAGS
 function lap.detectFlags(car, overlapState)
     local flagBits = 0
-    
+
     -- TC active
     if car.tractionControlInAction then
         flagBits = bit.bor(flagBits, lap.FLAGS.TC_ACTIVE)
     end
-    
+
     -- Rev limiter
     if car.isEngineLimiterOn then
         flagBits = bit.bor(flagBits, lap.FLAGS.LIMITER_HIT)
     end
-    
+
     -- Wheel slip and lockup detection using slipRatio
     -- slipRatio: positive = wheel spinning faster than road (wheelspin/traction loss)
     --            negative = wheel spinning slower than road (braking lockup)
     --            -1 = completely locked, 0 = matching road speed
     if car.wheels then
         local hasWheelspin = false
-        
+
         for i = 0, 3 do
             local wheel = car.wheels[i]
             if wheel then
@@ -282,11 +282,11 @@ function lap.detectFlags(car, overlapState)
                 end
             end
         end
-        
+
         if hasWheelspin then
             flagBits = bit.bor(flagBits, lap.FLAGS.WHEEL_SLIP)
         end
-        
+
         -- Lockup detection (only at speed, using slipRatio)
         if car.speedKmh > LOCKUP_SPEED_MIN then
             local function isLocked(wheel)
@@ -295,20 +295,20 @@ function lap.detectFlags(car, overlapState)
                 local slipRatio = wheel.slipRatio or 0
                 return slipRatio < LOCKUP_THRESHOLD
             end
-            
+
             if isLocked(car.wheels[0]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FL) end
             if isLocked(car.wheels[1]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_FR) end
             if isLocked(car.wheels[2]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RL) end
             if isLocked(car.wheels[3]) then flagBits = bit.bor(flagBits, lap.FLAGS.LOCKUP_RR) end
         end
     end
-    
+
     -- Overlap detection (throttle AND brake pressed simultaneously)
     if overlapState then
         local currentTime = car.lapTimeMs / 1000
         local throttle = car.gas
         local brakeBar = extended_brake.getBrakePressureBar(car)
-        
+
         if throttle > OVERLAP_THROTTLE_THRESHOLD and brakeBar > OVERLAP_BRAKE_THRESHOLD_BAR then
             if not overlapState.startTime then
                 overlapState.startTime = currentTime
@@ -319,12 +319,12 @@ function lap.detectFlags(car, overlapState)
             overlapState.startTime = nil
         end
     end
-    
+
     -- Offtrack detection (2+ wheels off track)
     if car.wheelsOutside and car.wheelsOutside >= 2 then
         flagBits = bit.bor(flagBits, lap.FLAGS.OFFTRACK)
     end
-    
+
     return flagBits
 end
 
@@ -376,7 +376,7 @@ function lap:addSample(car, timeOffsetMs)
     local overlapState = { startTime = overlapStartTime }
     local flagBits = lap.detectFlags(car, overlapState)
     overlapStartTime = overlapState.startTime  -- Sync state back
-    
+
     table.insert(self.flags, flagBits)
 end
 
@@ -404,24 +404,24 @@ end
 function lap:maxBrakeBars()
     -- Return cached value if available
     if self._maxBrakeBar then return self._maxBrakeBar end
-    
+
     if self:isEmpty() or not self.brake then return 80 end
-    
+
     local maxBar = 0
     for i = 1, #self.brake do
         if self.brake[i] > maxBar then
             maxBar = self.brake[i]
         end
     end
-    
+
     -- Minimum of 80 bar for sensible chart scaling (race cars use 80-120+ bar)
     maxBar = math.max(maxBar, 80)
-    
+
     -- Cache only for completed laps (still recording laps may get higher values)
     if self.completed then
         self._maxBrakeBar = maxBar
     end
-    
+
     return maxBar
 end
 
@@ -436,10 +436,10 @@ function lap:pruneToPosition(targetPos)
     -- Find the last sample that should be kept
     -- We need to handle wrap-around: if lap crosses 0 (e.g., 0.98, 0.99, 0.01, 0.02)
     -- and we rewind to 0.95, we need to prune everything after position wrapped
-    
+
     local pruneIdx = nil
     local n = #self.pos
-    
+
     -- First, check if the lap data wraps around (crosses start/finish)
     local hasWrapAround = false
     local wrapIdx = nil
@@ -450,7 +450,7 @@ function lap:pruneToPosition(targetPos)
             break
         end
     end
-    
+
     if hasWrapAround and wrapIdx then
         -- Lap wraps around at wrapIdx
         if targetPos > 0.5 then
@@ -612,9 +612,9 @@ end
 function lap:getTimeAtPos(targetPos)
     local lo, hi = findIndicesAtPos(self.pos, targetPos)
     if not lo then return nil end
-    
+
     local p1, p2 = self.pos[lo], self.pos[hi]
-    
+
     -- If we have actual time data, use it
     if self.times and #self.times >= hi then
         local t1, t2 = self.times[lo], self.times[hi]
@@ -622,12 +622,12 @@ function lap:getTimeAtPos(targetPos)
         local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
         return t1 + (t2 - t1) * t
     end
-    
+
     -- Fallback: derive time from sample index (for in-game recorded laps)
     if p1 == p2 then
         return (lo - 1) / lap.SAMPLE_RATE
     end
-    
+
     local t = math.clamp((targetPos - p1) / (p2 - p1), 0, 1)
     local index = lo + t * (hi - lo)
     return (index - 1) / lap.SAMPLE_RATE
@@ -674,12 +674,12 @@ end
 ---@return number Delta in seconds (positive = slower than reference)
 function lap:getDeltaVs(refLap, currentPos)
     if not refLap then return 0 end
-    
+
     local currentTime = self:getTimeAtPos(currentPos)
     local refTime = refLap:getTimeAtPos(currentPos)
-    
+
     if not currentTime or not refTime then return 0 end
-    
+
     return currentTime - refTime
 end
 
@@ -745,7 +745,7 @@ function lap:gearAt(pos) return interpolateAt(self, self.gear, pos) end
 --- Get fuel at position (liters) - sparse field
 ---@param pos number Spline position
 ---@return number|nil
-function lap:fuelAt(pos) 
+function lap:fuelAt(pos)
     -- Fuel is sparse, try dense first then fall back to sparse
     local dense = interpolateAt(self, self.fuel, pos)
     if dense then return dense end
@@ -1397,11 +1397,11 @@ end
 ---@return table|nil Lap instance
 function lap.deserialize(data)
     if not data or data == '' then return nil end
-    
-    local ok, parsed = pcall(function() 
+
+    local ok, parsed = pcall(function()
         return type(data) == 'string' and stringify.parse(data) or data
     end)
-    
+
     if not ok or not parsed or type(parsed) ~= 'table' then return nil end
     local l = setmetatable(parsed, lap)
     if not l.gforce then l.gforce = {} end
@@ -1441,7 +1441,7 @@ end
 ---@return table New lap instance with copied data
 function lap:clone()
     local l = lap.new(self.track, self.car, self.sessionId)
-    
+
     -- Copy metadata
     l.completed = self.completed
     l.valid = self.valid
@@ -1449,7 +1449,7 @@ function lap:clone()
     l.fuelLeftAtStart = self.fuelLeftAtStart
     l.lapNumberInSession = self.lapNumberInSession
     l.csvSource = self.csvSource
-    
+
     -- Deep copy telemetry arrays
     l.throttle = copyArray(self.throttle)
     l.brake = copyArray(self.brake)
@@ -1462,7 +1462,7 @@ function lap:clone()
     l.times = copyArray(self.times)
     l.fuel = copyArray(self.fuel)
     l.flags = copyArray(self.flags)
-    
+
     -- Deep copy gforce vectors
     l.gforce = {}
     if self.gforce then
@@ -1473,10 +1473,10 @@ function lap:clone()
             end
         end
     end
-    
+
     -- Deep copy sparse channels
     l.sparse = copySparse(self.sparse)
-    
+
     return l
 end
 
@@ -1488,14 +1488,14 @@ end
 ---@return boolean True if lap covers from ~0% to ~99% of track
 function lap:isComplete()
     if self:isEmpty() or #self.pos < 10 then return false end
-    
+
     local minPos, maxPos = 1, 0
     for i = 1, #self.pos do
         local p = self.pos[i]
         if p < minPos then minPos = p end
         if p > maxPos then maxPos = p end
     end
-    
+
     return minPos < 0.05 and maxPos > 0.95
 end
 

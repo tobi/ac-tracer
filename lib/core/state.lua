@@ -5,7 +5,7 @@ local lap = require('lib.lap')
 local settings = require('lib.core.settings')
 local history_storage = require('lib.core.history')
 local notification = require('lib.sound.notification')
-local csv_export = require('lib.lap.csv_export')
+local csv_export = require('lib.lap_csv_export')
 local file_utils = require('lib.core.files')
 
 local state = {}

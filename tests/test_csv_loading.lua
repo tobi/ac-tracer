@@ -450,7 +450,7 @@ suite("CSV Parser Unit Conversions")
 
 test("m/s² to G conversion factor is correct", function()
     -- 1G = 9.81 m/s², so 1 m/s² = 1/9.81 G ≈ 0.102 G
-    local csv_parser = require('lib.lap.csv_parser')
+    local csv_parser = require('lib.lap_csv_parser')
 
     -- Test the conversion factor if accessible
     -- 9.81 m/s² should equal 1.0 G
