@@ -321,7 +321,7 @@ local function analyzeTractionControl(currentLap, data)
 
     -- Convert samples to approximate duration (using lap sample rate)
     local tcDuration = tcCount / lap.SAMPLE_RATE
-    if tcDuration < 1.0 then return nil end  -- Only warn for excessive TC (> 1 second)
+    if tcDuration < 1.0 then return nil end  -- Only report if > 1 second
 
     return { text = string.format("TC active %.1fs", tcDuration), severity = "info" }
 end
@@ -513,7 +513,7 @@ end
 ---@param currentLap table Current lap data (optional, for flag-based analysis)
 ---@param refLap table Reference lap data (optional, for comparisons)
 ---@return table Array of note tables {text, severity} (may be empty)
-local function collectCornerNotes(data, currentLap, refLap)
+function corner_analysis.collectNotes(data, currentLap, refLap)
     local notes = {}
 
     -- Helper to add note if not nil
@@ -1667,7 +1667,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         end
 
         -- NOTES section (only shown if there are significant observations)
-        local notes = collectCornerNotes(displayData, liveLap, refLap)
+        local notes = corner_analysis.collectNotes(displayData, liveLap, refLap)
         local maxNotes = 3  -- Limit to prevent overflow
 
         -- Draw notes section if we have any valid notes

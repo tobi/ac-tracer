@@ -213,13 +213,23 @@ function notification.playCountdownSound(index, volume)
     -- Use preloaded countdown sounds if available
     local event = countdownEvents[index]
     if event then
+        -- Stop any currently playing instance before starting new one
+        event:stop()
         event.volume = 0.8 * (volume or 1.0)
         event:start()
+        
+        -- Stop after 0.2 seconds (sound duration, prevents looping)
+        setTimeout(function()
+            if event then
+                event:stop()
+            end
+        end, 0.2)
+        
         return true
     end
 
-    -- Fallback to pitched beeps
-    local pitches = { 0.8, 1.0, 1.3, 2.0 }
+    -- Fallback to pitched beeps (4 sounds with increasing pitch)
+    local pitches = { 0.7, 0.9, 1.2, 2.0 }
     return notification.playBeep(pitches[index], volume)
 end
 

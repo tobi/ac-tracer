@@ -279,6 +279,82 @@ test("daytona has csvSource metadata", function()
 end)
 
 --------------------------------------------------------------------------------
+-- Lilski Sebring CSV Tests (AC sim export with unquoted headers)
+--------------------------------------------------------------------------------
+
+suite("CSV Loading - Lilski Sebring")
+
+-- Track info: Lilski Sebring (sim track)
+-- This CSV has unquoted headers (no quotes around column names)
+-- which is a different format than the IER Daytona CSV
+local SEBRING_LENGTH = 6000  -- meters (approximate)
+local sebringLap = nil
+local sebringWarnings = nil
+
+test("loads lilski_sebring CSV with unquoted headers", function()
+    sebringLap, sebringWarnings = lap.fromCSV("tracks/lilski_sebring_ier_oreca_07_dev_1-54.414.csv", "lilski_sebring", "test_car", SEBRING_LENGTH)
+    assert_not_nil(sebringLap, "Should load lilski_sebring CSV")
+    assert_true(sebringLap:length() > 100, "Should have many samples, got " .. (sebringLap and sebringLap:length() or 0))
+end)
+
+test("sebring has gear data", function()
+    assert_not_nil(sebringLap, "Lap should be loaded")
+    assert_true(#sebringLap.gear > 0, "Should have gear array")
+    
+    -- Check gear values are valid (2-6 for LMP car)
+    local minGear, maxGear = 99, 0
+    for i = 1, #sebringLap.gear do
+        local g = sebringLap.gear[i]
+        if g < minGear then minGear = g end
+        if g > maxGear then maxGear = g end
+    end
+    assert_true(minGear >= 1 and minGear <= 3, 
+        string.format("Min gear should be 1-3, got %d", minGear))
+    assert_true(maxGear >= 5 and maxGear <= 7, 
+        string.format("Max gear should be 5-7, got %d", maxGear))
+end)
+
+test("sebring has realistic lap time", function()
+    assert_not_nil(sebringLap, "Lap should be loaded")
+    local timeS = sebringLap.time / 1000
+    -- 1:54.414 = 114.414 seconds
+    assert_true(timeS >= 100 and timeS <= 130, 
+        string.format("Lap time should be 100-130s, got %.1fs", timeS))
+end)
+
+test("sebring throttle is 0-1 normalized", function()
+    assert_not_nil(sebringLap, "Lap should be loaded")
+    for i = 1, sebringLap:length() do
+        local t = sebringLap.throttle[i]
+        assert_true(t >= 0 and t <= 1.01,
+            string.format("Throttle at sample %d should be 0-1, got %.3f", i, t))
+    end
+end)
+
+test("sebring brake is in bar (non-negative)", function()
+    assert_not_nil(sebringLap, "Lap should be loaded")
+    local maxBrake = 0
+    for i = 1, sebringLap:length() do
+        local b = sebringLap.brake[i]
+        assert_true(b >= 0, string.format("Brake at sample %d should be >= 0 bar, got %.3f", i, b))
+        if b > maxBrake then maxBrake = b end
+    end
+    assert_true(maxBrake > 0, "Should have some braking")
+    assert_true(maxBrake < 200, string.format("Max brake should be < 200 bar, got %.1f", maxBrake))
+end)
+
+test("sebring gearAt accessor works", function()
+    assert_not_nil(sebringLap, "Lap should be loaded")
+    -- Check gear at various positions
+    for pos = 0.1, 0.9, 0.2 do
+        local gear = sebringLap:gearAt(pos)
+        assert_not_nil(gear, "Should get gear at pos " .. pos)
+        assert_true(gear >= 1 and gear <= 7,
+            string.format("Gear at pos %.1f should be 1-7, got %d", pos, gear))
+    end
+end)
+
+--------------------------------------------------------------------------------
 -- Sample Rate Normalization Tests
 --------------------------------------------------------------------------------
 

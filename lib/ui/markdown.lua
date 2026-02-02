@@ -491,23 +491,18 @@ function markdown.generate(currentLap, referenceLap)
                 end
             end
 
-            -- TC and lockup events (in-sim only)
-            if hasFlags then
-                -- TC event count
-                local tcCount = currentLap:countFlagInRange(corner.startPos, corner.endPos, lap.FLAGS.TC_ACTIVE)
-                if tcCount > 0 then
-                    add(string.format("- **TC activations:** %d samples (%.0fms)", tcCount, tcCount * 1000 / lap.SAMPLE_RATE))
-                end
-
-                -- Wheel lockups
-                local hasLockup, lockupWheels = currentLap:hasLockupInRange(corner.startPos, corner.endPos)
-                if hasLockup and lockupWheels then
-                    local wheels = {}
-                    if lockupWheels.fl then table.insert(wheels, "FL") end
-                    if lockupWheels.fr then table.insert(wheels, "FR") end
-                    if lockupWheels.rl then table.insert(wheels, "RL") end
-                    if lockupWheels.rr then table.insert(wheels, "RR") end
-                    add(string.format("- **Wheel lockups:** %s", table.concat(wheels, ", ")))
+            -- Corner notes (observations from analysis)
+            -- Uses the same analysis functions as the corner analytics window
+            local notes = corner_analysis.collectNotes(comparison, currentLap, referenceLap)
+            if notes and #notes > 0 then
+                add("")
+                add("**Notes:**")
+                for _, note in ipairs(notes) do
+                    if note and note.text then
+                        -- Prefix with severity indicator
+                        local prefix = note.severity == "error" and "⚠️" or "ℹ️"
+                        add(string.format("- %s %s", prefix, note.text))
+                    end
                 end
             end
 
@@ -549,9 +544,8 @@ function markdown.generate(currentLap, referenceLap)
     add("3. Minimum corner speeds vs reference - where am I leaving speed on the table?")
     add("4. Throttle pickup timing - am I waiting too long to get back on power?")
     add("5. Coast phase issues - excessive coast = lost time")
-    if hasFlags then
-        add("6. Lockups and TC events - are they causing time loss or are they acceptable?")
-    end
+    add("6. Corner notes - review observations for issues (lockups, TC, throttle overlap, steering, gear choice)")
+    add("7. Pressure and timing differences - brake pressure, throttle timing vs reference")
     addBlank()
     add("**Output:** Prioritized list of 2-3 actionable changes for the next stint.")
     add("Focus on biggest time gains first. Be specific: \"Brake 5m later into T3\" not \"brake later.\"")

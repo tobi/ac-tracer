@@ -686,8 +686,13 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedT
             end
         end
 
-        -- Find header row
-        if line:find('"Time"') and (line:find('"Lap Progression"') or line:find('"Distance"')) then
+        -- Find header row (supports both quoted and unquoted headers)
+        -- Check for quoted format: "Time" or unquoted format: Time,
+        local hasTime = line:find('"Time"') or line:match('^Time,') or line:match(',Time,')
+        local hasPos = line:find('"Lap Progression"') or line:find('"Distance"') or
+                       line:find(',Lap Progression,') or line:find(',Distance,') or
+                       line:match(',Lap Progression$') or line:match(',Distance$')
+        if hasTime and hasPos then
             indices, headers = parseHeader(line)
             headerLineNum = lineNum
             break

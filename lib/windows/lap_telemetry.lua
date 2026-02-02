@@ -20,7 +20,6 @@ local lastManualSelectLapCount = 0  -- Lap count when user last manually selecte
 local viewStartTime = 0  -- Start time of visible window (seconds)
 local viewDuration = 0   -- Duration of visible window (seconds, 0 = full lap)
 local cursorTime = nil   -- Cursor time position (nil = no cursor)
-local draggingCursor = false
 local panningView = false
 local panStartMouseX = 0
 local panStartTime = 0
@@ -1025,12 +1024,12 @@ local function drawValuePanel(panelX, panelY, panelW, panelH, selectedLap, refer
     ui.setCursor(vec2(panelX + 10, py))
     ui.pushFont(ui.Font.Small)
     ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text(" : Scrub")
+    ui.text("Scroll: Zoom")
     ui.popStyleColor()
     py = py + 15
     ui.setCursor(vec2(panelX + 10, py))
     ui.pushStyleColor(ui.StyleColor.Text, theme.text.muted)
-    ui.text("R-Click: Pan")
+    ui.text("L-Drag: Pan")
     ui.popStyleColor()
     ui.popFont()
 end
@@ -1406,40 +1405,23 @@ function lap_telemetry.draw(dt, context)
             cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
             cursorTime = math.clamp(cursorTime, startTime, endTime)
 
-            if ui.mouseClicked(ui.MouseButton.Right) then
-                -- Enable panning - if not zoomed, start with a zoom first
-                if viewDuration == 0 then
-                    viewDuration = lapTime * 0.5
-                    viewStartTime = math.max(0, cursorTime - viewDuration / 2)
-                end
+            if ui.mouseClicked(ui.MouseButton.Left) and not editMode and viewDuration > 0 then
+                -- Enable panning (only when zoomed in)
                 panningView = true
                 panStartMouseX = mousePos.x
                 panStartTime = viewStartTime
-            elseif ui.mouseClicked(ui.MouseButton.Left) and not editMode then
-                draggingCursor = true
             end
         end
 
-        -- Panning (right-click drag to pan the view)
+        -- Panning (left-click drag to pan the view)
         if panningView then
-            if ui.mouseDown(ui.MouseButton.Right) then
+            if ui.mouseDown(ui.MouseButton.Left) then
                 local deltaX = mousePos.x - panStartMouseX
                 local currentDuration = viewDuration > 0 and viewDuration or lapTime
                 local timeDelta = (deltaX / graphW) * currentDuration
                 viewStartTime = math.max(0, math.min(panStartTime - timeDelta, lapTime - viewDuration))
             else
                 panningView = false
-            end
-        end
-
-        -- Cursor dragging
-        if draggingCursor then
-            if ui.mouseDown(ui.MouseButton.Left) then
-                local mouseX = math.clamp(localMouseX - graphX, 0, graphW)
-                cursorTime = startTime + (mouseX / graphW) * (endTime - startTime)
-                cursorTime = math.clamp(cursorTime, startTime, endTime)
-            else
-                draggingCursor = false
             end
         end
 
@@ -1472,6 +1454,15 @@ function lap_telemetry.draw(dt, context)
                 -- Minimum zoom level
                 if viewDuration < 1 then viewDuration = 1 end
             end
+        end
+
+        -- Horizontal scroll for touchpad (pan left/right)
+        local wheelH = ui.mouseWheelH and ui.mouseWheelH() or 0
+        if wheelH ~= 0 and viewDuration > 0 and localMouseX >= graphX and localMouseX <= graphX + graphW and
+           localMouseY >= contentY and localMouseY <= contentY + contentH then
+            local scrollAmount = viewDuration * 0.15  -- Scroll 15% of visible duration
+            local timeDelta = wheelH > 0 and scrollAmount or -scrollAmount
+            viewStartTime = math.max(0, math.min(viewStartTime + timeDelta, lapTime - viewDuration))
         end
 
         local y = contentY

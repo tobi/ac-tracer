@@ -72,6 +72,12 @@ test("generate outputs expected sections", function()
                 refStartPos = 0.1,
                 refEndPos = 0.2,
             }
+        end,
+        collectNotes = function()
+            return {
+                { text = "5° more steering", severity = "info" },
+                { text = "front lockup", severity = "error" },
+            }
         end
     }
 
@@ -86,6 +92,10 @@ test("generate outputs expected sections", function()
     assert_true(output:find("## Corner Definitions") ~= nil)
     assert_true(output:find("## Lap Comparison") ~= nil)
     assert_true(output:find("### T1") ~= nil)
+    -- Notes section from collectNotes
+    assert_true(output:find("**Notes:**") ~= nil)
+    assert_true(output:find("5° more steering") ~= nil)
+    assert_true(output:find("front lockup") ~= nil)
 
     package.loaded['lib.core.state'] = originalState
     package.loaded['lib.windows.corner_analysis'] = originalCorner
@@ -105,7 +115,8 @@ test("copyToClipboard returns success and message", function()
     }
     package.loaded['lib.windows.corner_analysis'] = {
         analyzeCorner = function() return nil end,
-        compareCorners = function() return nil end
+        compareCorners = function() return nil end,
+        collectNotes = function() return {} end
     }
 
     ac.setClipboardText = function(text) end

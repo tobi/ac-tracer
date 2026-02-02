@@ -78,9 +78,9 @@ local brakeBeep = {
 }
 
 -- Countdown interval (seconds before brakepoint, using ref lap timing)
--- sound_1 at 2.25s, sound_2 at 1.5s, sound_3 at 0.75s, sound_4 at brakepoint
-local BEEP_INTERVAL = 0.75  -- 0.75s between each beep
-local BEEP_OFFSETS = { 2.25, 1.5, 0.75, 0 }  -- Time before brake point for each sound
+-- 4 sounds: sound_1 at 1.5s, sound_2 at 1.0s, sound_3 at 0.5s, sound_4 at brakepoint (0s)
+local BEEP_INTERVAL = 0.5  -- 0.5s between each beep
+local BEEP_OFFSETS = { 1.5, 1.0, 0.5, 0 }  -- Time before brake point for each sound
 
 --- Check if a position is inside a corner
 ---@param pos number Spline position (0-1)
@@ -103,7 +103,7 @@ local function getCornerAtPosition(pos, corners)
     return nil
 end
 
---- Find the first brakepoint inside each corner from a lap
+--- Find the brakepoint (start of heavy braking) inside each corner from a lap
 --- Returns a sorted list of brakepoints with precomputed beep trigger positions
 ---@param lapData table Lap instance
 ---@param corners table Array of corner definitions
@@ -112,36 +112,65 @@ local function findCornerBrakepoints(lapData, corners)
     if not lapData or lapData:length() < 10 then return {} end
     if not corners or #corners == 0 then return {} end
 
-    -- Threshold for detecting intentional braking (not just light touches)
-    local BRAKE_TOUCH_THRESHOLD = 2  -- 2 bar = light but intentional braking
+    -- Step 1: Find max brake pressure in each corner
+    local cornerMaxBrake = {}  -- cornerNum -> max brake pressure
+    for i = 1, lapData:length() do
+        local brake = lapData.brake[i] or 0
+        local pos = lapData.pos[i]
+        if not pos then goto continue_max end
 
-    -- Track which corners we've already found a brakepoint for
+        local corner = getCornerAtPosition(pos, corners)
+        if corner then
+            local num = corner.number
+            if not cornerMaxBrake[num] or brake > cornerMaxBrake[num] then
+                cornerMaxBrake[num] = brake
+            end
+        end
+
+        ::continue_max::
+    end
+
+    -- Step 2: Find where brake pressure first exceeds 50% of max in each corner
+    -- This finds the START of heavy braking, not just first touch
+    -- Using 50% ensures we catch the meaningful brake application, not just initial touch
+    local HEAVY_BRAKE_RATIO = 0.50  -- 50% of max brake pressure
+    local MIN_BRAKE_THRESHOLD = settings.brakeThreshold()  -- Minimum to count as braking at all
+    local ABSOLUTE_BRAKE_THRESHOLD = 20  -- Absolute minimum in bar (for race cars with high brake pressure)
+
     local cornerBrakepoints = {}  -- cornerNum -> brakepoint position
-
-    -- Scan the lap looking for first brake application in each corner
-    local wasUnderThreshold = true  -- Start as if we weren't braking
+    local wasUnderThreshold = {}  -- cornerNum -> was under threshold last sample
 
     for i = 1, lapData:length() do
         local brake = lapData.brake[i] or 0
         local pos = lapData.pos[i]
-        if not pos then goto continue end
+        if not pos then goto continue_find end
 
-        -- Check if this position is inside a corner
         local corner = getCornerAtPosition(pos, corners)
+        if corner then
+            local num = corner.number
+            local maxBrake = cornerMaxBrake[num] or 0
+            -- Heavy braking threshold: 50% of max, but at least the higher of MIN_BRAKE_THRESHOLD or ABSOLUTE_BRAKE_THRESHOLD
+            local heavyThreshold = math.max(maxBrake * HEAVY_BRAKE_RATIO, math.max(MIN_BRAKE_THRESHOLD, ABSOLUTE_BRAKE_THRESHOLD))
 
-        if brake < BRAKE_TOUCH_THRESHOLD then
-            wasUnderThreshold = true
-        elseif wasUnderThreshold and brake >= BRAKE_TOUCH_THRESHOLD then
-            -- First brake touch detected
-            wasUnderThreshold = false
+            -- Initialize tracking for this corner
+            if wasUnderThreshold[num] == nil then
+                wasUnderThreshold[num] = true
+            end
 
-            -- Only record if inside a corner and we haven't recorded this corner yet
-            if corner and not cornerBrakepoints[corner.number] then
-                cornerBrakepoints[corner.number] = pos
+            if brake < heavyThreshold then
+                wasUnderThreshold[num] = true
+            elseif wasUnderThreshold[num] and brake >= heavyThreshold then
+                -- First heavy brake application detected
+                wasUnderThreshold[num] = false
+
+                -- Only record if we haven't recorded this corner yet
+                if not cornerBrakepoints[num] then
+                    cornerBrakepoints[num] = pos
+                end
             end
         end
 
-        ::continue::
+        ::continue_find::
     end
 
     -- Convert to sorted array and precompute beep trigger positions
@@ -153,7 +182,7 @@ local function findCornerBrakepoints(lapData, corners)
             beepPositions = {},  -- Precomputed trigger positions for countdown sounds
         }
 
-        -- Calculate beep positions based on ref lap timing (0.75s intervals)
+        -- Calculate beep positions based on ref lap timing
         local brakeTime = lapData:getTimeAtPos(brakePos)
         if brakeTime then
             for i, offset in ipairs(BEEP_OFFSETS) do
@@ -1289,12 +1318,14 @@ function state.update(dt, car)
             for i = 1, 4 do
                 local triggerPos = brakeBeep.beepPositions[i]
                 if triggerPos and brakeBeep.beepIndex < i then
-                    -- Check if we've passed or reached this trigger position
+                    -- Check if we've reached or just passed this trigger position
                     local distToTrigger = triggerPos - currentPos
                     if distToTrigger < 0 then distToTrigger = distToTrigger + 1 end
 
-                    -- Trigger when we're at or past the position (within reasonable range)
-                    if distToTrigger > 0.5 or distToTrigger < 0.01 then
+                    -- Trigger when we're at or just past the position
+                    -- distToTrigger is distance ahead: small positive = approaching, > 0.5 = passed (wrap-around)
+                    -- Trigger when close (within 0.005) or just passed (> 0.995)
+                    if (distToTrigger < 0.005 and distToTrigger >= 0) or (distToTrigger > 0.995) then
                         -- Time check to prevent double-beeps
                         if (now - brakeBeep.lastBeepTime) > 0.1 then
                             notification.playCountdownSound(i)
