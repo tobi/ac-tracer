@@ -424,3 +424,171 @@ test("corner analysis functions work on detected corners", function()
         print(string.format("  Corner 1 min gear: %d", minGear))
     end
 end)
+
+
+--------------------------------------------------------------------------------
+-- Brake Beep Position Tests
+--------------------------------------------------------------------------------
+
+suite("Brake beep position verification")
+
+-- Simulates the beep position calculation from state.lua
+-- BEEP_OFFSETS = { 1.5, 1.0, 0.5, 0 }
+local BEEP_OFFSETS = { 1.5, 1.0, 0.5, 0 }
+
+local function calculateBeepPositions(lapData, brakePos)
+    local beepPositions = {}
+    local brakeTime = lapData:getTimeAtPos(brakePos)
+    if not brakeTime then return nil end
+    
+    for i, offset in ipairs(BEEP_OFFSETS) do
+        if offset == 0 then
+            -- For the final beep (offset 0), use exact brake position
+            beepPositions[i] = brakePos
+        else
+            local triggerTime = brakeTime - offset
+            if triggerTime >= 0 then
+                beepPositions[i] = lapData:getPosAtTime(triggerTime)
+            end
+        end
+    end
+    return beepPositions
+end
+
+test("beep position 4 (offset 0) equals exact brake point position", function()
+    assert_not_nil(barcelonaLap, "Barcelona lap should be loaded")
+    
+    local detected = detectCorners(barcelonaLap, BARCELONA_LENGTH)
+    assert_true(#detected > 0, "Should have detected corners")
+    
+    local cornersWithBrake = 0
+    local cornersVerified = 0
+    
+    print("\n  Brake beep position verification:")
+    
+    for i, corner in ipairs(detected) do
+        local brakePos = barcelonaLap:findBrakePoint(corner.startPos, corner.endPos, 5)
+        
+        if brakePos then
+            cornersWithBrake = cornersWithBrake + 1
+            
+            local beepPositions = calculateBeepPositions(barcelonaLap, brakePos)
+            
+            if beepPositions and beepPositions[4] then
+                -- The 4th beep (offset 0) should be exactly at brakePos
+                local diff = math.abs(beepPositions[4] - brakePos)
+                local diffMeters = diff * BARCELONA_LENGTH
+                
+                print(string.format("    Corner %d: brakePos=%.6f, beep4=%.6f, diff=%.6f (%.2fm)",
+                    i, brakePos, beepPositions[4], diff, diffMeters))
+                
+                -- Should be exactly equal (diff = 0)
+                assert_equal(beepPositions[4], brakePos,
+                    string.format("Corner %d: beep position 4 should equal brake point exactly", i))
+                
+                cornersVerified = cornersVerified + 1
+            end
+        end
+    end
+    
+    print(string.format("    Verified %d/%d corners with brake points", cornersVerified, cornersWithBrake))
+    assert_true(cornersVerified >= 3, "Should verify at least 3 corners")
+end)
+
+test("beep positions are in correct chronological order (earlier beeps before brake point)", function()
+    assert_not_nil(barcelonaLap, "Barcelona lap should be loaded")
+    
+    local detected = detectCorners(barcelonaLap, BARCELONA_LENGTH)
+    assert_true(#detected > 0, "Should have detected corners")
+    
+    local foundValidCorner = false
+    
+    -- Test first corner with a brake point
+    for _, corner in ipairs(detected) do
+        local brakePos = barcelonaLap:findBrakePoint(corner.startPos, corner.endPos, 5)
+        
+        if brakePos then
+            local beepPositions = calculateBeepPositions(barcelonaLap, brakePos)
+            
+            if beepPositions then
+                -- All beep positions should be before or at the brake point
+                -- (positions increase as we approach the brake point)
+                for i = 1, 4 do
+                    if beepPositions[i] then
+                        -- Beep i should be before or at beep i+1 (closer to brake)
+                        for j = i + 1, 4 do
+                            if beepPositions[j] then
+                                -- Position j should be >= position i (later on track)
+                                -- Handle wrap-around: if difference is negative and large, it wrapped
+                                local diff = beepPositions[j] - beepPositions[i]
+                                if diff < -0.5 then diff = diff + 1 end  -- Wrap-around
+                                
+                                assert_true(diff >= 0,
+                                    string.format("Beep %d (%.4f) should be before beep %d (%.4f)",
+                                        i, beepPositions[i], j, beepPositions[j]))
+                            end
+                        end
+                    end
+                end
+                
+                -- Found and verified one corner, that's enough
+                foundValidCorner = true
+                break
+            end
+        end
+    end
+    
+    assert_true(foundValidCorner, "Should have found at least one corner with brake point")
+end)
+
+test("brake point walkback always finds same initiation point regardless of confirmation threshold", function()
+    -- Test walkback with controlled synthetic data
+    -- The walkback should find the SAME initiation point regardless of which
+    -- confirmation threshold was used, because we always walk back to first touch > 0.1 bar
+    local l = lap.new("test", "test_car")
+    
+    -- Create a corner with gradual brake application
+    -- Positions 0.1 to 0.5, brake gradually: 0 -> 0.5 -> 2 -> 8 -> 40 -> 80
+    l.pos = { 0.10, 0.15, 0.20, 0.25, 0.30, 0.35 }
+    l.brake = { 0.0, 0.5, 2.0, 8.0, 40.0, 80.0 }
+    l.times = { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5 }
+    
+    -- With 5 bar threshold: confirmation at 0.25 (8 bar), walkback to 0.15 (0.5 bar > 0.1)
+    local brakePos5 = l:findBrakePoint(0.1, 0.5, 5)
+    
+    -- With 20 bar threshold: confirmation at 0.30 (40 bar), ALSO walks back to 0.15 (0.5 bar > 0.1)
+    -- Both should return the same initiation point because walkback finds first touch
+    local brakePos20 = l:findBrakePoint(0.1, 0.5, 20)
+    
+    assert_not_nil(brakePos5, "Should find brake with 5 bar threshold")
+    assert_not_nil(brakePos20, "Should find brake with 20 bar threshold")
+    
+    -- Both thresholds should walk back to the same initiation point (first touch > 0.1 bar)
+    assert_equal(brakePos5, 0.15, "5 bar threshold should walk back to 0.15 (first touch)")
+    assert_equal(brakePos20, 0.15, "20 bar threshold should ALSO walk back to 0.15 (same first touch)")
+    
+    -- Verify they find the same position (the definition: brake point = initial application)
+    assert_equal(brakePos5, brakePos20, 
+        "Both thresholds should find same initiation point (first touch > 0.1 bar)")
+    
+    print(string.format("\n  Walkback test: 5bar->%.2f, 20bar->%.2f (same initiation point)", 
+        brakePos5, brakePos20))
+end)
+
+test("higher confirmation threshold returns nil when no heavy braking exists", function()
+    -- Test that a very high confirmation threshold returns nil if braking never reaches it
+    local l = lap.new("test", "test_car")
+    
+    -- Light braking only (max 8 bar)
+    l.pos = { 0.10, 0.15, 0.20, 0.25 }
+    l.brake = { 0.0, 0.5, 2.0, 8.0 }
+    
+    -- 5 bar threshold: should find brake (8 bar > 5)
+    local brakePos5 = l:findBrakePoint(0.1, 0.3, 5)
+    
+    -- 20 bar threshold: should return nil (no sample > 20 bar)
+    local brakePos20 = l:findBrakePoint(0.1, 0.3, 20)
+    
+    assert_not_nil(brakePos5, "5 bar threshold should find brake")
+    assert_nil(brakePos20, "20 bar threshold should return nil (no heavy braking)")
+end)

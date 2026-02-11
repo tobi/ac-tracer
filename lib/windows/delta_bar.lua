@@ -45,8 +45,9 @@ local lastDelta = 0
 ---@param referenceLap table Reference lap data
 ---@param currentPos number Current spline position
 ---@param corners table|nil Array of corner definitions (to know total corner count)
-function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners)
-    local car = ac.getCar(0)
+---@param car table|nil Car state from ac.getCar(0), falls back to fetching if not provided
+function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
+    car = car or ac.getCar(0)
     if not car then return end
 
     local sim = ac.getSim()

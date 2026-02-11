@@ -49,6 +49,7 @@ local LOCKUP_THRESHOLD = -0.8     -- Wheel at 20% of road speed = locked up (sli
 local LOCKUP_SPEED_MIN = 30       -- Minimum car speed (km/h) for lockup detection
 local OVERLAP_THROTTLE_THRESHOLD = 0.1  -- Throttle must be > 10% for overlap
 lap.BRAKE_THRESHOLD_BAR = 5             -- Minimum brake pressure to count as braking (bar)
+lap.BRAKE_INITIATION_BAR = 0.1          -- First touch of pedal (noise floor for walkback)
 local OVERLAP_BRAKE_THRESHOLD_BAR = 10  -- Brake must be > 10 bar for overlap
 local OVERLAP_MIN_DURATION = 0.1 -- 100ms minimum duration for overlap to be flagged
 
@@ -87,6 +88,10 @@ function lap.new(track, car, sessionId)
         times = {},            -- seconds (elapsed lap time at each sample)
         fuel = {},             -- liters remaining
         gforce = {},           -- vec3 (X = lateral, Z = longitudinal)
+        
+        -- Suspension travel (for future telemetry alignment with real car data)
+        -- Stored as { {FL, FR, RL, RR}, ... } in meters
+        suspension = {},       -- 4-value table per sample: FL, FR, RL, RR travel in meters
 
         -- In-sim only telemetry flags (bitmask per sample, see lap.FLAGS)
         -- NOTE: Not populated for CSV imports - these are sim-only events
@@ -103,6 +108,9 @@ function lap.new(track, car, sessionId)
 
         -- CSV import metadata (nil for in-game recorded laps)
         csvSource = nil,       -- { throttle, brake, speed, steering, clutch, position, fuel }
+        
+        -- Source file path (for CSV imports - used for display in markdown export)
+        sourceFile = nil,
     }, lap)
 end
 
@@ -360,6 +368,18 @@ function lap:addSample(car, timeOffsetMs)
         table.insert(self.gforce, vec3(car.acceleration.x, car.acceleration.y, car.acceleration.z))
     end
 
+    -- Suspension travel (for future alignment with real car telemetry)
+    -- Store FL, FR, RL, RR suspension travel in meters
+    if car.wheels then
+        local susp = {
+            car.wheels[0] and car.wheels[0].suspensionTravel or 0,
+            car.wheels[1] and car.wheels[1].suspensionTravel or 0,
+            car.wheels[2] and car.wheels[2].suspensionTravel or 0,
+            car.wheels[3] and car.wheels[3].suspensionTravel or 0,
+        }
+        table.insert(self.suspension, susp)
+    end
+
     -- Low-frequency settings (sparse)
     if car.brakeBias then
         self:addSparseSample('brake_balance', car.splinePosition, car.brakeBias)
@@ -497,7 +517,7 @@ function lap:pruneToPosition(targetPos)
     if samplesToRemove <= 0 then return 0 end
 
     -- Prune all arrays to pruneIdx length
-    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'gforce', 'flags'}
+    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'gforce', 'suspension', 'flags'}
     for _, field in ipairs(arrays) do
         if self[field] then
             for i = originalLength, pruneIdx + 1, -1 do
@@ -659,7 +679,8 @@ function lap:getPosAtTime(targetTime)
     if t1 == t2 then return p1 end
 
     local t = math.clamp((targetTime - t1) / (t2 - t1), 0, 1)
-    local pos = p1 + (p2 - p1) * t
+    local deltaPos = p2 - p1
+    local pos = p1 + deltaPos * t
 
     -- Handle wrap-around (pos should stay in 0-1 range)
     if pos < 0 then pos = pos + 1 end
@@ -741,6 +762,38 @@ function lap:speedAt(pos) return interpolateAt(self, self.speed, pos) end
 ---@param pos number Spline position
 ---@return number|nil
 function lap:gearAt(pos) return interpolateAt(self, self.gear, pos) end
+
+--- Get suspension travel at position (4 values: FL, FR, RL, RR in meters)
+--- Returns nil if no suspension data recorded
+---@param pos number Spline position
+---@return table|nil { FL, FR, RL, RR } suspension travel in meters
+function lap:suspensionAt(pos)
+    if not self.suspension or #self.suspension < 2 then return nil end
+    
+    local lo, hi = nil, nil
+    -- Use the internal binary search
+    for i = 1, #self.pos - 1 do
+        if self.pos[i] <= pos and self.pos[i+1] >= pos then
+            lo, hi = i, i + 1
+            break
+        end
+    end
+    if not lo then return self.suspension[1] end
+    
+    local p1, p2 = self.pos[lo], self.pos[hi]
+    local s1, s2 = self.suspension[lo], self.suspension[hi]
+    if not s1 or not s2 then return s1 or s2 end
+    if p1 == p2 then return s1 end
+    
+    -- Interpolate each value
+    local t = math.clamp((pos - p1) / (p2 - p1), 0, 1)
+    return {
+        s1[1] + (s2[1] - s1[1]) * t,
+        s1[2] + (s2[2] - s1[2]) * t,
+        s1[3] + (s2[3] - s1[3]) * t,
+        s1[4] + (s2[4] - s1[4]) * t,
+    }
+end
 
 --- Get fuel at position (liters) - sparse field
 ---@param pos number Spline position
@@ -838,23 +891,39 @@ end
 -- Corner Analysis Helpers
 --------------------------------------------------------------------------------
 
---- Find brake point in a position range (first significant brake application)
+--- Find brake point in a position range (initial pedal application)
+--- Uses confirm-then-walkback: finds where brake exceeds confirmation threshold,
+--- then walks back to find where pedal was first touched (>0.1 bar)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param threshold number? Brake threshold (default lap.BRAKE_THRESHOLD_BAR)
----@return number|nil Spline position of brake point
-function lap:findBrakePoint(startPos, endPos, threshold)
+---@param confirmThreshold number? Confirmation threshold (default lap.BRAKE_THRESHOLD_BAR)
+---@return number|nil Spline position of brake point (initial touch)
+function lap:findBrakePoint(startPos, endPos, confirmThreshold)
     if not self.pos then return nil end
-    threshold = threshold or lap.BRAKE_THRESHOLD_BAR
+    confirmThreshold = confirmThreshold or lap.BRAKE_THRESHOLD_BAR
 
+    -- Phase 1: Find confirmation point (real braking above threshold)
+    local confirmIdx = nil
     for i = 1, #self.pos do
-         local pos = self.pos[i]
-         if lap.isInRange(pos, startPos, endPos) and self.brake[i] > threshold then
-             return pos
-         end
-     end
-     return nil
- end
+        local pos = self.pos[i]
+        if lap.isInRange(pos, startPos, endPos) and self.brake[i] > confirmThreshold then
+            confirmIdx = i
+            break
+        end
+    end
+    if not confirmIdx then return nil end
+
+    -- Phase 2: Walk back to find true initiation (first touch > 0.1 bar)
+    local initiationIdx = confirmIdx
+    for i = confirmIdx - 1, 1, -1 do
+        if self.brake[i] <= lap.BRAKE_INITIATION_BAR then
+            break  -- Found where pedal wasn't touched
+        end
+        initiationIdx = i
+    end
+
+    return self.pos[initiationIdx]
+end
 
 --- Find throttle lift point in a position range
 --- Lift point = first position where throttle drops below threshold after being at full throttle
@@ -968,9 +1037,10 @@ end
 
 --- Find the delay in milliseconds between brake initiation and first/last downshift
 --- Useful for analyzing braking technique (trail braking with heel-toe)
+--- Uses confirm-then-walkback to find true brake initiation (first touch > 0.1 bar)
 ---@param startPos number Start of search range
 ---@param endPos number End of search range
----@param brakeThreshold number? Brake threshold in bar (default lap.BRAKE_THRESHOLD_BAR)
+---@param brakeThreshold number? Confirmation threshold in bar (default lap.BRAKE_THRESHOLD_BAR)
 ---@return number|nil firstDelayMs Milliseconds between brake and first downshift (reaction time)
 ---@return number|nil lastDelayMs Milliseconds between brake and last downshift (total shift time)
 ---@return number|nil brakeTime Time of brake initiation
@@ -987,27 +1057,38 @@ function lap:findDownshiftDelay(startPos, endPos, brakeThreshold)
 
     brakeThreshold = brakeThreshold or lap.BRAKE_THRESHOLD_BAR
 
-    -- Find brake initiation point (first sample where brake > threshold)
-    local brakeIdx = nil
-    local brakeTime = nil
-    local brakeGear = nil
-    local brakePos = nil
+    -- Phase 1: Find confirmation point (first sample where brake > threshold)
+    local confirmIdx = nil
 
     for i = 1, #self.pos do
         local pos = self.pos[i]
         if lap.isInRange(pos, startPos, endPos) then
             if self.brake[i] and self.brake[i] > brakeThreshold then
-                brakeIdx = i
-                brakeTime = self.times[i]
-                brakeGear = self.gear[i]
-                brakePos = self.pos[i]
+                confirmIdx = i
                 break
             end
         end
     end
 
-    if not brakeIdx or not brakeTime or not brakeGear then
+    if not confirmIdx then
         return nil -- No braking found in range
+    end
+
+    -- Phase 2: Walk back to find true initiation (first touch > 0.1 bar)
+    local brakeIdx = confirmIdx
+    for i = confirmIdx - 1, 1, -1 do
+        if (self.brake[i] or 0) <= lap.BRAKE_INITIATION_BAR then
+            break  -- Found where pedal wasn't touched
+        end
+        brakeIdx = i
+    end
+
+    local brakeTime = self.times[brakeIdx]
+    local brakeGear = self.gear[brakeIdx]
+    local brakePos = self.pos[brakeIdx]
+
+    if not brakeTime or not brakeGear then
+        return nil -- Missing data at brake initiation point
     end
 
     -- Find first and last downshifts after brake initiation
@@ -1385,9 +1466,11 @@ function lap:serialize()
         times = self.times,  -- Actual elapsed time at each sample
         fuel = self.fuel,    -- Fuel remaining in liters (may be empty if sparse)
         gforce = self.gforce,
+        suspension = self.suspension,  -- FL, FR, RL, RR suspension travel in meters
         flags = self.flags,  -- In-sim only: TC, limiter, slip, lockups (bitmask per sample)
         sparse = self.sparse,
         csvSource = self.csvSource,  -- CSV column mappings
+        sourceFile = self.sourceFile,  -- Original file path for CSV imports
     }
     return stringify(data)
 end
@@ -1405,6 +1488,7 @@ function lap.deserialize(data)
     if not ok or not parsed or type(parsed) ~= 'table' then return nil end
     local l = setmetatable(parsed, lap)
     if not l.gforce then l.gforce = {} end
+    if not l.suspension then l.suspension = {} end
     ensureSparseTable(l)
     return l
 end
@@ -1449,6 +1533,7 @@ function lap:clone()
     l.fuelLeftAtStart = self.fuelLeftAtStart
     l.lapNumberInSession = self.lapNumberInSession
     l.csvSource = self.csvSource
+    l.sourceFile = self.sourceFile
 
     -- Deep copy telemetry arrays
     l.throttle = copyArray(self.throttle)
@@ -1470,6 +1555,17 @@ function lap:clone()
             local g = self.gforce[i]
             if g then
                 l.gforce[i] = vec3(g.x, g.y, g.z)
+            end
+        end
+    end
+
+    -- Deep copy suspension data (4 values per sample)
+    l.suspension = {}
+    if self.suspension then
+        for i = 1, #self.suspension do
+            local s = self.suspension[i]
+            if s then
+                l.suspension[i] = { s[1], s[2], s[3], s[4] }
             end
         end
     end
@@ -1542,6 +1638,7 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l.completed = parsed.completed
     l.fuelLeftAtStart = parsed.fuelLeftAtStart or 0
     l.csvSource = parsed.csvSource
+    l.sourceFile = filePath  -- Store original file path for display
 
     -- Build sparse fuel channel for lighter lookups
     l:populateSparseFromDense('fuel')

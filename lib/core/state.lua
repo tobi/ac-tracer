@@ -7,6 +7,7 @@ local history_storage = require('lib.core.history')
 local notification = require('lib.sound.notification')
 local csv_export = require('lib.lap_csv_export')
 local file_utils = require('lib.core.files')
+local bg_writer = require('lib.core.background_writer')
 
 local state = {}
 
@@ -75,6 +76,7 @@ local brakeBeep = {
     beepIndex = 0,           -- Which beep in countdown (0 = not started, 1-4 = beeps)
     lastBeepTime = 0,        -- Time of last beep (to prevent spam)
     beepPositions = {},      -- Positions for each beep trigger (calculated from ref lap)
+    prevPos = nil,           -- Previous car position for robust crossing detection
 }
 
 -- Countdown interval (seconds before brakepoint, using ref lap timing)
@@ -103,7 +105,8 @@ local function getCornerAtPosition(pos, corners)
     return nil
 end
 
---- Find the brakepoint (start of heavy braking) inside each corner from a lap
+--- Find the brakepoint (initial pedal application) inside each corner from a lap
+--- Uses confirm-then-walkback: finds heavy braking, then walks back to first touch
 --- Returns a sorted list of brakepoints with precomputed beep trigger positions
 ---@param lapData table Lap instance
 ---@param corners table Array of corner definitions
@@ -130,14 +133,13 @@ local function findCornerBrakepoints(lapData, corners)
         ::continue_max::
     end
 
-    -- Step 2: Find where brake pressure first exceeds 50% of max in each corner
-    -- This finds the START of heavy braking, not just first touch
-    -- Using 50% ensures we catch the meaningful brake application, not just initial touch
+    -- Step 2: Find where brake pressure first exceeds confirmation threshold in each corner
+    -- Then walk back to find true initiation (first touch > 0.1 bar)
     local HEAVY_BRAKE_RATIO = 0.50  -- 50% of max brake pressure
     local MIN_BRAKE_THRESHOLD = settings.brakeThreshold()  -- Minimum to count as braking at all
     local ABSOLUTE_BRAKE_THRESHOLD = 20  -- Absolute minimum in bar (for race cars with high brake pressure)
 
-    local cornerBrakepoints = {}  -- cornerNum -> brakepoint position
+    local cornerBrakepoints = {}  -- cornerNum -> {idx, pos} of brakepoint
     local wasUnderThreshold = {}  -- cornerNum -> was under threshold last sample
 
     for i = 1, lapData:length() do
@@ -160,12 +162,20 @@ local function findCornerBrakepoints(lapData, corners)
             if brake < heavyThreshold then
                 wasUnderThreshold[num] = true
             elseif wasUnderThreshold[num] and brake >= heavyThreshold then
-                -- First heavy brake application detected
+                -- First heavy brake application detected (confirmation point)
                 wasUnderThreshold[num] = false
 
                 -- Only record if we haven't recorded this corner yet
                 if not cornerBrakepoints[num] then
-                    cornerBrakepoints[num] = pos
+                    -- Walk back to find true initiation (first touch > 0.1 bar)
+                    local initiationIdx = i
+                    for j = i - 1, 1, -1 do
+                        if (lapData.brake[j] or 0) <= lap.BRAKE_INITIATION_BAR then
+                            break  -- Found where pedal wasn't touched
+                        end
+                        initiationIdx = j
+                    end
+                    cornerBrakepoints[num] = lapData.pos[initiationIdx]
                 end
             end
         end
@@ -186,13 +196,18 @@ local function findCornerBrakepoints(lapData, corners)
         local brakeTime = lapData:getTimeAtPos(brakePos)
         if brakeTime then
             for i, offset in ipairs(BEEP_OFFSETS) do
-                local triggerTime = brakeTime - offset
-                if triggerTime >= 0 then
-                    entry.beepPositions[i] = lapData:getPosAtTime(triggerTime)
+                if offset == 0 then
+                    -- For the final beep (offset 0), use exact brake position
+                    -- to avoid interpolation round-trip errors
+                    entry.beepPositions[i] = brakePos
+                else
+                    local triggerTime = brakeTime - offset
+                    if triggerTime >= 0 then
+                        entry.beepPositions[i] = lapData:getPosAtTime(triggerTime)
+                    end
                 end
             end
         end
-
         table.insert(result, entry)
     end
     table.sort(result, function(a, b) return a.pos < b.pos end)
@@ -253,6 +268,22 @@ local function findNextBrakepoint(lapData, currentPos)
     end
 
     return best
+end
+
+--- Check if a target position was crossed from prevPos to currentPos.
+--- Handles wrap-around at start/finish.
+---@param prevPos number|nil
+---@param currentPos number
+---@param targetPos number
+---@return boolean
+local function hasCrossedPosition(prevPos, currentPos, targetPos)
+    if not prevPos then return false end
+    if prevPos <= currentPos then
+        return targetPos > prevPos and targetPos <= currentPos
+    else
+        -- Wrapped around 1.0 -> 0.0
+        return targetPos > prevPos or targetPos <= currentPos
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -834,12 +865,21 @@ local function autoDetectCorners(lapData)
         local speed = lapData.speed[i]
 
         if brake >= BRAKE_THRESHOLD then
-            local brakePos = pos
-            local entryIdx = i
-            local maxSpeedBeforeBrake = speed
+            -- Found confirmation point, now walk back to find true initiation (> 0.1 bar)
+            local initiationIdx = i
+            for j = i - 1, 1, -1 do
+                if (lapData.brake[j] or 0) <= lap.BRAKE_INITIATION_BAR then
+                    break  -- Found where pedal wasn't touched
+                end
+                initiationIdx = j
+            end
 
-            -- Look back for entry point
-            local j = i - 1
+            local brakePos = lapData.pos[initiationIdx]
+            local entryIdx = initiationIdx
+            local maxSpeedBeforeBrake = lapData.speed[initiationIdx] or speed
+
+            -- Look back for entry point (from initiation, not confirmation)
+            local j = initiationIdx - 1
             while j >= 1 do
                 if lapData.speed[j] > maxSpeedBeforeBrake then
                     maxSpeedBeforeBrake = lapData.speed[j]
@@ -1219,6 +1259,15 @@ function state.update(dt, car)
             
             -- Update brake scale after each completed lap (even if not best)
             state.updateBrakeScale()
+            
+            -- Auto-save to laps/ directory if enabled (non-blocking background write)
+            if settings.autoSaveEnabled() then
+                bg_writer.queueLapSave(state.currentLap, {
+                    includeJSON = settings.autoSaveIncludeMD(),
+                    referenceLap = state.bestLap,
+                    trackCorners = state.trackCorners or {},
+                })
+            end
         end
         
         -- Reset for new lap
@@ -1287,25 +1336,9 @@ function state.update(dt, car)
     local beepLap = state.getComparisonLap()
     if brakeBeepEnabled and car.speedKmh > 30 and beepLap and beepLap:length() > 10 then
         local currentPos = car.splinePosition
-
-        -- Find next brakepoint if we don't have one or passed the current one
-        local needNewBrakepoint = false
+        local prevPos = brakeBeep.prevPos
+        -- Prime initial target if needed.
         if not brakeBeep.nextBrakePos then
-            needNewBrakepoint = true
-        else
-            -- Check if we passed the brakepoint
-            local distToBrake = brakeBeep.nextBrakePos - currentPos
-            if distToBrake < 0 then distToBrake = distToBrake + 1 end
-
-            -- If we passed it (or very close), find next one
-            if distToBrake > 0.5 or distToBrake < 0.003 then
-                needNewBrakepoint = true
-            end
-        end
-
-        if needNewBrakepoint then
-            brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
-            -- findNextBrakepoint returns full entry with precomputed beepPositions
             local nextBp = findNextBrakepoint(beepLap, currentPos)
             brakeBeep.nextBrakePos = nextBp and nextBp.pos or nil
             brakeBeep.beepPositions = nextBp and nextBp.beepPositions or {}
@@ -1318,14 +1351,8 @@ function state.update(dt, car)
             for i = 1, 4 do
                 local triggerPos = brakeBeep.beepPositions[i]
                 if triggerPos and brakeBeep.beepIndex < i then
-                    -- Check if we've reached or just passed this trigger position
-                    local distToTrigger = triggerPos - currentPos
-                    if distToTrigger < 0 then distToTrigger = distToTrigger + 1 end
-
-                    -- Trigger when we're at or just past the position
-                    -- distToTrigger is distance ahead: small positive = approaching, > 0.5 = passed (wrap-around)
-                    -- Trigger when close (within 0.005) or just passed (> 0.995)
-                    if (distToTrigger < 0.005 and distToTrigger >= 0) or (distToTrigger > 0.995) then
+                    -- Trigger only when we actually cross the trigger position this frame.
+                    if hasCrossedPosition(prevPos, currentPos, triggerPos) then
                         -- Time check to prevent double-beeps
                         if (now - brakeBeep.lastBeepTime) > 0.1 then
                             notification.playCountdownSound(i)
@@ -1337,12 +1364,31 @@ function state.update(dt, car)
                 end
             end
         end
+
+        -- After processing triggers, advance to next brakepoint if we've passed current one.
+        if brakeBeep.nextBrakePos then
+            local distToBrake = brakeBeep.nextBrakePos - currentPos
+            if distToBrake < 0 then distToBrake = distToBrake + 1 end
+            local crossedBrakepoint = hasCrossedPosition(prevPos, currentPos, brakeBeep.nextBrakePos)
+            if distToBrake > 0.5 or crossedBrakepoint then
+                brakeBeep.lastBrakePos = brakeBeep.nextBrakePos
+                local nextBp = findNextBrakepoint(beepLap, currentPos)
+                brakeBeep.nextBrakePos = nextBp and nextBp.pos or nil
+                brakeBeep.beepPositions = nextBp and nextBp.beepPositions or {}
+                brakeBeep.beepIndex = 0
+            end
+        end
+        brakeBeep.prevPos = currentPos
     else
         -- Reset beep state when disabled or car is slow
         brakeBeep.nextBrakePos = nil
         brakeBeep.beepIndex = 0
         brakeBeep.beepPositions = {}
+        brakeBeep.prevPos = nil
     end
+    
+    -- Process background file writes (non-blocking, one chunk per frame)
+    bg_writer.update()
 end
 
 --------------------------------------------------------------------------------
@@ -2110,6 +2156,28 @@ function state.loadCSVAsBest(filePath)
         return true, warnings
     end
     return false, warnings
+end
+
+--------------------------------------------------------------------------------
+-- Background Writer API
+--------------------------------------------------------------------------------
+
+--- Get status of background file writing
+---@return number pending Number of pending jobs
+---@return boolean active True if currently writing
+function state.getAutoSaveStatus()
+    return bg_writer.getStatus()
+end
+
+--- Get the auto-save directory path
+---@return string Path to %APPDATA%/ac-tracer/laps/
+function state.getAutoSaveDir()
+    return bg_writer.getSaveDir()
+end
+
+--- Flush all pending auto-save jobs (for clean shutdown)
+function state.flushAutoSave()
+    bg_writer.flush()
 end
 
 return state

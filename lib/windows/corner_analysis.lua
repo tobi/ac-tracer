@@ -13,6 +13,16 @@ local state = require('lib.core.state')
 local corner_analysis = {}
 
 --------------------------------------------------------------------------------
+-- Pre-allocated vec2 objects for drawing (avoid allocations in hot loops)
+--------------------------------------------------------------------------------
+
+local _v1 = vec2()
+local _v2 = vec2()
+local _v3 = vec2()
+local _v4 = vec2()
+local _vp = vec2()
+
+--------------------------------------------------------------------------------
 -- Constants
 --------------------------------------------------------------------------------
 
@@ -173,6 +183,10 @@ local function analyzeCoasting(data)
 
     -- Only report if significantly different from reference (> 15m)
     local diff = currentCoastM - refCoastM
+    -- Coast distance is linear, but when one value lands near track-length (from
+    -- start/finish wrapping), normalize to shortest signed difference for notes.
+    if diff > trackLen * 0.5 then diff = diff - trackLen end
+    if diff < -trackLen * 0.5 then diff = diff + trackLen end
     if math.abs(diff) < 15 then return nil end
 
     local dir = diff > 0 and "more" or "less"
@@ -433,8 +447,8 @@ local function analyzeThrottleTiming(currentLap, refLap, data)
 
     if not currentThrottlePos or not refThrottlePos then return nil end
 
-    local trackLen = ac.getSim().trackLengthM or 5000
-    local diffM = (currentThrottlePos - refThrottlePos) * trackLen
+    local diffM = ui_utils.positionDeltaToMeters(currentThrottlePos, refThrottlePos)
+    if not diffM then return nil end
     if math.abs(diffM) < 15 then return nil end  -- Ignore < 15m difference
 
     local dir = diffM < 0 and "early" or "late"
@@ -925,8 +939,10 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
                 liveCorner.liftOffPos = currentPos
             end
 
-            -- Track brake point
-            if isBraking and not liveCorner.brakePos then
+            -- Track brake point (first touch > 0.1 bar)
+            -- For live tracking, we capture initial pedal application immediately
+            local currentBrakeBar = extended_brake.getBrakePressureBar(car)
+            if currentBrakeBar > lap.BRAKE_INITIATION_BAR and not liveCorner.brakePos then
                 liveCorner.brakePos = currentPos
             end
             
@@ -1107,12 +1123,18 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
     local posRange = endPos - startPos
     if posRange <= 0 then posRange = posRange + 1 end  -- Handle wrap-around
 
-    -- Helper to convert position to X coordinate
-    local function posToX(pos)
-        local relPos = pos - startPos
-        if relPos < 0 then relPos = relPos + 1 end  -- Handle wrap-around
-        return x + (relPos / posRange) * w
-    end
+    -- Pre-compute constants for position->X conversion (avoid per-iteration division)
+    local posScale = w / posRange
+    local hOverRange = h / speedRange
+
+    -- Inline posToX calculation for performance
+    -- posToX(pos) = x + ((pos - startPos + wrap) / posRange) * w
+    -- where wrap = 1 if (pos - startPos) < 0, else 0
+
+    -- Cache theme colors to avoid repeated table lookups
+    local colorOnSpeed = theme.corner.onSpeed
+    local colorFaster = theme.corner.faster
+    local colorSlower = theme.corner.slower
 
     -- Draw filled comparison using quads (more reliable than pathFillConvex)
     for i = 1, numPoints - 1 do
@@ -1121,34 +1143,45 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
         local ref1 = refSpeeds[i] and refSpeeds[i].speed or s1.speed
         local ref2 = refSpeeds[i + 1] and refSpeeds[i + 1].speed or s2.speed
         
-        -- Use actual position for X coordinate
-        local x1 = posToX(s1.pos)
-        local x2 = posToX(s2.pos)
-        local curY1 = y + h - ((s1.speed - minSpeed) / speedRange) * h
-        local curY2 = y + h - ((s2.speed - minSpeed) / speedRange) * h
+        -- Inline posToX: x + relPos * posScale (with wrap handling)
+        local relPos1 = s1.pos - startPos
+        if relPos1 < 0 then relPos1 = relPos1 + 1 end
+        local x1 = x + relPos1 * posScale
         
-        local avgCurSpeed = (s1.speed + s2.speed) / 2
-        local avgRefSpeed = (ref1 + ref2) / 2
-        local speedDiff = avgCurSpeed - avgRefSpeed
+        local relPos2 = s2.pos - startPos
+        if relPos2 < 0 then relPos2 = relPos2 + 1 end
+        local x2 = x + relPos2 * posScale
+        
+        local curY1 = bottomY - (s1.speed - minSpeed) * hOverRange
+        local curY2 = bottomY - (s2.speed - minSpeed) * hOverRange
+        
+        local speedDiff = (s1.speed + s2.speed) * 0.5 - (ref1 + ref2) * 0.5
         local color
-        if math.abs(speedDiff) <= SPEED_TOLERANCE then
-            color = theme.corner.onSpeed
-        elseif speedDiff > 0 then
-            color = theme.corner.faster
+        if speedDiff > SPEED_TOLERANCE then
+            color = colorFaster
+        elseif speedDiff < -SPEED_TOLERANCE then
+            color = colorSlower
         else
-            color = theme.corner.slower
+            color = colorOnSpeed
         end
         
-        -- Use drawQuadFilled for reliable non-convex shape handling
-        ui.drawQuadFilled(vec2(x1, curY1), vec2(x2, curY2), vec2(x2, bottomY), vec2(x1, bottomY), color)
+        -- Use pre-allocated vec2 objects to avoid GC pressure
+        _v1:set(x1, curY1)
+        _v2:set(x2, curY2)
+        _v3:set(x2, bottomY)
+        _v4:set(x1, bottomY)
+        ui.drawQuadFilled(_v1, _v2, _v3, _v4, color)
     end
 
     -- Draw reference speed line using position-based coordinates
     ui.pathClear()
     for i, s in ipairs(refSpeeds) do
-        local px = posToX(s.pos)
-        local py = y + h - ((s.speed - minSpeed) / speedRange) * h
-        ui.pathLineTo(vec2(px, py))
+        local relPos = s.pos - startPos
+        if relPos < 0 then relPos = relPos + 1 end
+        local px = x + relPos * posScale
+        local py = bottomY - (s.speed - minSpeed) * hOverRange
+        _vp:set(px, py)
+        ui.pathLineTo(_vp)
     end
     ui.pathStroke(theme.text.primary, false, 2)
 end
@@ -1234,12 +1267,14 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
             ui.drawLine(vec2(curApexX, y), vec2(curApexX, lineEndY), theme.marker.apex, 3)
         end
     end
+
 end
 
 -- drawScoreGauge removed - now using wedge.drawGauge
 
 --- Draw brake/throttle traces for a corner using captured pedal data
-local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
+---@param data table|nil Optional comparison data with brake positions
+local function drawPedalTraces(x, y, w, h, currentPedals, refPedals, data)
     -- Background
     ui.drawRectFilled(vec2(x, y), vec2(x + w, y + h), theme.bg.graph, 4)
 
@@ -1260,6 +1295,39 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals)
     if currentPedals and #currentPedals.throttle > 0 then
         ui_utils.drawTrace(x, y, w, h, currentPedals.throttle, theme.trace.throttle, { thickness = 2 })
         ui_utils.drawTrace(x, y, w, h, currentPedals.brake, theme.trace.brake, { thickness = 2 })
+    end
+
+    -- TEMPORARY: Brake point markers for verification
+    if data and data.cornerInfo then
+        local startPos = data.cornerInfo.startPos
+        local endPos = data.cornerInfo.endPos
+        local posRange = endPos - startPos
+        if posRange <= 0 then posRange = posRange + 1 end
+
+        local function posToX(pos)
+            if not pos then return nil end
+            local relPos = pos - startPos
+            if relPos < 0 then relPos = relPos + 1 end
+            local px = x + (relPos / posRange) * w
+            if px >= x and px <= x + w then return px end
+            return nil
+        end
+
+        -- Reference brake point (dashed white line)
+        if data.refBrakePos then
+            local refBrakeX = posToX(data.refBrakePos)
+            if refBrakeX then
+                ui_utils.drawDashedLine(vec2(refBrakeX, y), vec2(refBrakeX, y + h), rgbm(1, 1, 1, 0.7), 2, 5, 3)
+            end
+        end
+
+        -- Current brake point (solid bright line)
+        if data.currentBrakePos then
+            local curBrakeX = posToX(data.currentBrakePos)
+            if curBrakeX then
+                ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), rgbm(1, 0.8, 0, 1), 3)
+            end
+        end
     end
 
     -- Outline
@@ -1650,7 +1718,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         
         -- Apex position delta
         if displayData.currentApexPos and displayData.refApexPos then
-            local apexMeters = (displayData.currentApexPos - displayData.refApexPos) * (ac.getSim().trackLengthM or 5000)
+            local apexMeters = scoring.positionDeltaToMeters(displayData.currentApexPos, displayData.refApexPos)
             drawPositionBar("Apex", apexMeters, barMaxPos)
         end
 
@@ -1701,7 +1769,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
 
         if displayData.currentPedals or displayData.refPedals then
             drawPedalTraces(padding, pedalY, graphWidth, pedalTraceHeight,
-                displayData.currentPedals, displayData.refPedals)
+                displayData.currentPedals, displayData.refPedals, displayData)
         end
     else
         -- Empty state: full-width centered message

@@ -116,7 +116,7 @@ function script.windowReferenceLap(dt)
 end
 
 function script.windowDelta(dt)
-    delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners)
+    delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners, currentCar)
 end
 
 -- Called when app is shutting down

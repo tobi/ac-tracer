@@ -55,20 +55,39 @@ end
 --------------------------------------------------------------------------------
 
 --- Search paths for CSV files
-local function getUserDocumentsLapDir()
+local function getUserDocumentsDirs()
     local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
-    if not profile or profile == "" then return nil end
-    return profile .. "\\Documents\\AC-Laps\\"
+    if not profile or profile == "" then return nil, nil end
+    local base = profile .. "\\Documents\\ac-tracer\\"
+    return base .. "saved\\", base .. "references\\"
 end
 
-local function buildSearchPaths()
+--- Get history directory for a specific track
+local function getHistoryDir(trackId)
+    local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
+    if not profile or profile == "" then return nil end
+    if not trackId or trackId == "" then return nil end
+    -- Sanitize track name for path
+    local sanitized = trackId:gsub('[\\/:*?"<>|]', "_"):gsub("%s+", "_"):gsub("_+", "_")
+    return profile .. "\\Documents\\ac-tracer\\history\\" .. sanitized .. "\\"
+end
+
+local function buildSearchPaths(trackId)
     local paths = {
         { path = __dirname .. "/tracks/", source = "tracks" },
         { path = "C:\\MoTeC\\Logged Data\\", source = "motec" },
     }
-    local userDir = getUserDocumentsLapDir()
-    if userDir then
-        table.insert(paths, 1, { path = userDir, source = "documents" })
+    local savedDir, refsDir = getUserDocumentsDirs()
+    if refsDir then
+        table.insert(paths, 1, { path = refsDir, source = "references" })
+    end
+    if savedDir then
+        table.insert(paths, 1, { path = savedDir, source = "saved" })
+    end
+    -- Add track-specific history directory (highest priority for matching track)
+    local historyDir = getHistoryDir(trackId)
+    if historyDir then
+        table.insert(paths, 1, { path = historyDir, source = "history" })
     end
     return paths
 end
@@ -76,8 +95,8 @@ end
 --- Get default lap directory path
 ---@return string Default lap directory path
 function file_utils.getLapDirectory()
-    local userDir = getUserDocumentsLapDir()
-    return userDir or (__dirname .. "/tracks/")
+    local savedDir = getUserDocumentsDirs()
+    return savedDir or (__dirname .. "/tracks/")
 end
 
 local function normalizeTrackName(name)
@@ -148,7 +167,7 @@ function file_utils.scanCSVFiles(trackId)
     csvFilesCache = {}
     local seenFiles = {}  -- Track by lowercase to avoid duplicates
 
-    for _, dir in ipairs(buildSearchPaths()) do
+    for _, dir in ipairs(buildSearchPaths(trackId)) do
         if io.dirExists(dir.path) then
             local files = io.scanDir(dir.path, "*.csv")
             if files then

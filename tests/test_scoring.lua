@@ -252,6 +252,23 @@ test("calculates coast delta", function()
     assert_near(delta, 100, 1, "Delta should be 100m more coasting")
 end)
 
+test("normalizes coast delta across wrap-around artifacts", function()
+    mock.setSim({ trackLengthM = 5000 })
+
+    -- Current coast wraps heavily (4950m), reference is short (50m).
+    -- Raw delta would be +4900m, but normalized shortest signed delta is -100m.
+    local currentCoast, refCoast, delta = scoring.getCoastDistances({
+        currentLiftOffPos = 0.01,
+        currentBrakePos = 0.00,
+        refLiftOffPos = 0.99,
+        refBrakePos = 0.00
+    })
+
+    assert_near(currentCoast, 4950, 1)
+    assert_near(refCoast, 50, 1)
+    assert_near(delta, -100, 1, "Should normalize to shortest signed delta")
+end)
+
 
 --------------------------------------------------------------------------------
 -- configure tests

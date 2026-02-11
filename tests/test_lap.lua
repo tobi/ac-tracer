@@ -211,14 +211,16 @@ end)
 
 suite("lap.findBrakePoint")
 
-test("finds first brake application", function()
+test("finds first brake application with walkback", function()
      local l = lap.new("track", "car")
      
+     -- With walkback: confirmation at 0.4 (30 bar > 5 bar), 
+     -- but 0.3 has 3 bar (> 0.1 bar initiation threshold), so return 0.3
      l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
-     l.brake = { 0.0, 0.0, 3.0, 30.0, 80.0 }  -- Braking starts at 0.4 (> 5 bar threshold)
+     l.brake = { 0.0, 0.0, 3.0, 30.0, 80.0 }
      
      local brakePos = l:findBrakePoint(0.1, 0.5)
-     assert_equal(brakePos, 0.4, "Should find brake at 0.4")
+     assert_equal(brakePos, 0.3, "Should walk back to first touch at 0.3")
  end)
 
 test("returns nil if no braking in range", function()
@@ -623,20 +625,44 @@ test("maxBrakeBars does not cache for incomplete laps", function()
     assert_equal(l:maxBrakeBars(), 120)
 end)
 
-test("findBrakePoint works with bar values", function()
+test("findBrakePoint with walkback finds initial touch", function()
     local l = lap.new("track", "car")
     
     -- Brake values in bar (typical race car: 0-120 bar)
+    -- Gradual application: 0 -> 0.5 (first touch) -> 3 -> 40 (confirmation) -> 90
     l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5 }
-    l.brake = { 0, 0, 3, 40, 90 }  -- Light touch at 0.3 (3 bar), real braking at 0.4 (40 bar)
+    l.brake = { 0, 0.5, 3, 40, 90 }  -- First touch at 0.2 (0.5 bar), confirmation at 0.4 (40 bar)
     
-    -- With threshold 5 bar, should find 0.4 (first sample > 5 bar)
+    -- With threshold 5 bar, should find confirmation at 0.4, then walk back to 0.2 (first touch > 0.1 bar)
     local brakePos = l:findBrakePoint(0.1, 0.5, 5)
-    assert_equal(brakePos, 0.4, "Should find brake at 0.4 with 5 bar threshold")
+    assert_equal(brakePos, 0.2, "Should walk back to first touch at 0.2")
+end)
+
+test("findBrakePoint returns first touch with gradual application", function()
+    local l = lap.new("track", "car")
     
-    -- With threshold 2 bar, should find 0.3 (light touch)
-    local brakePos2 = l:findBrakePoint(0.1, 0.5, 2)
-    assert_equal(brakePos2, 0.3, "Should find brake at 0.3 with 2 bar threshold")
+    -- Gradual brake application: 0 -> 0.2 (first touch) -> 0.5 -> 2 -> 10 -> 50 -> 80
+    -- Note: 0.2 bar is clearly above BRAKE_INITIATION_BAR (0.1 bar)
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7 }
+    l.brake = { 0.0, 0.2, 0.5, 2.0, 10.0, 50.0, 80.0 }
+    
+    -- With 5 bar confirmation threshold, should find confirmation at 0.5 (10 bar),
+    -- then walk back to 0.2 (first touch at 0.2 bar, which is > BRAKE_INITIATION_BAR of 0.1)
+    local brakePos = l:findBrakePoint(0.1, 0.8, 5)
+    assert_equal(brakePos, 0.2, "Should find initial touch at 0.2, not confirmation point at 0.5")
+end)
+
+test("findBrakePoint walkback stops at gap in brake application", function()
+    local l = lap.new("track", "car")
+    
+    -- Scenario: trailing brake from previous corner, then fresh brake application
+    l.pos = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7 }
+    l.brake = { 2.0, 0.05, 0.0, 0.5, 3.0, 40.0, 90.0 }  -- Gap at 0.3 (0 bar)
+    
+    -- Should find confirmation at 0.6 (40 bar), walk back but stop at 0.3 (0 bar gap)
+    -- So should return 0.4 (first touch after gap)
+    local brakePos = l:findBrakePoint(0.1, 0.8, 5)
+    assert_equal(brakePos, 0.4, "Should stop walkback at gap, return 0.4")
 end)
 
 test("findBrakePoint with high threshold ignores light braking", function()
@@ -886,13 +912,14 @@ test("realistic race car braking profile", function()
     
     -- Simulate approach to corner: full throttle -> brake -> apex -> exit
     l.pos = { 0.10, 0.12, 0.14, 0.16, 0.18, 0.20, 0.22, 0.24, 0.26, 0.28 }
-    l.brake = { 0, 0, 4, 70, 95, 100, 85, 50, 20, 0 }  -- GT3 braking ~100 bar peak (4 bar = trail)
+    l.brake = { 0, 0, 4, 70, 95, 100, 85, 50, 20, 0 }  -- GT3 braking ~100 bar peak (4 bar = initial touch)
     l.throttle = { 1.0, 1.0, 0.9, 0, 0, 0, 0, 0.2, 0.5, 0.8 }
     l.speed = { 280, 275, 260, 220, 180, 150, 130, 125, 135, 160 }
     
-    -- Find brake point (> 5 bar threshold, ignores 4 bar trail brake)
+    -- With walkback: confirmation at 0.16 (70 bar > 5 bar), 
+    -- but 0.14 has 4 bar (> 0.1 bar initiation threshold), so return 0.14
     local brakePos = l:findBrakePoint(0.10, 0.28, 5)
-    assert_equal(brakePos, 0.16, "Brake point should be at 0.16 (first > 5 bar)")
+    assert_equal(brakePos, 0.14, "Brake point should be at 0.14 (first touch after walkback)")
     
     -- Max brake
     assert_equal(l:maxBrakeBars(), 100, "Max brake should be 100 bar")
@@ -907,11 +934,12 @@ test("road car braking profile (lower pressure)", function()
     
     -- Road cars have lower brake pressure (typically 30-60 bar max)
     l.pos = { 0.10, 0.12, 0.14, 0.16, 0.18, 0.20 }
-    l.brake = { 0, 0, 3, 25, 40, 35 }  -- Road car ~40 bar peak
+    l.brake = { 0, 0, 3, 25, 40, 35 }  -- Road car ~40 bar peak (3 bar = initial touch)
     
-    -- Find brake point (> 5 bar threshold)
+    -- With walkback: confirmation at 0.16 (25 bar > 5 bar),
+    -- but 0.14 has 3 bar (> 0.1 bar initiation threshold), so return 0.14
     local brakePos = l:findBrakePoint(0.10, 0.20, 5)
-    assert_equal(brakePos, 0.16, "Brake point should be at 0.16 (first > 5 bar)")
+    assert_equal(brakePos, 0.14, "Brake point should be at 0.14 (first touch after walkback)")
     
     -- Max brake returns 80 minimum (for chart scaling), even though actual max is 40
     assert_equal(l:maxBrakeBars(), 80, "Max brake returns 80 minimum for chart scaling")

@@ -99,6 +99,16 @@ function csv_export.saveLap(lapObj, options)
         "Gear",
         "G Force Lat",
         "G Force Long",
+        "Damper Travel FL",
+        "Damper Travel FR",
+        "Damper Travel RL",
+        "Damper Travel RR",
+        "TC Active",
+        "Wheel Slip",
+        "Lockup FL",
+        "Lockup FR",
+        "Lockup RL",
+        "Lockup RR",
     }
     local units = {
         "s",
@@ -114,6 +124,16 @@ function csv_export.saveLap(lapObj, options)
         "",
         "g",
         "g",
+        "m",
+        "m",
+        "m",
+        "m",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
     }
 
     writeLine(f, headers, true)
@@ -136,6 +156,22 @@ function csv_export.saveLap(lapObj, options)
         local g = lapObj.gforce and lapObj.gforce[i] or nil
         local gLat = g and g.x or 0
         local gLong = g and g.z or 0
+        
+        -- Suspension travel (FL, FR, RL, RR)
+        local susp = lapObj.suspension and lapObj.suspension[i] or nil
+        local suspFL = susp and susp[1] or 0
+        local suspFR = susp and susp[2] or 0
+        local suspRL = susp and susp[3] or 0
+        local suspRR = susp and susp[4] or 0
+        
+        -- Flags (TC, slip, lockups) - in-sim only data
+        local flags = lapObj.flags and lapObj.flags[i] or 0
+        local tcActive = (bit.band(flags, lap.FLAGS.TC_ACTIVE) ~= 0) and 1 or 0
+        local wheelSlip = (bit.band(flags, lap.FLAGS.WHEEL_SLIP) ~= 0) and 1 or 0
+        local lockupFL = (bit.band(flags, lap.FLAGS.LOCKUP_FL) ~= 0) and 1 or 0
+        local lockupFR = (bit.band(flags, lap.FLAGS.LOCKUP_FR) ~= 0) and 1 or 0
+        local lockupRL = (bit.band(flags, lap.FLAGS.LOCKUP_RL) ~= 0) and 1 or 0
+        local lockupRR = (bit.band(flags, lap.FLAGS.LOCKUP_RR) ~= 0) and 1 or 0
 
         -- Convert to CSV-friendly values
         local throttlePct = throttle * 100
@@ -156,6 +192,16 @@ function csv_export.saveLap(lapObj, options)
             tostring(gear or 0),
             formatNumber(gLat, "%.3f"),
             formatNumber(gLong, "%.3f"),
+            formatNumber(suspFL, "%.6f"),
+            formatNumber(suspFR, "%.6f"),
+            formatNumber(suspRL, "%.6f"),
+            formatNumber(suspRR, "%.6f"),
+            tostring(tcActive),
+            tostring(wheelSlip),
+            tostring(lockupFL),
+            tostring(lockupFR),
+            tostring(lockupRL),
+            tostring(lockupRR),
         })
     end
 

@@ -238,6 +238,10 @@ function scoring.getCoastDistances(cornerData)
     local coastDelta = nil
     if currentCoast and refCoast then
         coastDelta = currentCoast - refCoast
+        -- Normalize to shortest signed delta to avoid near-track-length artifacts
+        -- when one coast distance wraps around start/finish.
+        if coastDelta > trackLength * 0.5 then coastDelta = coastDelta - trackLength end
+        if coastDelta < -trackLength * 0.5 then coastDelta = coastDelta + trackLength end
     end
 
     return currentCoast, refCoast, coastDelta

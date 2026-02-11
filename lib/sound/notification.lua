@@ -1,236 +1,167 @@
 -- notification.lua - Simple notification sounds for AC Tracer
--- Plays audio feedback for checkpoint save/load and brake beeps
+-- 
+-- Uses ac.AudioEvent.fromFile with loop=false for one-shot sounds.
+-- CSP internally caches the audio file data, so creating new events is efficient.
 
 local notification = {}
 
--- Sound file paths (relative to script directory)
 local SOUNDS_DIR = __dirname .. "/lib/sound/"
-local SAVE_SOUND_FILE = SOUNDS_DIR .. "save.wav"
-local LOAD_SOUND_FILE = SOUNDS_DIR .. "load.wav"
-local BEEP_SOUND_FILE = SOUNDS_DIR .. "beep.wav"
-
--- Countdown sound files (sound_1 through sound_4)
-local COUNTDOWN_SOUND_FILES = {
-    SOUNDS_DIR .. "sound_1.wav",
-    SOUNDS_DIR .. "sound_2.wav",
-    SOUNDS_DIR .. "sound_3.wav",
-    SOUNDS_DIR .. "sound_4.wav",
+local COUNTDOWN_FILES = {
+    [1] = "sound_1.wav",
+    [2] = "sound_2.wav",
+    [3] = "sound_3.wav",
+    [4] = "sound_4.wav",
 }
+local highestCountdownPath = nil
 
--- Track if sounds are available
-local saveSoundAvailable = false
-local loadSoundAvailable = false
-local beepSoundAvailable = false
-local countdownSoundsAvailable = false
+-- Track which files exist (checked once on first use)
+local fileExists = {}
 
--- Preloaded audio events for instant playback
-local countdownEvents = {}
-
--- Beep cooldown to prevent overlapping beeps
+-- Beep cooldown to prevent overlapping
 local lastBeepTime = 0
-local BEEP_COOLDOWN = 0.08  -- 80ms minimum between beeps
+local BEEP_COOLDOWN = 0.08
 
--- Play a one-shot sound from file (plays for 0.2s then stops)
-local function playOneShot(path)
-    if not io.fileExists(path) then
-        return false
+--- Check if a sound file exists (cached)
+---@param path string
+---@return boolean
+local function soundExists(path)
+    if fileExists[path] == nil then
+        fileExists[path] = io.fileExists(path)
     end
-
-    local ok, event = pcall(function()
-        return ac.AudioEvent.fromFile({
-            filename = path,
-            use3D = false,
-        })
-    end)
-
-    if ok and event and event:isValid() then
-        event.volume = 0.7
-        event.cameraInteriorMultiplier = 1.0
-        event.cameraExteriorMultiplier = 1.0
-        event.cameraTrackMultiplier = 1.0
-        event:start()
-
-        -- Stop and dispose after 0.1 seconds (setTimeout uses seconds, not ms)
-        setTimeout(function()
-            if event then
-                event:stop()
-                event:dispose()
-            end
-        end, 0.1)
-
-        return true
-    end
-
-    return false
+    return fileExists[path]
 end
 
--- Preload a sound file and return the audio event
-local function preloadSound(path)
-    if not io.fileExists(path) then
-        return nil
+--- Find the highest available countdown sound (sound_N.wav) in sound dir.
+---@return string|nil
+local function getHighestCountdownPath()
+    if highestCountdownPath ~= nil then
+        return highestCountdownPath ~= "" and highestCountdownPath or nil
     end
-
-    local ok, event = pcall(function()
-        return ac.AudioEvent.fromFile({
-            filename = path,
-            use3D = false,
-        })
-    end)
-
-    if ok and event and event:isValid() then
-        event.volume = 0.8
-        event.cameraInteriorMultiplier = 1.0
-        event.cameraExteriorMultiplier = 1.0
-        event.cameraTrackMultiplier = 1.0
-        return event
-    end
-
-    return nil
-end
-
--- Initialize sounds (check if files exist and preload countdown sounds)
-function notification.init()
-    saveSoundAvailable = io.fileExists(SAVE_SOUND_FILE)
-    loadSoundAvailable = io.fileExists(LOAD_SOUND_FILE)
-    beepSoundAvailable = io.fileExists(BEEP_SOUND_FILE)
-
-    -- Preload countdown sounds
-    countdownSoundsAvailable = true
-    for i, path in ipairs(COUNTDOWN_SOUND_FILES) do
-        if io.fileExists(path) then
-            local event = preloadSound(path)
-            if event then
-                countdownEvents[i] = event
-            else
-                countdownSoundsAvailable = false
-                ac.log("AC Tracer: Failed to preload sound_" .. i .. ".wav")
+    local highestIndex = -1
+    local highestPath = nil
+    local files = io.scanDir(SOUNDS_DIR) or {}
+    for _, filename in ipairs(files) do
+        local idx = tonumber(tostring(filename):match("^sound_(%d+)%.wav$"))
+        if idx and idx > highestIndex then
+            local path = SOUNDS_DIR .. filename
+            if soundExists(path) then
+                highestIndex = idx
+                highestPath = path
             end
-        else
-            countdownSoundsAvailable = false
-            ac.log("AC Tracer: Missing countdown sound: sound_" .. i .. ".wav")
         end
     end
-
-    -- Fall back to save.wav for beep if beep.wav doesn't exist
-    if not beepSoundAvailable and saveSoundAvailable then
-        beepSoundAvailable = true
-        BEEP_SOUND_FILE = SAVE_SOUND_FILE
-        ac.log("AC Tracer: Using save.wav as beep sound (beep.wav not found)")
-    end
-
-    if saveSoundAvailable or loadSoundAvailable or beepSoundAvailable then
-        ac.log("AC Tracer: Notification sounds available")
-    else
-        ac.log("AC Tracer: No notification sounds found (optional)")
-    end
-
-    if countdownSoundsAvailable then
-        ac.log("AC Tracer: Brake countdown sounds preloaded (sound_1 to sound_4)")
-    elseif beepSoundAvailable then
-        ac.log("AC Tracer: Brake beep sound available (fallback mode)")
-    end
+    highestCountdownPath = highestPath or ""
+    return highestPath
 end
 
--- Play save checkpoint sound
-function notification.playSave()
-    if saveSoundAvailable then
-        playOneShot(SAVE_SOUND_FILE)
-    end
-end
-
--- Play load checkpoint sound (uses save sound)
-function notification.playLoad()
-    if saveSoundAvailable then
-        playOneShot(SAVE_SOUND_FILE)
-    end
-end
-
--- Play a beep with pitch and volume shift
--- pitch: multiplier (1.0 = normal, 1.5 = higher, 0.7 = lower)
--- volume: multiplier (1.0 = default 0.8 base, 1.5 = louder)
-function notification.playBeep(pitch, volume)
-    if not beepSoundAvailable then return false end
-
-    -- Enforce cooldown to prevent overlapping beeps
-    local now = os.clock()
-    if (now - lastBeepTime) < BEEP_COOLDOWN then
+--- Play a one-shot sound from file
+--- Creates a new event with loop=false - CSP caches the file data internally
+---@param path string File path
+---@param volume number|nil Volume (default 0.7)
+---@param pitch number|nil Pitch (default 1.0)
+---@return boolean success
+local function playSound(path, volume, pitch)
+    if not soundExists(path) then
         return false
     end
-    lastBeepTime = now
-
+    
     local ok, event = pcall(function()
         return ac.AudioEvent.fromFile({
-            filename = BEEP_SOUND_FILE,
+            filename = path,
             use3D = false,
-        })
+            loop = false,  -- One-shot, stops automatically after playing
+        }, false)
     end)
-
+    
     if ok and event and event:isValid() then
-        event.volume = 0.8 * (volume or 1.0)
+        event.volume = volume or 0.7
         event.pitch = pitch or 1.0
         event.cameraInteriorMultiplier = 1.0
         event.cameraExteriorMultiplier = 1.0
         event.cameraTrackMultiplier = 1.0
         event:start()
-
-        -- Stop and dispose after 0.15 seconds
-        setTimeout(function()
-            if event then
-                event:stop()
-                event:dispose()
-            end
-        end, 0.15)
-
         return true
     end
-
+    
     return false
 end
 
--- Check if beep sound is available
-function notification.hasBeepSound()
-    return countdownSoundsAvailable or beepSoundAvailable
+--- Play save sound
+function notification.playSave()
+    return playSound(SOUNDS_DIR .. "save.wav")
 end
 
--- Check if countdown sounds are available
-function notification.hasCountdownSounds()
-    return countdownSoundsAvailable
+--- Play load sound (same as save)
+function notification.playLoad()
+    local loadPath = SOUNDS_DIR .. "load.wav"
+    if soundExists(loadPath) then
+        return playSound(loadPath)
+    end
+    return playSound(SOUNDS_DIR .. "save.wav")
 end
 
--- Play a countdown sound (1-4, where 4 is the brake point)
--- Uses preloaded sounds for instant playback
--- Falls back to playBeep if countdown sounds not available
-function notification.playCountdownSound(index, volume)
-    if index < 1 or index > 4 then return false end
-
-    -- Enforce cooldown to prevent overlapping sounds
+--- Play beep with pitch/volume adjustment
+---@param pitch number|nil Pitch multiplier (default 1.0)
+---@param volume number|nil Volume multiplier (default 1.0)
+function notification.playBeep(pitch, volume)
+    -- Cooldown check
     local now = os.clock()
     if (now - lastBeepTime) < BEEP_COOLDOWN then
         return false
     end
     lastBeepTime = now
-
-    -- Use preloaded countdown sounds if available
-    local event = countdownEvents[index]
-    if event then
-        -- Stop any currently playing instance before starting new one
-        event:stop()
-        event.volume = 0.8 * (volume or 1.0)
-        event:start()
-        
-        -- Stop after 0.2 seconds (sound duration, prevents looping)
-        setTimeout(function()
-            if event then
-                event:stop()
-            end
-        end, 0.2)
-        
-        return true
+    
+    -- Try beep.wav first, fall back to save.wav
+    local path = SOUNDS_DIR .. "beep.wav"
+    if not soundExists(path) then
+        path = SOUNDS_DIR .. "save.wav"
     end
+    
+    return playSound(path, 0.7 * (volume or 1.0), pitch)
+end
 
-    -- Fallback to pitched beeps (4 sounds with increasing pitch)
+--- Play countdown sound (1-4, where 4 is brake point)
+---@param index number Sound index 1-4
+---@param volume number|nil Volume multiplier
+function notification.playCountdownSound(index, volume)
+    if index < 1 or index > 4 then return false end
+
+    -- Try dedicated countdown sounds first (preferred "fancier" cue pack)
+    local path = SOUNDS_DIR .. COUNTDOWN_FILES[index]
+    if index == 4 then
+        path = getHighestCountdownPath() or path
+    end
+    if soundExists(path) then
+        return playSound(path, 1.0 * (volume or 1.0))
+    end
+    
+    -- Fall back to beep with pitch
     local pitches = { 0.7, 0.9, 1.2, 2.0 }
     return notification.playBeep(pitches[index], volume)
+end
+
+--- Check if beep sounds are available
+function notification.hasBeepSound()
+    return soundExists(SOUNDS_DIR .. "beep.wav") or soundExists(SOUNDS_DIR .. "save.wav")
+end
+
+--- Check if countdown sounds are available
+function notification.hasCountdownSounds()
+    for i = 1, 4 do
+        if not soundExists(SOUNDS_DIR .. "sound_" .. i .. ".wav") then
+            return false
+        end
+    end
+    return true
+end
+
+--- Initialize (no-op, sounds are checked on first use)
+function notification.init()
+    local countdownReady = notification.hasCountdownSounds()
+    ac.log(string.format(
+        "AC Tracer: Notification sounds ready (countdown pack: %s, one-shot mode, loop=false)",
+        countdownReady and "enabled" or "fallback"
+    ))
 end
 
 return notification

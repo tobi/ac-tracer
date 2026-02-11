@@ -7,6 +7,19 @@ local settings = require('lib.core.settings')
 local ui_utils = {}
 
 --------------------------------------------------------------------------------
+-- Reusable vec2 objects for drawing (avoid allocations in hot loops)
+--------------------------------------------------------------------------------
+
+-- Pre-allocated vec2 objects for quad drawing (4 corners)
+local _v1 = vec2()
+local _v2 = vec2()
+local _v3 = vec2()
+local _v4 = vec2()
+
+-- Pre-allocated vec2 for path drawing
+local _vp = vec2()
+
+--------------------------------------------------------------------------------
 -- Speed Display (handles km/h vs mph conversion based on settings)
 --------------------------------------------------------------------------------
 
@@ -181,27 +194,33 @@ function ui_utils.drawTrace(x, y, w, h, data, color, opts)
     
     local numPoints = #data
     local step = w / (numPoints - 1)
+    local baseY = y + h
     
     -- Draw filled area first if requested (use quads for non-convex shapes)
     if filled then
         local fillColor = rgbm(color.r, color.g, color.b, color.mult * 0.7 * 0.5)  -- 30% more transparent
-        local baseY = y + h
         for i = 1, numPoints - 1 do
             local val1 = math.clamp(data[i] / maxVal, 0, 1)
             local val2 = math.clamp(data[i + 1] / maxVal, 0, 1)
             local x1 = x + (i - 1) * step
             local x2 = x + i * step
-            local y1 = y + h - val1 * h
-            local y2 = y + h - val2 * h
-            ui.drawQuadFilled(vec2(x1, y1), vec2(x2, y2), vec2(x2, baseY), vec2(x1, baseY), fillColor)
+            local y1 = baseY - val1 * h
+            local y2 = baseY - val2 * h
+            -- Reuse pre-allocated vec2 objects to avoid GC pressure
+            _v1:set(x1, y1)
+            _v2:set(x2, y2)
+            _v3:set(x2, baseY)
+            _v4:set(x1, baseY)
+            ui.drawQuadFilled(_v1, _v2, _v3, _v4, fillColor)
         end
     end
     
-    -- Draw the line on top
+    -- Draw the line on top using pre-allocated vec2
     ui.pathClear()
     for i = 1, numPoints do
         local val = math.clamp(data[i] / maxVal, 0, 1)
-        ui.pathLineTo(vec2(x + (i - 1) * step, y + h - val * h))
+        _vp:set(x + (i - 1) * step, baseY - val * h)
+        ui.pathLineTo(_vp)
     end
     ui.pathStroke(color, false, thickness)
 end
@@ -224,6 +243,7 @@ function ui_utils.drawGearTrace(x, y, w, h, data, color, opts)
     
     local numPoints = #data
     local step = w / (numPoints - 1)
+    local baseY = y + h
     
     -- Draw filled area first if requested
     if filled then
@@ -232,13 +252,15 @@ function ui_utils.drawGearTrace(x, y, w, h, data, color, opts)
         local prevX = nil
         for i = 1, numPoints do
             local gear = data[i]
-            local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
             local px = x + (i - 1) * step
             
             if prevGear ~= nil then
                 local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
-                local prevY = y + h - prevNorm * h
-                ui.drawRectFilled(vec2(prevX, prevY), vec2(px, y + h), fillColor)
+                local prevY = baseY - prevNorm * h
+                -- Reuse pre-allocated vec2 objects
+                _v1:set(prevX, prevY)
+                _v2:set(px, baseY)
+                ui.drawRectFilled(_v1, _v2, fillColor)
             end
             
             prevGear = gear
@@ -253,15 +275,19 @@ function ui_utils.drawGearTrace(x, y, w, h, data, color, opts)
         local gear = data[i]
         local normalized = gear > 0 and math.clamp(gear / maxGear, 0, 1) or 0
         local px = x + (i - 1) * step
-        local py = y + h - normalized * h
+        local py = baseY - normalized * h
         
         if prevGear ~= nil then
             local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
-            local prevY = y + h - prevNorm * h
+            local prevY = baseY - prevNorm * h
             
-            ui.drawLine(vec2(prevX, prevY), vec2(px, prevY), color, thickness)
+            -- Reuse pre-allocated vec2 objects
+            _v1:set(prevX, prevY)
+            _v2:set(px, prevY)
+            ui.drawLine(_v1, _v2, color, thickness)
             if gear ~= prevGear then
-                ui.drawLine(vec2(px, prevY), vec2(px, py), color, thickness)
+                _v3:set(px, py)
+                ui.drawLine(_v2, _v3, color, thickness)
             end
         end
         

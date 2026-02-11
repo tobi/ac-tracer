@@ -99,6 +99,10 @@ local config = ac.storage({
     -- Comparison mode (what to compare current lap against)
     -- Values: "reference", "sessionBest", "recentBest", "bestCorners", "off"
     comparisonMode = "reference",
+
+    -- Auto-save (background save of completed laps to AppData)
+    autoSaveEnabled = true,
+    autoSaveIncludeMD = true,  -- Also save .md and .json notes alongside .csv
 }, "ac_tracer/")
 
 --------------------------------------------------------------------------------
@@ -208,6 +212,12 @@ function M.comparisonModeDisplay()
     else return "Off"
     end
 end
+
+-- Auto-save
+function M.autoSaveEnabled() return config.autoSaveEnabled end
+function M.setAutoSaveEnabled(v) config.autoSaveEnabled = v end
+function M.autoSaveIncludeMD() return config.autoSaveIncludeMD end
+function M.setAutoSaveIncludeMD(v) config.autoSaveIncludeMD = v end
 
 --------------------------------------------------------------------------------
 -- Flag Marker Accessors
@@ -394,6 +404,17 @@ function M.windowSettings()
         comparisonModeButton:control(vec2(CONTROL_WIDTH, 0)) 
     end)
     hint("Ghost traces, delta, and corner analysis source")
+    
+    ui.dummy(vec2(0, 8))
+    
+    -- AUTO-SAVE
+    ui.header("Auto-Save")
+    
+    configCheckbox("Auto-save completed laps", "autoSaveEnabled")
+    if config.autoSaveEnabled then
+        configCheckbox("Include MD + JSON notes", "autoSaveIncludeMD")
+        hint("Saves to %APPDATA%\\ac-tracer\\")
+    end
     
     ui.dummy(vec2(0, 8))
     

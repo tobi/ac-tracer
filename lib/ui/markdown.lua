@@ -39,7 +39,6 @@ end
 
 local function formatPosDelta(meters)
     if not meters then return "N/A" end
-    local sign = meters >= 0 and "+" or ""
     local direction = meters >= 0 and "later" or "earlier"
     return string.format("%.0fm %s", math.abs(meters), direction)
 end
@@ -65,8 +64,49 @@ local function getSessionInfo()
     if sim.timeHours and sim.timeMinutes then
         info.timeOfDay = string.format("%02d:%02d", sim.timeHours, sim.timeMinutes)
     end
+    
+    -- Tire temps (core temps) - FL, FR, RL, RR
+    -- Wrap in pcall to handle cases where wheel data isn't available
+    pcall(function()
+        if car.wheels then
+            local w = car.wheels
+            info.tireTemps = {
+                fl = w[0] and w[0].tyreCoreTemperature or nil,
+                fr = w[1] and w[1].tyreCoreTemperature or nil,
+                rl = w[2] and w[2].tyreCoreTemperature or nil,
+                rr = w[3] and w[3].tyreCoreTemperature or nil,
+            }
+            info.tirePressures = {
+                fl = w[0] and w[0].tyrePressure or nil,
+                fr = w[1] and w[1].tyrePressure or nil,
+                rl = w[2] and w[2].tyrePressure or nil,
+                rr = w[3] and w[3].tyrePressure or nil,
+            }
+        end
+    end)
 
     return info
+end
+
+--- Extract reference lap name from sourceFile or generate from metadata
+local function getReferenceLapName(refLap)
+    if not refLap then return nil end
+    
+    -- If loaded from CSV, use the source file path
+    if refLap.sourceFile and type(refLap.sourceFile) == "string" then
+        -- Extract just the filename without path and extension
+        local filename = refLap.sourceFile:match("([^/\\]+)$") or refLap.sourceFile
+        filename = filename:gsub("%.csv$", "")
+        return filename
+    end
+    
+    -- Otherwise generate from lap metadata
+    if refLap.time and refLap.time > 0 then
+        local timeStr = formatTime(refLap.time)
+        return string.format("%s_%s", refLap.track or "lap", timeStr:gsub(":", "-"))
+    end
+    
+    return "Reference Lap"
 end
 
 --- Get corner info with meters
@@ -77,9 +117,9 @@ local function getCornerMeters(corner, trackLength)
     return startM, endM
 end
 
---- Sample pedal data at 5Hz through a position range
+--- Sample telemetry data at 10Hz through a position range
 --- Also samples reference lap data at the same positions if provided
-local EXPORT_SAMPLE_RATE = 5  -- Hz
+local EXPORT_SAMPLE_RATE = 10  -- Hz
 local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
     if not lapData or lapData:length() < 2 then return {} end
 
@@ -121,6 +161,9 @@ local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
         end
 
         local pos = lapData.pos[closestIdx]
+        local steeringNorm = lapData.steering and lapData.steering[closestIdx] or 0.5
+        local g = lapData.gforce and lapData.gforce[closestIdx] or nil
+        
         local sample = {
             time = lapData.times[closestIdx],
             pos = pos,
@@ -130,16 +173,20 @@ local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
             brake_r = lapData.brake_r and lapData.brake_r[closestIdx] or lapData.brake[closestIdx],  -- Rear (or same as front)
             speed = lapData.speed[closestIdx],
             gear = lapData.gear and lapData.gear[closestIdx] or nil,
+            steering = lap.steerToDegrees(steeringNorm),  -- Steering angle in degrees
+            gLat = g and g.x or 0,  -- Lateral G
+            gLong = g and g.z or 0,  -- Longitudinal G
         }
 
         -- Add reference lap data at same position (if available)
-         if refLap and refLap:length() > 0 then
-             sample.ref_time = refLap:getTimeAtPos(pos)
-             sample.ref_speed = refLap:speedAt(pos)
-             sample.ref_gear = refLap:gearAt(pos)
-             sample.ref_throttle = refLap:throttleAt(pos)
-             sample.ref_brake = refLap:brakeAt(pos)
-         end
+        if refLap and refLap:length() > 0 then
+            sample.ref_time = refLap:getTimeAtPos(pos)
+            sample.ref_speed = refLap:speedAt(pos)
+            sample.ref_gear = refLap:gearAt(pos)
+            sample.ref_throttle = refLap:throttleAt(pos)
+            sample.ref_brake = refLap:brakeAt(pos)
+            sample.ref_steering = refLap:steeringDegAt(pos)
+        end
 
         -- Add flags if available (in-sim only data)
         if lapData.flags and lapData.flags[closestIdx] then
@@ -159,7 +206,7 @@ local function samplePedalData(lapData, startPos, endPos, trackLength, refLap)
     return samples
 end
 
---- Generate CSV from pedal samples
+--- Generate CSV from telemetry samples
 local function generatePedalCSV(samples, hasFlags, hasGear, hasRefData)
     if #samples == 0 then return "" end
 
@@ -187,7 +234,11 @@ local function generatePedalCSV(samples, hasFlags, hasGear, hasRefData)
     if hasRefData then
         header = header .. ",ref_brake_f"
     end
-    header = header .. ",brake_r"
+    header = header .. ",brake_r,steering"
+    if hasRefData then
+        header = header .. ",ref_steering"
+    end
+    header = header .. ",g_lat,g_long"
     if hasFlags then
         header = header .. ",tc,slip,lockup,overlap"
     end
@@ -196,11 +247,11 @@ local function generatePedalCSV(samples, hasFlags, hasGear, hasRefData)
     -- Data rows
     for _, s in ipairs(samples) do
         local gearStr = s.gear and tostring(s.gear) or ""
-        local row = string.format("%d,%.1f", s.meters, s.time)
+        local row = string.format("%d,%.2f", s.meters, s.time)
 
         -- Interleave ref_time
         if hasRefData then
-            row = row .. "," .. (s.ref_time and string.format("%.1f", s.ref_time) or "")
+            row = row .. "," .. (s.ref_time and string.format("%.2f", s.ref_time) or "")
         end
 
         -- Speed and ref_speed
@@ -228,8 +279,14 @@ local function generatePedalCSV(samples, hasFlags, hasGear, hasRefData)
             row = row .. "," .. (s.ref_brake and string.format("%.2f", s.ref_brake) or "")
         end
 
-        -- Brake_r (no ref for rear brake)
-        row = row .. string.format(",%.2f", s.brake_r)
+        -- Brake_r and steering
+        row = row .. string.format(",%.2f,%.1f", s.brake_r, s.steering or 0)
+        if hasRefData then
+            row = row .. "," .. (s.ref_steering and string.format("%.1f", s.ref_steering) or "")
+        end
+
+        -- G-forces
+        row = row .. string.format(",%.2f,%.2f", s.gLat or 0, s.gLong or 0)
 
         if hasFlags then
             local tc = s.tcActive and "1" or "0"
@@ -285,9 +342,38 @@ function markdown.generate(currentLap, referenceLap)
     add("**Sim:** Assetto Corsa")
     add(string.format("**Track:** %s (%.0fm)", sessionInfo.track, trackLength))
     add(string.format("**Car:** %s", sessionInfo.carName))
+    
+    -- Reference lap info
+    if referenceLap then
+        local refName = getReferenceLapName(referenceLap)
+        add(string.format("**Reference:** %s", refName))
+    end
+    
     if sessionInfo.brakeBias then
         add(string.format("**Brake Bias:** %.1f%% front", sessionInfo.brakeBias * 100))
     end
+    
+    -- Fuel at lap start
+    if currentLap.fuelLeftAtStart and currentLap.fuelLeftAtStart > 0 then
+        add(string.format("**Fuel at Start:** %.1f L", currentLap.fuelLeftAtStart))
+    end
+    
+    -- Tire temps and pressures at lap start
+    if sessionInfo.tireTemps then
+        local t = sessionInfo.tireTemps
+        if t.fl and t.fr and t.rl and t.rr then
+            add(string.format("**Tires:** FL %.0f°C / FR %.0f°C / RL %.0f°C / RR %.0f°C",
+                t.fl, t.fr, t.rl, t.rr))
+        end
+    end
+    if sessionInfo.tirePressures then
+        local p = sessionInfo.tirePressures
+        if p.fl and p.fr and p.rl and p.rr then
+            add(string.format("**Pressures:** FL %.1f / FR %.1f / RL %.1f / RR %.1f psi",
+                p.fl, p.fr, p.rl, p.rr))
+        end
+    end
+    
     if sessionInfo.timeOfDay then
         add(string.format("**Time of Day:** %s", sessionInfo.timeOfDay))
     end
@@ -374,20 +460,35 @@ function markdown.generate(currentLap, referenceLap)
             local startM = math.floor(corner.startPos * trackLength)
             local endM = math.floor(corner.endPos * trackLength)
 
-            add(string.format("### %s", formatCornerTitle(corner)))
+            -- Build corner header with score and delta for quick scanning
+            local cornerHeader = formatCornerTitle(corner)
+            if comparison then
+                local score = scoring.calculate(comparison)
+                cornerHeader = cornerHeader .. string.format(" — Score: %d/100", score)
+                if comparison.timeDelta then
+                    local sign = comparison.timeDelta >= 0 and "+" or ""
+                    cornerHeader = cornerHeader .. string.format(" — Delta: %s%.2fs", sign, comparison.timeDelta)
+                end
+            end
+            add(string.format("### %s", cornerHeader))
 
-            -- Reference lap summary (compact, at top of corner)
+            -- Reference lap summary (compact, reformatted)
             if refAnalysis then
-                local refSummary = string.format("**Ref:** Entry %s", formatSpeed(refAnalysis.entrySpeed))
+                local refSummary = string.format("**Ref:** Entry %s → Apex %s → Exit %s",
+                    formatSpeed(refAnalysis.entrySpeed),
+                    formatSpeed(refAnalysis.apexSpeed),
+                    formatSpeed(refAnalysis.exitSpeed))
+                
+                -- Add brake point and gear in parentheses
+                local extras = {}
                 if refAnalysis.brakePos then
-                    refSummary = refSummary .. string.format(", brake %dm", math.floor(refAnalysis.brakePos * trackLength))
+                    table.insert(extras, string.format("brake @ %dm", math.floor(refAnalysis.brakePos * trackLength)))
                 end
-                if refAnalysis.apexPos then
-                    refSummary = refSummary .. string.format(", apex %s", formatSpeed(refAnalysis.apexSpeed))
-                end
-                refSummary = refSummary .. string.format(", exit %s", formatSpeed(refAnalysis.exitSpeed))
                 if refAnalysis.minGear then
-                    refSummary = refSummary .. string.format(", G%d", refAnalysis.minGear)
+                    table.insert(extras, string.format("G%d", refAnalysis.minGear))
+                end
+                if #extras > 0 then
+                    refSummary = refSummary .. " (" .. table.concat(extras, ", ") .. ")"
                 end
                 add(refSummary)
                 addBlank()
@@ -406,7 +507,7 @@ function markdown.generate(currentLap, referenceLap)
                 local liftM = math.floor(currentAnalysis.liftOffPos * trackLength)
                 local liftLine = string.format("- **Lift throttle** at %dm", liftM)
                 if comparison and comparison.refLiftOffPos and comparison.currentLiftOffPos then
-                    local deltaM = (comparison.currentLiftOffPos - comparison.refLiftOffPos) * trackLength
+                    local deltaM = ui_utils.positionDeltaToMeters(comparison.currentLiftOffPos, comparison.refLiftOffPos)
                     liftLine = liftLine .. string.format(" (%s)", formatPosDelta(deltaM))
                 end
                 add(liftLine)
@@ -417,7 +518,7 @@ function markdown.generate(currentLap, referenceLap)
                 local brakeM = math.floor(currentAnalysis.brakePos * trackLength)
                 local brakeLine = string.format("- **Brake** at %dm", brakeM)
                 if comparison and comparison.refBrakePos and comparison.currentBrakePos then
-                    local deltaM = (comparison.currentBrakePos - comparison.refBrakePos) * trackLength
+                    local deltaM = ui_utils.positionDeltaToMeters(comparison.currentBrakePos, comparison.refBrakePos)
                     brakeLine = brakeLine .. string.format(" (%s)", formatPosDelta(deltaM))
                 end
                 add(brakeLine)
@@ -450,19 +551,10 @@ function markdown.generate(currentLap, referenceLap)
                 add(steerLine)
             end
 
-            -- Corner time delta and score
-            if comparison and comparison.timeDelta then
-                local sign = comparison.timeDelta >= 0 and "+" or ""
-                add(string.format("- **Corner time delta:** %s%.3fs", sign, comparison.timeDelta))
-            end
-
-            -- Calculate score using scoring module
+            -- Additional comparison details (score and delta are in header)
             if comparison then
-                local score = scoring.calculate(comparison)
                 local brakeMeters, liftMeters = scoring.getMeterDeltas(comparison)
                 local currentCoast, refCoast, coastDelta = scoring.getCoastDistances(comparison)
-
-                add(string.format("- **Corner Score:** %d/100", score))
 
                 -- Coast distance if significant
                 if currentCoast and currentCoast > 10 and coastDelta and math.abs(coastDelta) > 5 then
@@ -506,10 +598,10 @@ function markdown.generate(currentLap, referenceLap)
                 end
             end
 
-            -- Pedal trace CSV (5Hz sampling)
+            -- Telemetry trace CSV (10Hz sampling)
             addBlank()
             add("<details>")
-            add("<summary>Pedal Data (5Hz sampling)</summary>")
+            add("<summary>Telemetry Data (10Hz sampling)</summary>")
             addBlank()
             -- Explain ref_ columns if reference lap is available
             local hasRefData = referenceLap and referenceLap:length() > 0
