@@ -14,6 +14,12 @@ local groupedCacheTime = 0
 local groupedCacheKey = nil
 local CACHE_TTL = 5  -- seconds
 
+local function safeGetEnv(name)
+    local getenv = os and os.getenv
+    if not getenv or type(getenv) ~= "function" then return nil end
+    return getenv(name)
+end
+
 --------------------------------------------------------------------------------
 -- Formatting Helpers
 --------------------------------------------------------------------------------
