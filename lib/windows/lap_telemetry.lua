@@ -35,6 +35,7 @@ local selectedCorner = nil  -- Corner number being edited
 local draggingHandle = nil  -- "start", "end", or nil
 local nameInputBuffer = ""
 local lastEditedCorner = nil  -- Track which corner we're editing to reset buffer
+local hoveredCornerNum = nil  -- Last hovered corner number (used for corner hover event dedupe)
 
 -- Markers dropdown state
 local showMarkersDropdown = false
@@ -238,6 +239,67 @@ local function getTimeRange(selectedLap)
     return startTime, endTime, lapTime
 end
 
+-- Draw a polyline while splitting on data gaps / track position jumps (e.g. start/finish wrap)
+-- This avoids visually connecting unrelated points back to zero.
+local function drawSeriesPath(x, y, w, h, minVal, maxVal, values, valueValid, positions, color, thickness, splitOnWrap)
+    if not values or #values < 2 then return end
+
+    local range = maxVal - minVal
+    if range <= 0 then return end
+
+    local inSegment = false
+    local segmentPoints = 0
+    local lastPos = nil
+
+    for i = 1, #values do
+        local value = values[i]
+        local isValid = valueValid and valueValid[i]
+        if not isValid then
+            if inSegment and segmentPoints > 1 then
+                ui.pathStroke(color, false, thickness)
+            end
+            inSegment = false
+            segmentPoints = 0
+            lastPos = nil
+            ui.pathClear()
+            goto continue
+        end
+
+        local px = x + (i - 1) / (#values - 1) * w
+        local py = y + h - ((value - minVal) / range) * h
+        local pos = positions and positions[i] or nil
+
+        local splitSegment = false
+        if inSegment and splitOnWrap and pos and lastPos then
+            local delta = pos - lastPos
+            splitSegment = delta > 0.5 or delta < -0.5
+        end
+
+        if not inSegment or splitSegment then
+            if inSegment and segmentPoints > 1 then
+                ui.pathStroke(color, false, thickness)
+            end
+            ui.pathClear()
+            ui.pathLineTo(vec2(px, py))
+            inSegment = true
+            segmentPoints = 1
+        else
+            ui.pathLineTo(vec2(px, py))
+            segmentPoints = segmentPoints + 1
+        end
+
+        if pos ~= nil then
+            lastPos = pos
+        end
+
+        ::continue::
+    end
+
+    if inSegment and segmentPoints > 1 then
+        ui.pathStroke(color, false, thickness)
+    end
+end
+
 --------------------------------------------------------------------------------
 -- Trace Drawing
 --------------------------------------------------------------------------------
@@ -254,6 +316,8 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
 
     local values = {}
     local refValues = {}
+    local valuesValid = {}
+    local refValuesValid = {}
     local positions = {}  -- Track positions for position-based ref lookup
     local actualMin = minVal or math.huge
     local actualMax = maxVal or -math.huge
@@ -265,20 +329,22 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
          -- Use accessor function for the actual value
          local actualVal = pos and accessor(lapObj, pos) or nil
          
-         if actualVal ~= nil then
-             table.insert(values, actualVal)
-             table.insert(positions, pos)
-             if not minVal or not maxVal then
-                 actualMin = math.min(actualMin, actualVal)
-                 actualMax = math.max(actualMax, actualVal)
-             end
-         else
-             table.insert(values, 0)
-             table.insert(positions, nil)
-         end
+        if actualVal ~= nil then
+            table.insert(values, actualVal)
+            table.insert(valuesValid, true)
+            table.insert(positions, pos)
+            if not minVal or not maxVal then
+                actualMin = math.min(actualMin, actualVal)
+                actualMax = math.max(actualMax, actualVal)
+            end
+        else
+            table.insert(values, 0)
+            table.insert(valuesValid, false)
+            table.insert(positions, nil)
+        end
 
-         -- Get reference value at SAME POSITION (not same time) for proper alignment
-         -- Apply position offset for lap alignment adjustment
+        -- Get reference value at SAME POSITION (not same time) for proper alignment
+        -- Apply position offset for lap alignment adjustment
           if refLapObj and pos then
               local offsetPos = (pos + refPosOffset) % 1.0  -- Wrap around 0-1
               local refVal = accessor(refLapObj, offsetPos)
@@ -288,11 +354,14 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
                       actualMin = math.min(actualMin, refVal)
                       actualMax = math.max(actualMax, refVal)
                   end
+                  table.insert(refValuesValid, true)
               else
                   table.insert(refValues, 0)
+                  table.insert(refValuesValid, false)
               end
           elseif refLapObj then
               table.insert(refValues, 0)
+              table.insert(refValuesValid, false)
           end
      end
 
@@ -329,23 +398,11 @@ local function drawTimeTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj, 
 
     -- Draw reference trace
     if refLapObj and #refValues == #values then
-        ui.pathClear()
-        for i = 1, #refValues do
-            local px = x + (i - 1) / (#refValues - 1) * w
-            local py = y + h - ((refValues[i] - minVal) / range) * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(refColor, false, 1.5)
+        drawSeriesPath(x, y, w, h, minVal, maxVal, refValues, refValuesValid, positions, refColor, 1.5, true)
     end
 
     -- Draw current trace
-    ui.pathClear()
-    for i = 1, #values do
-        local px = x + (i - 1) / (#values - 1) * w
-        local py = y + h - ((values[i] - minVal) / range) * h
-        ui.pathLineTo(vec2(px, py))
-    end
-    ui.pathStroke(color, false, 2)
+    drawSeriesPath(x, y, w, h, minVal, maxVal, values, valuesValid, positions, color, 2, true)
 
      -- Cursor markers
      if cursorTime and cursorTime >= startTime and cursorTime <= endTime then
@@ -384,6 +441,8 @@ local function drawLatGTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj)
 
     local values = {}
     local refValues = {}
+    local valuesValid = {}
+    local refValuesValid = {}
     local positions = {}
     local actualMin = math.huge
     local actualMax = -math.huge
@@ -395,27 +454,32 @@ local function drawLatGTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj)
 
         if val ~= nil then
             table.insert(values, val)
+            table.insert(valuesValid, true)
             table.insert(positions, pos)
             actualMin = math.min(actualMin, val)
             actualMax = math.max(actualMax, val)
         else
             table.insert(values, 0)
+            table.insert(valuesValid, false)
             table.insert(positions, nil)
         end
 
         if refLapObj and pos then
             local refVal = getGForceAtPos(refLapObj, pos, "x")
             if refVal ~= nil then
-                table.insert(refValues, refVal)
-                actualMin = math.min(actualMin, refVal)
-                actualMax = math.max(actualMax, refVal)
-            else
-                table.insert(refValues, 0)
-            end
-        elseif refLapObj then
-            table.insert(refValues, 0)
+                  table.insert(refValues, refVal)
+                  actualMin = math.min(actualMin, refVal)
+                  actualMax = math.max(actualMax, refVal)
+                  table.insert(refValuesValid, true)
+              else
+                  table.insert(refValues, 0)
+                  table.insert(refValuesValid, false)
+              end
+          elseif refLapObj then
+              table.insert(refValues, 0)
+              table.insert(refValuesValid, false)
+          end
         end
-    end
 
     if #values < 2 then return end
 
@@ -442,23 +506,11 @@ local function drawLatGTrace(x, y, w, h, startTime, endTime, lapObj, refLapObj)
 
     -- Draw reference trace
     if refLapObj and #refValues == #values then
-        ui.pathClear()
-        for i = 1, #refValues do
-            local px = x + (i - 1) / (#refValues - 1) * w
-            local py = y + h - ((refValues[i] - minVal) / range) * h
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.ghost.speed, false, 1.5)
+        drawSeriesPath(x, y, w, h, minVal, maxVal, refValues, refValuesValid, positions, theme.ghost.speed, 1.5, true)
     end
 
     -- Draw current trace
-    ui.pathClear()
-    for i = 1, #values do
-        local px = x + (i - 1) / (#values - 1) * w
-        local py = y + h - ((values[i] - minVal) / range) * h
-        ui.pathLineTo(vec2(px, py))
-    end
-    ui.pathStroke(theme.trace.speed, false, 2)
+    drawSeriesPath(x, y, w, h, minVal, maxVal, values, valuesValid, positions, theme.trace.speed, 2, true)
 
     -- Cursor markers
     if cursorTime and cursorTime >= startTime and cursorTime <= endTime then
@@ -521,6 +573,8 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     -- Build position-to-delta map for corner delta calculations
     local posDeltas = {}
     local deltas = {}
+    local deltasValid = {}
+    local positions = {}
     local maxDelta = 0.1
 
     for i = 0, numSamples do
@@ -536,13 +590,19 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
             if selectedTime and refTime then
                 local delta = selectedTime - refTime
                 table.insert(deltas, delta)
+                table.insert(deltasValid, true)
+                table.insert(positions, pos)
                 posDeltas[pos] = delta
                 maxDelta = math.max(math.abs(maxDelta), math.abs(delta))
             else
                 table.insert(deltas, 0)
+                table.insert(deltasValid, false)
+                table.insert(positions, nil)
             end
         else
             table.insert(deltas, 0)
+            table.insert(deltasValid, false)
+            table.insert(positions, nil)
         end
     end
 
@@ -555,6 +615,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
     local localMouseX = mousePos.x - winPos.x
     local localMouseY = mousePos.y - winPos.y
     local hoveredCorner = nil
+    local hoveredCornerObj = nil
     local hoveredHandle = nil  -- "start" or "end" or nil
 
     if corners then
@@ -595,12 +656,28 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                         ui.drawRect(vec2(drawStartX, y), vec2(drawEndX, y + h), theme.corner.focusedBorder, 0, 2)
                     end
 
+                    local isInCornerZone = localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h
+
                     -- Click detection for corner analysis (when not in edit mode)
                     if not editMode and ui.mouseClicked(ui.MouseButton.Left) then
-                        if localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h then
+                        if isInCornerZone then
                             -- Show this corner in corner_analysis
                             corner_analysis.setViewedCorner(corner, selectedLap, refLapObj)
+                            if _web_emit and type(_web_emit) == "function" then
+                                _web_emit("corner_selected", {
+                                    number = corner.number,
+                                    lap = selectedLap.lapNumberInSession or 0,
+                                    track = selectedLap.track,
+                                    name = corner.name or ("Corner " .. tostring(corner.number)),
+                                    source = "telemetry_graph",
+                                })
+                            end
                         end
+                    end
+
+                    if isInCornerZone then
+                        hoveredCorner = corner.number
+                        hoveredCornerObj = corner
                     end
 
                     -- Corner name in top left of zone
@@ -654,8 +731,9 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                         local handleHitSize = 12  -- Larger hit area
 
                         -- Check if hovering this corner zone (for selection)
-                        if localMouseX >= drawStartX and localMouseX <= drawEndX and localMouseY >= y and localMouseY <= y + h then
+                        if isInCornerZone then
                             hoveredCorner = corner.number
+                            hoveredCornerObj = corner
                         end
 
                         -- Start handle (only if visible)
@@ -689,6 +767,31 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
                 end
             end
         end
+    end
+
+    if not editMode then
+        if hoveredCornerObj then
+            local tooltipName = hoveredCornerObj.name or ("Corner " .. tostring(hoveredCornerObj.number))
+            local tooltipRange = string.format("Start %.1f%%  End %.1f%%", (hoveredCornerObj.startPos or 0) * 100, (hoveredCornerObj.endPos or 0) * 100)
+            ui.setTooltip(string.format("%s (%s)", tooltipName, tooltipRange))
+
+            if hoveredCornerNum ~= hoveredCorner then
+                hoveredCornerNum = hoveredCorner
+                if _web_emit and type(_web_emit) == "function" then
+                    _web_emit("corner_hovered", {
+                        number = hoveredCorner,
+                        lap = selectedLap.lapNumberInSession or 0,
+                        track = selectedLap.track,
+                        name = tooltipName,
+                        source = "telemetry_graph",
+                    })
+                end
+            end
+        else
+            hoveredCornerNum = nil
+        end
+    else
+        hoveredCornerNum = nil
     end
 
     -- Handle mouse interactions for edit mode
@@ -749,13 +852,7 @@ local function drawDeltaTimeTrace(x, y, w, h, startTime, endTime, selectedLap, r
 
     -- Delta trace (use inner dimensions)
     if #deltas >= 2 then
-        ui.pathClear()
-        for i = 1, #deltas do
-            local px = x + (i - 1) / (#deltas - 1) * w
-            local py = innerY + innerH / 2 - (deltas[i] / maxDelta) * (innerH / 2)
-            ui.pathLineTo(vec2(px, py))
-        end
-        ui.pathStroke(theme.trace.delta, false, 2)
+        drawSeriesPath(x, innerY, w, innerH, -maxDelta, maxDelta, deltas, deltasValid, positions, theme.trace.delta, 2, true)
     end
 
     -- Y-axis labels (use inner dimensions)
