@@ -384,8 +384,8 @@ local function analyzeThrottleTiming(currentLap, refLap, data)
     if not data.refStartPos or not data.refEndPos then return nil end
 
     local THROTTLE_THRESHOLD = 0.9  -- Consider "on throttle" at 90%
-    local GEAR_SHIFT_WINDOW = 15    -- Samples to ignore around gear shifts (~0.5s at 30Hz)
-    local SUSTAINED_SAMPLES = 6     -- Require throttle to stay high for ~200ms to count
+    local GEAR_SHIFT_WINDOW = 13    -- Samples to ignore around gear shifts (~0.5s at 25Hz)
+    local SUSTAINED_SAMPLES = 5     -- Require throttle to stay high for ~200ms to count
 
     -- Helper to check if a gear shift occurred near index i in a lap
     local function isNearGearShift(lapData, i)

@@ -28,7 +28,7 @@ local COLUMN_MAPPINGS = {
     speed = { "ground speed", "corr speed", "wheel speed avg", "aero speed", "uspeed", "vehrefspeed", "speed" },
 
     -- Input columns - driver throttle pos preferred over throttle pos
-    throttle = { "driver throttle pos", "throttle pos" },
+    throttle = { "driver throttle pos", "accel pedal pos", "acc pedal pos", "pps", "aps", "driver demand", "tps driver", "throttle pos" },
     clutch = { "clutch pos" },
     steering = { "steering angle" },
 

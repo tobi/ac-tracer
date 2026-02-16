@@ -4,6 +4,7 @@
 
 local ffi = require("ffi")
 local file_utils = require('lib.core.files')
+local lap_mod = require('lib.lap')
 
 local M = {}
 
@@ -252,7 +253,7 @@ end
 -- Priority-ordered channel name mappings (same priorities as lap_csv_parser.lua)
 local CHANNEL_MAPPINGS = {
     speed = { "corr speed", "ground speed", "wheel speed avg", "aero speed", "uspeed", "vehrefspeed", "speed" },
-    throttle = { "driver throttle pos", "throttle pos" },
+    throttle = { "driver throttle pos", "accel pedal pos", "acc pedal pos", "pps", "aps", "driver demand", "tps driver", "throttle pos" },
     brake = { "brake pressure f", "brake pressure fr", "p_f_brake" },
     brake_r = { "brake pressure r", "brake pressure rl", "p_r_brake" },
     brakePos = { "brake pos" },
@@ -506,38 +507,35 @@ function M.resampleChannel(values, srcFreq, targetFreq, durationS)
     return result
 end
 
---- Unify all mapped channels to a common time base
+--- Unify all mapped channels to a common time base at lap.SAMPLE_RATE
 ---@param lapValues table { [channelIdx] = values_array }
 ---@param channels table Channel metadata array
 ---@param mapping table { fieldName = channelIdx }
 ---@param durationS number Lap duration in seconds
----@return table unified { time={}, speed={}, throttle={}, ... } at common rate
----@return number outputFreq The output sample rate
+---@return table unified { time={}, speed={}, throttle={}, ... } at target rate
+---@return number outputFreq The output sample rate (lap.SAMPLE_RATE)
 function M.unifyChannels(lapValues, channels, mapping, durationS)
-    -- Find highest sample rate among mapped channels
-    local maxFreq = 0
-    for _, chIdx in pairs(mapping) do
-        local freq = channels[chIdx].rec_freq
-        if freq > maxFreq then maxFreq = freq end
-    end
-    if maxFreq == 0 then maxFreq = 100 end
+    -- Resample directly to lap.SAMPLE_RATE (25Hz) instead of the max native rate.
+    -- All native rates (50, 100, 200Hz) are exact multiples of 25Hz,
+    -- so this gives clean downsampling with no intermediate step needed.
+    local targetFreq = lap_mod.SAMPLE_RATE
 
-    local numSamples = math.floor(durationS * maxFreq) + 1
+    local numSamples = math.floor(durationS * targetFreq) + 1
     local unified = {
         time = {},
     }
 
     -- Build time array
     for i = 0, numSamples - 1 do
-        unified.time[i + 1] = i / maxFreq
+        unified.time[i + 1] = i / targetFreq
     end
 
-    -- Resample each mapped channel to maxFreq
+    -- Resample each mapped channel to targetFreq
     local fieldToChannel = {}
     for fieldName, chIdx in pairs(mapping) do
         local ch = channels[chIdx]
         local values = lapValues[chIdx] or {}
-        local resampled = M.resampleChannel(values, ch.rec_freq, maxFreq, durationS)
+        local resampled = M.resampleChannel(values, ch.rec_freq, targetFreq, durationS)
         fieldToChannel[fieldName] = { values = resampled, channel = ch }
     end
 
@@ -641,7 +639,7 @@ function M.unifyChannels(lapValues, channels, mapping, durationS)
         unified.g_long[i] = fieldToChannel.g_long and fieldToChannel.g_long.values[i] or 0
     end
 
-    return unified, maxFreq
+    return unified, targetFreq
 end
 
 --------------------------------------------------------------------------------

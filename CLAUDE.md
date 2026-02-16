@@ -68,7 +68,7 @@ lap = {
     fuelLeftAtStart = number, -- Fuel at lap start in liters (for fuel strategy)
     lapNumberInSession = number, -- Which lap number in this session (1, 2, 3...)
     
-    -- Telemetry arrays (all synchronized, same length, sampled at 60 Hz)
+    -- Telemetry arrays (all synchronized, same length, sampled at 25 Hz)
     throttle = { number, ... },  -- Throttle input (0.0 to 1.0)
     brake = { number, ... },     -- Front brake pressure in BAR (NOT normalized)
     brake_r = { number, ... },   -- Rear brake pressure in BAR (or same as front if no DLL)
@@ -134,8 +134,8 @@ Helper functions:
 
 ### Sampling
 
-- **Sample Rate**: 60 Hz (16.67ms between samples)
-- **Typical Lap**: ~5400 samples for a 90-second lap
+- **Sample Rate**: 25 Hz (40ms between samples)
+- **Typical Lap**: ~2250 samples for a 90-second lap
 - All arrays are synchronized: `throttle[i]`, `brake[i]`, etc. correspond to the same moment
 
 ### Steering Normalization
@@ -361,7 +361,7 @@ Initialize state (history starts empty, session-only)
 ```
 script.update(dt)
     ↓
-Sample at 60 Hz → append to state.currentLap arrays
+Sample at 25 Hz → append to state.currentLap arrays
     ↓
 Check lap completion → finalize, add to history, update bestLap
     ↓
@@ -583,7 +583,7 @@ Migration: On first load, corners are automatically copied from the old location
 
 ## Notes
 
-- **All sampling is 60 Hz** - consistent across recording, CSV import, and display
+- **All sampling is 25 Hz** - consistent across recording, CSV import, and display
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - throttle, clutch, steering are 0.0-1.0; brake is in bar
 - **Time in milliseconds** - internal storage uses ms for precision

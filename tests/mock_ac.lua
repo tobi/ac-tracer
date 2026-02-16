@@ -849,7 +849,7 @@ function mock.vfsSeedMotec(trackName)
 
     local lines = {
         '"Format","MoTeC CSV File"',
-        '"Sample Rate","30","Hz"',
+        '"Sample Rate","25","Hz"',
         "",
         '"Time","Track","Lap Progression","Ground Speed","Driver Throttle Pos","Brake Pressure F","Brake Pressure R","Clutch Pos","Steering Angle","Fuel Remaining","Gear","G Force Lat","G Force Long"',
         '"s","","","km/h","%","bar","bar","%","deg","l","","g","g"',
