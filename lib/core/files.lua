@@ -92,6 +92,13 @@ local function buildSearchPaths(trackId)
     return paths
 end
 
+--- Get user documents directories for saved and reference laps
+---@return string|nil savedDir Path to saved laps directory
+---@return string|nil refsDir Path to references directory
+function file_utils.getUserDocumentsDirs()
+    return getUserDocumentsDirs()
+end
+
 --- Get default lap directory path
 ---@return string Default lap directory path
 function file_utils.getLapDirectory()

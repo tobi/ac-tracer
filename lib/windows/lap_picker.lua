@@ -5,6 +5,7 @@
 local lap = require('lib.lap')
 local theme = require('lib.ui.theme')
 local file_utils = require('lib.core.files')
+local motec = require('lib.motec_ld_parser')
 
 -- Deferred require to avoid circular dependency
 local state = nil
@@ -22,6 +23,13 @@ local lap_picker = {}
 --------------------------------------------------------------------------------
 
 local isLoadingLap = false
+
+-- MoTeC import state
+local motecSession = nil     -- Parsed MoTeC session (from parseFile)
+local motecLaps = nil        -- Laps array from session
+local motecFastestIdx = nil  -- Index of fastest lap
+local motecStatus = nil      -- Status message for UI feedback
+local motecImporting = false -- Currently importing a lap
 
 --------------------------------------------------------------------------------
 -- Callbacks
@@ -60,6 +68,218 @@ local function loadCSVLap(fileInfo)
     else
         return nil, warnings and warnings[1] or "Failed to load CSV"
     end
+end
+
+--------------------------------------------------------------------------------
+-- Internal: MoTeC Import
+--------------------------------------------------------------------------------
+
+local function openMotecFileDialog()
+    os.openFileDialog({
+        title = "Import MoTeC Session",
+        fileTypes = {
+            { name = "MoTeC Log Files", mask = "*.ld" },
+        },
+        addAllFilesFileType = false,
+        defaultFolder = "C:\\MoTeC\\Logged Data",
+    }, function(err, filename)
+        if err then
+            motecStatus = "Error: " .. tostring(err)
+            return
+        end
+        if not filename then return end -- cancelled
+
+        motecStatus = "Parsing..."
+        local session, parseErr = motec.parseFile(filename)
+        if not session then
+            motecStatus = "Error: " .. (parseErr or "Unknown error")
+            return
+        end
+
+        if #session.laps == 0 then
+            motecStatus = "No laps found in session"
+            return
+        end
+
+        motecSession = session
+        motecLaps = session.laps
+        motecFastestIdx = motec.findFastestLap(session.laps)
+        motecStatus = nil
+    end)
+end
+
+local function importMotecLap(lapIndex)
+    if motecImporting or not motecSession then return end
+    motecImporting = true
+
+    local st = getState()
+    local _, refsDir = file_utils.getUserDocumentsDirs()
+    if not refsDir then
+        motecStatus = "Error: Cannot find references directory"
+        motecImporting = false
+        return
+    end
+
+    local filename = motec.buildExportFilename(motecSession, lapIndex)
+    local outputPath = refsDir .. filename
+    local trackName = st.track
+
+    local path, exportErr = motec.exportLapAsCSV(motecSession, lapIndex, outputPath, trackName)
+    if not path then
+        motecStatus = "Export failed: " .. (exportErr or "Unknown error")
+        motecImporting = false
+        return
+    end
+
+    -- Invalidate cache so new CSV appears in file list
+    file_utils.invalidateCache()
+
+    -- Load through pipeline and set as reference
+    local trackLength = ac.getSim().trackLengthM
+    local loaded, warnings = lap.fromCSV(outputPath, st.track, st.car, trackLength)
+
+    if loaded then
+        st.setBestLap(loaded)
+        local lapTime = motecLaps[lapIndex].timeFormatted
+        ac.setMessage("MoTeC Imported", lapTime)
+        motecStatus = nil
+        -- Close the MoTeC sub-dialog
+        motecSession = nil
+        motecLaps = nil
+        motecFastestIdx = nil
+    else
+        local warnMsg = warnings and warnings[1] or "Failed to load exported CSV"
+        motecStatus = "Load failed: " .. warnMsg
+    end
+
+    motecImporting = false
+end
+
+local function closeMotecDialog()
+    motecSession = nil
+    motecLaps = nil
+    motecFastestIdx = nil
+    motecStatus = nil
+end
+
+--- Draw the MoTeC lap selection sub-dialog
+---@param x number Left edge
+---@param py number Current Y position
+---@param contentW number Available width
+---@param maxY number Maximum Y before clipping
+---@return number New Y position
+local function drawMotecLapSelector(x, py, contentW, maxY)
+    local header = motecSession.header
+
+    -- Session info
+    ui.setCursor(vec2(x, py))
+    ui.pushFont(ui.Font.Small)
+    if header.driver and header.driver ~= "" then
+        ui.textColored(header.driver, theme.text.primary)
+        ui.sameLine()
+        ui.textColored(" - ", theme.text.muted)
+        ui.sameLine()
+    end
+    ui.textColored(header.venue or "Unknown Track", theme.text.secondary)
+    ui.popFont()
+    py = py + 16
+
+    ui.setCursor(vec2(x, py))
+    ui.pushFont(ui.Font.Small)
+    ui.textColored(string.format("%d laps found", #motecLaps), theme.text.muted)
+    ui.popFont()
+    py = py + 16
+
+    -- Lap list
+    for i, lapInfo in ipairs(motecLaps) do
+        if py >= maxY - ROW_HEIGHT then break end
+
+        local isFastest = (i == motecFastestIdx)
+
+        ui.setCursor(vec2(x, py + 2))
+        ui.pushFont(ui.Font.Small)
+
+        local labelColor = isFastest and theme.corner.faster or theme.text.primary
+        ui.pushStyleColor(ui.StyleColor.Text, labelColor)
+        ui.text(string.format("Lap %d", i))
+        ui.popStyleColor()
+
+        ui.sameLine()
+        ui.pushStyleColor(ui.StyleColor.Text, labelColor)
+        ui.text(lapInfo.timeFormatted)
+        ui.popStyleColor()
+
+        if isFastest then
+            ui.sameLine()
+            ui.textColored("(fastest)", theme.text.muted)
+        end
+
+        ui.popFont()
+
+        -- Import button
+        local btnX = x + contentW - 55
+        ui.setCursor(vec2(btnX, py))
+        ui.pushStyleColor(ui.StyleColor.Button, theme.button.reference)
+        ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.referenceHover)
+        if ui.button("Import##ml" .. i, vec2(50, 18)) and not motecImporting then
+            importMotecLap(i)
+        end
+        ui.popStyleColor(2)
+
+        py = py + ROW_HEIGHT
+    end
+
+    -- Status message
+    if motecStatus then
+        ui.setCursor(vec2(x, py + 2))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored(motecStatus, theme.status.error)
+        ui.popFont()
+        py = py + 18
+    end
+
+    -- Back button
+    py = py + 4
+    ui.setCursor(vec2(x, py))
+    if ui.button("Back##motec", vec2(60, 18)) then
+        closeMotecDialog()
+    end
+    py = py + ROW_HEIGHT
+
+    return py
+end
+
+--- Draw the "Import MoTeC .ld" button and sub-dialog
+---@param x number Left edge
+---@param py number Current Y position
+---@param contentW number Available width
+---@param maxY number Maximum Y
+---@return number New Y position
+local function drawMotecImportSection(x, py, contentW, maxY)
+    if motecSession and motecLaps then
+        -- Show lap selection sub-dialog
+        return drawMotecLapSelector(x, py, contentW, maxY)
+    end
+
+    -- Import button
+    ui.setCursor(vec2(x, py))
+    ui.pushStyleColor(ui.StyleColor.Button, theme.button.primary)
+    ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.primaryHover)
+    if ui.button("Import MoTeC .ld##motec_open", vec2(contentW, 20)) then
+        openMotecFileDialog()
+    end
+    ui.popStyleColor(2)
+    py = py + 24
+
+    if motecStatus then
+        ui.setCursor(vec2(x, py))
+        ui.pushFont(ui.Font.Small)
+        ui.textColored(motecStatus, theme.status.error)
+        ui.popFont()
+        py = py + 16
+    end
+
+    return py
 end
 
 --------------------------------------------------------------------------------
@@ -378,6 +598,12 @@ function lap_picker.drawPopover(x, y, width, height, options)
         py = py + 20
     end
 
+    -- MoTeC Import
+    py = py + 5
+    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
+    py = py + 10
+    py = drawMotecImportSection(contentX, py, contentW, y + height - 40)
+
     -- Close button
     py = y + height - 30
     ui.setCursor(vec2(contentX, py))
@@ -533,7 +759,14 @@ function lap_picker.draw(dt)
             ui.pushFont(ui.Font.Small)
             ui.textColored("No CSV files in tracks/", theme.text.muted)
             ui.popFont()
+            py = py + 18
         end
+
+        -- MoTeC Import
+        py = py + 6
+        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
+        py = py + 8
+        py = drawMotecImportSection(padding, py, contentW, windowSize.y)
     end)
 end
 
