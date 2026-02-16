@@ -1526,7 +1526,7 @@ else
 
         -- The CSV "Origin Time" is 315.245s but beacon start is 315.09s
         -- This ~0.155s offset means our t=0 is 0.155s before the CSV's t=0.
-        -- MoTeC also resamples multi-rate channels to 25Hz which introduces
+        -- MoTeC also resamples multi-rate channels to 25Hz (ref CSV rate) which introduces
         -- further interpolation differences. We account for the offset.
         local csvOriginS = 315.245  -- From CSV header "Origin Time"
         local beaconStartS = lap.startTime
@@ -1553,9 +1553,9 @@ else
         print(string.format("    Speed: compared %d points, avg error %.3f km/h, max error %.3f km/h (offset=%.3fs)",
             numCompared, avgErr, maxErr, timeOffset))
 
-        -- Both our parser and MoTeC's CSV export resample to 25Hz from 100Hz,
-        -- but use different interpolation algorithms, causing small differences
-        assert_true(avgErr < 1.0, string.format("Average speed error should be < 1.0 km/h, got %.3f", avgErr))
+        -- Our parser resamples to 50Hz, MoTeC's CSV export to 25Hz, so we compare
+        -- at the ref's 25Hz sample points. Different rates and interpolation cause differences.
+        assert_true(avgErr < 0.5, string.format("Average speed error should be < 0.5 km/h, got %.3f", avgErr))
         assert_true(maxErr < 5.0, string.format("Max speed error should be < 5 km/h, got %.3f", maxErr))
     end)
 
@@ -1598,10 +1598,10 @@ else
         print(string.format("    Brake: compared %d points (%d braking), avg error %.3f bar, max error %.3f bar",
             numCompared, numBraking, avgErr, maxErr))
 
-        -- Brake at 100Hz with int16 conversion, resampled to 25Hz by both paths.
-        -- Sharp brake transients lose fidelity at 25Hz causing higher max errors.
+        -- Brake at 100Hz with int16 conversion, our path resamples to 50Hz,
+        -- ref CSV is at 25Hz. Peak errors at sharp brake transients where rates differ.
         assert_true(avgErr < 0.5, string.format("Average brake error should be < 0.5 bar, got %.3f", avgErr))
-        assert_true(maxErr < 20.0, string.format("Max brake error should be < 20 bar, got %.3f", maxErr))
+        assert_true(maxErr < 10.0, string.format("Max brake error should be < 10 bar, got %.3f", maxErr))
     end)
 
     test("throttle values match reference CSV", function()
@@ -1645,7 +1645,7 @@ else
         print(string.format("    Throttle: compared %d points, avg error %.4f, max error %.4f",
             numCompared, avgErr, maxErr))
 
-        -- Throttle is 50Hz resampled to 100Hz (ours) and 25Hz (ref) - small differences expected
+        -- Throttle is 50Hz native, we keep at 50Hz, ref CSV is at 25Hz - small differences expected
         assert_true(avgErr < 0.02, string.format("Average throttle error should be < 0.02, got %.4f", avgErr))
     end)
 
@@ -1686,9 +1686,9 @@ else
         print(string.format("    Steering: compared %d points, avg error %.3f deg, max error %.3f deg",
             numCompared, avgErr, maxErr))
 
-        -- Steering is 50Hz downsampled to 25Hz by both paths using different
-        -- interpolation algorithms. Differences are larger at fast steering inputs.
-        assert_true(avgErr < 2.0, string.format("Average steering error should be < 2.0 deg, got %.3f", avgErr))
+        -- Steering is 50Hz native, we keep at 50Hz, ref CSV is at 25Hz.
+        -- Different interpolation at fast steering inputs causes ~1 deg avg difference.
+        assert_true(avgErr < 1.5, string.format("Average steering error should be < 1.5 deg, got %.3f", avgErr))
     end)
 
     test("distance integration matches reference CSV", function()

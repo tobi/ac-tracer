@@ -9,7 +9,7 @@ local extended_brake = require('lib.core.brake')
 local csv_parser = require('lib.lap_csv_parser')
 
 -- Constants
-lap.SAMPLE_RATE = 25  -- Hz (exported for other modules)
+lap.SAMPLE_RATE = 50  -- Hz (exported for other modules)
 local STEERING_CAP = math.pi  -- 180 degrees in radians
 local SPARSE_EPS = 1e-4
 local SPARSE_POS_EPS = 1e-6
@@ -76,7 +76,7 @@ function lap.new(track, car, sessionId)
         fuelLeftAtStart = 0,   -- liters
         lapNumberInSession = 0, -- Which lap number in this session (1, 2, 3...)
 
-        -- Telemetry arrays (all synchronized, sampled at 25 Hz)
+        -- Telemetry arrays (all synchronized, sampled at 50 Hz)
         throttle = {},         -- 0.0 to 1.0
         brake = {},            -- bar (front brake pressure) - NOT normalized, stored in bar
         brake_r = {},          -- bar (rear brake pressure) - NOT normalized, stored in bar

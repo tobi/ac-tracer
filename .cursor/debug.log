@@ -1,0 +1,351 @@
+{
+  message = "Set track/car for history storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:setTrackCar",
+  data = { storageKey = "ac_tracer/history/ier_le_mans", track = "ier_le_mans", car = "ier_oreca_07_dev" },
+  timestamp = 1768959966000,
+  hypothesisId = "B",
+  runId = "pre-fix"
+}
+{
+  message = "Failed to parse history data",
+  sessionId = "debug-session",
+  location = "history_storage.lua:load",
+  data = { ok = false, dataBytes = 4145835, storageKey = "ac_tracer/history/ier_le_mans" },
+  timestamp = 1768959966000,
+  hypothesisId = "C",
+  runId = "pre-fix"
+}
+{
+  message = "Set track/car for history storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:setTrackCar",
+  timestamp = 1771115791000,
+  hypothesisId = "B",
+  runId = "pre-fix",
+  data = { car = "ier_oreca_07_dev", track = "lilski_sebring", storageKey = "ac_tracer/history/lilski_sebring" }
+}
+{
+  message = "Failed to parse history data",
+  sessionId = "debug-session",
+  location = "history_storage.lua:load",
+  timestamp = 1771115791000,
+  hypothesisId = "C",
+  runId = "pre-fix",
+  data = { storageKey = "ac_tracer/history/lilski_sebring", ok = false, dataBytes = 1979195 }
+}
+{
+  message = "Set track/car for history storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:setTrackCar",
+  timestamp = 1771116143000,
+  data = { track = "lilski_sebring", storageKey = "ac_tracer/history/lilski_sebring", car = "ier_oreca_07_dev" },
+  hypothesisId = "B",
+  runId = "pre-fix"
+}
+{
+  message = "Failed to parse history data",
+  sessionId = "debug-session",
+  location = "history_storage.lua:load",
+  timestamp = 1771116143000,
+  data = { ok = false, dataBytes = 1979195, storageKey = "ac_tracer/history/lilski_sebring" },
+  hypothesisId = "C",
+  runId = "pre-fix"
+}
+{
+  message = "Lap completion detected",
+  sessionId = "debug-session",
+  location = "state.lua:update",
+  timestamp = 1771116374000,
+  data = { newLapCount = 1, prevLapCount = 0, isLastLapValid = true, lapTimeMs = 115432, samples = 3502 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Added lap to history",
+  sessionId = "debug-session",
+  location = "history_storage.lua:add",
+  timestamp = 1771116374000,
+  data = { sessionId = "1768870699_5622", lapCount = 1, maxLaps = 50, lapTimeMs = 115432 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Saved history to storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:save",
+  timestamp = 1771116374000,
+  data = { maxLaps = 50, dataBytes = 654190, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 1 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Lap completion detected",
+  sessionId = "debug-session",
+  location = "state.lua:update",
+  timestamp = 1771116489000,
+  data = { newLapCount = 2, prevLapCount = 1, isLastLapValid = true, lapTimeMs = 114129, samples = 3455 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Added lap to history",
+  sessionId = "debug-session",
+  location = "history_storage.lua:add",
+  timestamp = 1771116489000,
+  data = { sessionId = "1768870699_5622", lapCount = 2, maxLaps = 50, lapTimeMs = 114129 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Saved history to storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:save",
+  timestamp = 1771116489000,
+  data = { maxLaps = 50, dataBytes = 1302731, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 2 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Lap completion detected",
+  sessionId = "debug-session",
+  location = "state.lua:update",
+  timestamp = 1771116603000,
+  data = { newLapCount = 3, prevLapCount = 2, isLastLapValid = true, lapTimeMs = 112731, samples = 3409 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Added lap to history",
+  sessionId = "debug-session",
+  location = "history_storage.lua:add",
+  timestamp = 1771116603000,
+  data = { sessionId = "1768870699_5622", lapCount = 3, maxLaps = 50, lapTimeMs = 112731 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Saved history to storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:save",
+  timestamp = 1771116603000,
+  data = { maxLaps = 50, dataBytes = 1939512, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 3 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Lap completion detected",
+  sessionId = "debug-session",
+  location = "state.lua:update",
+  timestamp = 1771116715000,
+  data = { newLapCount = 4, prevLapCount = 3, isLastLapValid = true, lapTimeMs = 111881, samples = 3379 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Added lap to history",
+  sessionId = "debug-session",
+  location = "history_storage.lua:add",
+  timestamp = 1771116715000,
+  data = { sessionId = "1768870699_5622", lapCount = 4, maxLaps = 50, lapTimeMs = 111881 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  message = "Saved history to storage",
+  sessionId = "debug-session",
+  location = "history_storage.lua:save",
+  timestamp = 1771116715000,
+  data = { maxLaps = 50, dataBytes = 2570269, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 4 },
+  hypothesisId = "A",
+  runId = "pre-fix"
+}
+{
+  location = "history_storage.lua:setTrackCar",
+  timestamp = 1771117308000,
+  hypothesisId = "B",
+  runId = "pre-fix",
+  data = { car = "ier_oreca_07_dev", storageKey = "ac_tracer/history/lilski_sebring", track = "lilski_sebring" },
+  message = "Set track/car for history storage",
+  sessionId = "debug-session"
+}
+{
+  location = "history_storage.lua:load",
+  timestamp = 1771117308000,
+  hypothesisId = "C",
+  runId = "pre-fix",
+  data = { dataBytes = 2546293, storageKey = "ac_tracer/history/lilski_sebring", ok = false },
+  message = "Failed to parse history data",
+  sessionId = "debug-session"
+}
+{
+  hypothesisId = "B",
+  location = "history_storage.lua:setTrackCar",
+  sessionId = "debug-session",
+  message = "Set track/car for history storage",
+  timestamp = 1771117481000,
+  runId = "pre-fix",
+  data = { storageKey = "ac_tracer/history/lilski_sebring", track = "lilski_sebring", car = "ier_oreca_07_dev" }
+}
+{
+  hypothesisId = "C",
+  location = "history_storage.lua:load",
+  sessionId = "debug-session",
+  message = "Failed to parse history data",
+  timestamp = 1771117481000,
+  runId = "pre-fix",
+  data = { ok = false, storageKey = "ac_tracer/history/lilski_sebring", dataBytes = 2546293 }
+}
+{
+  hypothesisId = "A",
+  location = "state.lua:update",
+  sessionId = "debug-session",
+  message = "Lap completion detected",
+  timestamp = 1771117580000,
+  runId = "pre-fix",
+  data = { lapTimeMs = 118204, isLastLapValid = true, prevLapCount = 0, newLapCount = 1, samples = 2959 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:add",
+  sessionId = "debug-session",
+  message = "Added lap to history",
+  timestamp = 1771117580000,
+  runId = "pre-fix",
+  data = { lapCount = 1, sessionId = "1768870699_5622", maxLaps = 50, lapTimeMs = 118204 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:save",
+  sessionId = "debug-session",
+  message = "Saved history to storage",
+  timestamp = 1771117580000,
+  runId = "pre-fix",
+  data = { maxLaps = 50, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 1, dataBytes = 814587 }
+}
+{
+  hypothesisId = "A",
+  location = "state.lua:update",
+  sessionId = "debug-session",
+  message = "Lap completion detected",
+  timestamp = 1771117691000,
+  runId = "pre-fix",
+  data = { lapTimeMs = 111775, isLastLapValid = true, prevLapCount = 1, newLapCount = 2, samples = 3358 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:add",
+  sessionId = "debug-session",
+  message = "Added lap to history",
+  timestamp = 1771117691000,
+  runId = "pre-fix",
+  data = { lapCount = 2, sessionId = "1768870699_5622", maxLaps = 50, lapTimeMs = 111775 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:save",
+  sessionId = "debug-session",
+  message = "Saved history to storage",
+  timestamp = 1771117691000,
+  runId = "pre-fix",
+  data = { maxLaps = 50, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 2, dataBytes = 1741820 }
+}
+{
+  hypothesisId = "A",
+  location = "state.lua:update",
+  sessionId = "debug-session",
+  message = "Lap completion detected",
+  timestamp = 1771117805000,
+  runId = "pre-fix",
+  data = { lapTimeMs = 113141, isLastLapValid = true, prevLapCount = 2, newLapCount = 3, samples = 3405 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:add",
+  sessionId = "debug-session",
+  message = "Added lap to history",
+  timestamp = 1771117805000,
+  runId = "pre-fix",
+  data = { lapCount = 3, sessionId = "1768870699_5622", maxLaps = 50, lapTimeMs = 113141 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:save",
+  sessionId = "debug-session",
+  message = "Saved history to storage",
+  timestamp = 1771117805000,
+  runId = "pre-fix",
+  data = { maxLaps = 50, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 3, dataBytes = 2680553 }
+}
+{
+  hypothesisId = "A",
+  location = "state.lua:update",
+  sessionId = "debug-session",
+  message = "Lap completion detected",
+  timestamp = 1771117917000,
+  runId = "pre-fix",
+  data = { lapTimeMs = 112166, isLastLapValid = true, prevLapCount = 3, newLapCount = 4, samples = 3374 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:add",
+  sessionId = "debug-session",
+  message = "Added lap to history",
+  timestamp = 1771117917000,
+  runId = "pre-fix",
+  data = { lapCount = 4, sessionId = "1768870699_5622", maxLaps = 50, lapTimeMs = 112166 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:save",
+  sessionId = "debug-session",
+  message = "Saved history to storage",
+  timestamp = 1771117917000,
+  runId = "pre-fix",
+  data = { maxLaps = 50, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 4, dataBytes = 3609475 }
+}
+{
+  hypothesisId = "A",
+  location = "state.lua:update",
+  sessionId = "debug-session",
+  message = "Lap completion detected",
+  timestamp = 1771118030000,
+  runId = "pre-fix",
+  data = { lapTimeMs = 112646, isLastLapValid = true, prevLapCount = 4, newLapCount = 5, samples = 3390 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:add",
+  sessionId = "debug-session",
+  message = "Added lap to history",
+  timestamp = 1771118030000,
+  runId = "pre-fix",
+  data = { lapCount = 5, sessionId = "1768870699_5622", maxLaps = 50, lapTimeMs = 112646 }
+}
+{
+  hypothesisId = "A",
+  location = "history_storage.lua:save",
+  sessionId = "debug-session",
+  message = "Saved history to storage",
+  timestamp = 1771118031000,
+  runId = "pre-fix",
+  data = { maxLaps = 50, storageKey = "ac_tracer/history/lilski_sebring", serializedCount = 5, dataBytes = 4543595 }
+}
+{
+  message = "Set track/car for history storage",
+  sessionId = "debug-session",
+  runId = "pre-fix",
+  timestamp = 1771118850000,
+  hypothesisId = "B",
+  location = "history_storage.lua:setTrackCar",
+  data = { track = "lilski_sebring", storageKey = "ac_tracer/history/lilski_sebring", car = "ier_oreca_07_dev" }
+}
+{
+  message = "Loaded history from storage",
+  sessionId = "debug-session",
+  runId = "pre-fix",
+  timestamp = 1771118850000,
+  hypothesisId = "C",
+  location = "history_storage.lua:load",
+  data = { parsedCount = 5, loadedCount = 5, storageKey = "ac_tracer/history/lilski_sebring" }
+}

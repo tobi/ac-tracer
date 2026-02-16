@@ -294,7 +294,7 @@ end
 
 local SAMPLE_RATE = lap.SAMPLE_RATE
 local TAP_THRESHOLD = 1.0
-local MAX_SAMPLES = 15000  -- ~10 minutes at 25Hz (15000 samples)
+local MAX_SAMPLES = 30000  -- ~10 minutes at 50Hz
 
 -- state.history is a reference to history_storage.laps
 state.history = history_storage.laps

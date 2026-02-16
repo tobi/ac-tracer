@@ -515,8 +515,8 @@ end
 ---@return table unified { time={}, speed={}, throttle={}, ... } at target rate
 ---@return number outputFreq The output sample rate (lap.SAMPLE_RATE)
 function M.unifyChannels(lapValues, channels, mapping, durationS)
-    -- Resample directly to lap.SAMPLE_RATE (25Hz) instead of the max native rate.
-    -- All native rates (50, 100, 200Hz) are exact multiples of 25Hz,
+    -- Resample directly to lap.SAMPLE_RATE (50Hz) instead of the max native rate.
+    -- Common native rates (100, 200Hz) are exact multiples of 50Hz,
     -- so this gives clean downsampling with no intermediate step needed.
     local targetFreq = lap_mod.SAMPLE_RATE
 
