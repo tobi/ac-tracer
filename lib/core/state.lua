@@ -8,8 +8,10 @@ local notification = require('lib.sound.notification')
 local csv_export = require('lib.lap_csv_export')
 local file_utils = require('lib.core.files')
 local bg_writer = require('lib.core.background_writer')
+local paths = require('lib.core.paths')
 
 local state = {}
+
 
 --------------------------------------------------------------------------------
 -- State Structure
@@ -310,12 +312,16 @@ local function getStorageKey(suffix)
     return 'ac_tracer_' .. trackId:gsub("[/\\:]", "_") .. '_' .. suffix
 end
 
-local CORNERS_DIR = __dirname .. "/corners"
-
---- Get corner CSV path for current track
+--- Get corner CSV path for current track (new unified location)
 local function getCornersPath()
     if not state.track then return nil end
-    return CORNERS_DIR .. "/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
+    return paths.cornersFile(state.track)
+end
+
+--- Get old corner CSV path for migration
+local function getOldCornersPath()
+    if not state.track then return nil end
+    return __dirname .. "/corners/" .. state.track:gsub("[/\\:]", "_") .. ".csv"
 end
 
 --------------------------------------------------------------------------------
@@ -639,8 +645,8 @@ local function saveCornersToFile()
     -- Remove overlapping corners before saving
     state.trackCorners = removeOverlappingCorners(state.trackCorners)
 
-    -- Ensure corners directory exists
-    io.createDir(CORNERS_DIR)
+    -- Ensure track directory exists
+    paths.ensureTrackDir(state.track)
 
     -- Write CSV for this track only
     local f = io.open(path, "w")
@@ -671,10 +677,44 @@ local function saveCornersToFile()
     return true
 end
 
---- Load corners from per-track CSV file (corners/<track>.csv)
+--- Migrate corners from old location (__dirname/corners/) to new (data/{track}/)
+local function migrateCornersIfNeeded()
+    local oldPath = getOldCornersPath()
+    local newPath = getCornersPath()
+    if not oldPath or not newPath then return end
+
+    local fOld = io.open(oldPath, "r")
+    if not fOld then return end
+
+    -- Check if new path already exists
+    local fNew = io.open(newPath, "r")
+    if fNew then
+        fNew:close()
+        fOld:close()
+        return  -- Already migrated
+    end
+
+    local content = fOld:read("*a")
+    fOld:close()
+
+    if content and #content > 0 then
+        paths.ensureTrackDir(state.track)
+        local out = io.open(newPath, "w")
+        if out then
+            out:write(content)
+            out:close()
+            ac.log("AC Tracer: Migrated corners from " .. oldPath .. " to " .. newPath)
+        end
+    end
+end
+
+--- Load corners from per-track CSV file (data/{track}/corners.csv)
 local function loadCornersFromFile()
     local path = getCornersPath()
     if not path then return false end
+
+    -- Try migration from old location first
+    migrateCornersIfNeeded()
 
     local f = io.open(path, "r")
     if not f then return false end
@@ -749,22 +789,8 @@ end
 -- Persistence: History (delegated to history_storage module)
 --------------------------------------------------------------------------------
 
--- History is now managed by history_storage module
+-- History is now session-only in-memory (past laps live on disk as CSV)
 -- state.history is a reference to history_storage.laps
-local function saveHistory()
-    history_storage.save()
-end
-
-local function loadHistory()
-    local success = history_storage.load()
-    -- Update the reference since history_storage.laps may have been reassigned
-    state.history = history_storage.laps
-    -- Update recentBest from loaded history
-    updateRecentBest()
-    -- Invalidate bestCorners cache since history changed
-    state.invalidateBestCorners()
-    return success
-end
 
 -- Auto-Detection: Corners from Best Lap
 --------------------------------------------------------------------------------
@@ -1153,9 +1179,10 @@ function state.init(car)
     -- Load corners from file
     loadCornersFromFile()
     
-    -- Load best lap and history
+    -- Load best lap from ac.storage (fast restore cache)
     loadBestLap()
-    loadHistory()
+    -- History is session-only now (past laps live on disk as CSV)
+    state.history = history_storage.laps
     
     -- Auto-detect corners if no manual corners and we have a best lap
     updateAutoDetectedCorners()
@@ -2131,8 +2158,9 @@ function state.autosaveReferenceIfFaster()
     end
 
     local filename = csv_export.buildAutosaveFilename(state.track, candidate.time)
+    paths.ensureDirs(state.track, state.car)
     local path, err = csv_export.saveLap(candidate, {
-        directory = file_utils.getLapDirectory(),
+        directory = paths.referencesDir(state.track, state.car),
         filename = filename,
     })
     if path then

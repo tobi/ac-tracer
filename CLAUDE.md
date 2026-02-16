@@ -211,7 +211,7 @@ state = {
     
     -- Lap data
     currentLap = lap,            -- Partially filled lap being recorded
-    history = { lap, ... },      -- Recent completed laps (persisted, max 20)
+    history = { lap, ... },      -- Current session laps (in-memory only, past laps on disk)
     historyReferences = { lap, ... }, -- External laps loaded from CSV (for comparison)
     
     -- Reference lap
@@ -275,10 +275,10 @@ end
 
 ### Persistence
 
-- **`history`**: Persisted to `ac.storage` as JSON, loaded on app start
+- **`history`**: In-memory only (current session). Every completed lap is autosaved to `data/{track}/{car}/autosave/` via `background_writer`. Past laps available from filesystem via lap picker.
 - **`historyReferences`**: Not persisted (loaded fresh each session from CSV)
-- **`bestLap`**: Derived from history or set explicitly from external source
-- **`trackCorners`**: Persisted to `settings.ini` or separate corners file
+- **`bestLap`**: Cached in `ac.storage` for quick restore; also findable from autosaved CSVs
+- **`trackCorners`**: Saved to `data/{track}/corners.csv`
 
 ---
 
@@ -347,15 +347,13 @@ completedCorner = {
 ```
 App Start
     ↓
-Load settings.ini
+Load settings from ac.storage
     ↓
-Load corners from storage
+Load corners from data/{track}/corners.csv (migrate from old path if needed)
     ↓
-Load history from ac.storage
+Restore bestLap from ac.storage cache
     ↓
-Set bestLap = fastest valid lap from history
-    ↓
-Initialize state
+Initialize state (history starts empty, session-only)
 ```
 
 ### 2. Per-Frame Update Loop
@@ -505,9 +503,15 @@ This pattern:
 9. **`scoring.lua`** - Corner score calculation
    - Pure functions, no state dependency
 
-10. **`history_storage.lua`** - Lap history persistence
-    - Uses `settings.maxHistoryLaps()` for configurable history size
-    - Serializes laps to `ac.storage` with stringify
+10. **`history.lua`** - Session-only in-memory lap history
+    - Current session laps only (past laps on disk via `background_writer`)
+    - No persistence to `ac.storage` — laps are autosaved to CSV
+
+12. **`paths.lua`** - Central path module (single source of truth)
+    - Root: `%USERPROFILE%\Documents\ac-tracer\`
+    - All data paths computed from root: `paths.trackDir()`, `paths.carDir()`, `paths.autosaveDir()`, etc.
+    - `paths.sanitize()` for filesystem-safe names
+    - `paths.ensureDirs()` creates full directory chain for a track/car combo
 
 11. **`theme.lua`** - Centralized colors and styles
     - Includes flag marker colors: `theme.flags.tc`, `theme.flags.lockup`, etc.
@@ -529,24 +533,42 @@ This pattern:
 
 ## File Structure
 
+All user data lives under `%USERPROFILE%\Documents\ac-tracer\`, computed once via `lib/core/paths.lua`:
+
+```
+Documents/ac-tracer/
+├── data/
+│   └── {track_id}/
+│       ├── corners.csv                      # Corner definitions (per-track)
+│       └── {car_id}/
+│           ├── autosave/                    # Every completed lap auto-saved here
+│           │   └── {timestamp}-{laptime}.csv
+│           │   └── {timestamp}-{laptime}.json
+│           │   └── {timestamp}-{laptime}.md
+│           └── references/                  # User-exported / imported reference laps
+│               └── {laptime}.csv
+```
+
+App-bundled assets (read-only, in the install directory):
 ```
 ac-tracer/
-├── corners/
-│   └── <track_id>.csv        # Corner definitions (one file per track)
-├── tracks/
-│   └── trackname.csv         # Reference lap CSVs (MoTeC export or local)
-└── ...
+├── tracks/                  # Bundled example CSVs (legacy, read-only)
+├── sounds/                  # Audio assets
+└── lib/                     # All app code
 ```
 
 ### CSV Search Paths
 
-Reference lap CSVs are searched in these directories:
-1. `./tracks/` - Local to the plugin
-2. `C:\MoTeC\Logged Data\` - Standard MoTeC export location
+Reference lap CSVs are scanned from these sources (via `file_utils.scanCSVFilesGrouped()`):
+1. `data/{track}/{car}/autosave/` — autosaved laps (sorted by lap time, fastest first)
+2. `data/{track}/{car}/references/` — user-exported reference laps
+3. `data/{track}/{other_car}/` — other cars on same track (collapsed in picker)
+4. `./tracks/` — legacy bundled CSVs (collapsed in picker)
+5. `C:\MoTeC\Logged Data\` — MoTeC export location (collapsed in picker)
 
-### Corner Files (`corners/<track_id>.csv`)
+### Corner Files
 
-Corner definitions are saved per-track in the `corners/` directory. Each track has its own CSV file named after the track ID:
+Corner definitions are saved per-track at `data/{track_id}/corners.csv`:
 
 ```csv
 name,start,end
@@ -555,7 +577,7 @@ Karussell,0.234567,0.256789
 Bus Stop,0.567890,0.612345
 ```
 
-Example file: `corners/ier_daytona.csv` for the IER Daytona track.
+Migration: On first load, corners are automatically copied from the old location (`./corners/{track}.csv`) to the new path if they don't already exist.
 
 ---
 
@@ -565,7 +587,7 @@ Example file: `corners/ier_daytona.csv` for the IER Daytona track.
 - **Position-based matching** - ghost traces matched by track position, not time
 - **Normalized inputs** - throttle, clutch, steering are 0.0-1.0; brake is in bar
 - **Time in milliseconds** - internal storage uses ms for precision
-- **Corner files** - saved as `./corners/<track_id>.csv` (per-track)
+- **Corner files** - saved at `data/{track_id}/corners.csv` (migrated from old `./corners/` on first load)
 - **Brake pressure** - uses cphys DLL if available (dwrite.dll in AC root), otherwise falls back to pedal position * 100 bar
 - **Front/rear brake** - `brake` = front, `brake_r` = rear (or same as front if no DLL/CSV data)
 

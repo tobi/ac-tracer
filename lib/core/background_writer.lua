@@ -3,6 +3,7 @@
 -- to avoid frame drops during lap saves
 
 local lap = require('lib.lap')
+local paths = require('lib.core.paths')
 -- Note: modules loaded lazily to avoid circular dependency
 -- (state -> background_writer -> corner_analysis/markdown -> state)
 local corner_analysis = nil
@@ -21,9 +22,6 @@ local ROWS_PER_FRAME = 200
 -- Maximum jobs in queue (oldest dropped if exceeded)
 local MAX_QUEUE_SIZE = 10
 
--- Laps directory for autosave (in AppData)
-local LAPS_DIR = nil
-
 --------------------------------------------------------------------------------
 -- State
 --------------------------------------------------------------------------------
@@ -33,61 +31,6 @@ local jobQueue = {}
 
 -- Current job being processed
 local currentJob = nil
-
---------------------------------------------------------------------------------
--- Path Helpers
---------------------------------------------------------------------------------
-
---- Sanitize filename (remove invalid chars)
-local function sanitizeFilename(name)
-    if not name or name == "" then return "lap" end
-    local sanitized = name:gsub('[\\/:*?"<>|]', "_")
-    sanitized = sanitized:gsub("%s+", "_")
-    sanitized = sanitized:gsub("[^%w%._%-]", "_")
-    sanitized = sanitized:gsub("_+", "_")
-    return sanitized
-end
-
---- Get the base history directory for autosaves
----@return string Path to %USERPROFILE%/Documents/ac-tracer/history/
-local function getHistoryBaseDir()
-    if LAPS_DIR then return LAPS_DIR end
-    
-    -- Get user profile from environment
-    local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
-    if profile then
-        LAPS_DIR = profile .. "\\Documents\\ac-tracer\\history\\"
-    else
-        -- Fallback to plugin directory
-        LAPS_DIR = __dirname .. "/history/"
-    end
-    
-    return LAPS_DIR
-end
-
---- Get the track-specific history directory
----@param trackName string Track ID/name
----@return string Path to history/{track-name}/
-local function getTrackHistoryDir(trackName)
-    local baseDir = getHistoryBaseDir()
-    local sanitizedTrack = sanitizeFilename(trackName or "unknown")
-    return baseDir .. sanitizedTrack .. "\\"
-end
-
---- Ensure history directory exists for a specific track
----@param trackName string Track ID/name
----@return string The track history directory
-local function ensureTrackHistoryDir(trackName)
-    local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
-    if profile then
-        -- Create parent directories
-        io.createDir(profile .. "\\Documents\\ac-tracer\\")
-        io.createDir(profile .. "\\Documents\\ac-tracer\\history\\")
-    end
-    local trackDir = getTrackHistoryDir(trackName)
-    io.createDir(trackDir)
-    return trackDir
-end
 
 --- Format lap time for filename (M-SS.mmm format)
 local function formatLapTime(ms)
@@ -102,14 +45,13 @@ local function formatTimestamp()
     return os.date("%Y%m%d_%H%M%S")
 end
 
---- Build autosave filename: car-timestamp-laptime (track is in directory path)
+--- Build autosave filename: timestamp-laptime (track and car are in directory path)
 ---@param lapObj table Lap instance
----@return string Filename (without path)
+---@return string Filename (without path or extension)
 local function buildFilename(lapObj)
-    local car = sanitizeFilename(lapObj.car or "car")
     local timestamp = formatTimestamp()
     local lapTime = formatLapTime(lapObj.time or 0)
-    return string.format("%s-%s-%s", car, timestamp, lapTime)
+    return string.format("%s-%s", timestamp, lapTime)
 end
 
 --------------------------------------------------------------------------------
@@ -501,8 +443,9 @@ function bg_writer.queueLapSave(lapObj, options)
     
     options = options or {}
     
-    -- Ensure track-specific directory exists
-    local dir = ensureTrackHistoryDir(lapObj.track)
+    -- Ensure track/car directory structure exists
+    paths.ensureDirs(lapObj.track, lapObj.car)
+    local dir = paths.autosaveDir(lapObj.track, lapObj.car)
     local basePath = dir .. buildFilename(lapObj)
     
     -- Add CSV job to queue
@@ -579,10 +522,12 @@ function bg_writer.getStatus()
     return pending, active
 end
 
---- Get the history save base directory
----@return string Path to %USERPROFILE%/Documents/ac-tracer/history/
-function bg_writer.getSaveDir()
-    return getHistoryBaseDir()
+--- Get the autosave directory for a track/car
+---@param trackId string
+---@param carId string
+---@return string Path to data/{track}/{car}/autosave/
+function bg_writer.getSaveDir(trackId, carId)
+    return paths.autosaveDir(trackId or "unknown", carId or "unknown")
 end
 
 --- Flush all pending jobs synchronously (for clean shutdown)
@@ -622,10 +567,8 @@ end
 --------------------------------------------------------------------------------
 
 bg_writer._testExports = {
-    sanitizeFilename = sanitizeFilename,
     formatLapTime = formatLapTime,
     buildFilename = buildFilename,
-    getTrackHistoryDir = getTrackHistoryDir,
 }
 
 return bg_writer

@@ -27,10 +27,9 @@ end
 
 suite("history_storage")
 
-test("save/load roundtrip preserves laps", function()
-    mock.clearStorage()
-    history.setTrackCar("ks_nords/cheife", "test_car")
+test("add stores laps in memory (most recent first)", function()
     history.laps = {}
+    history.setTrackCar("ks_nords/cheife", "test_car")
 
     local lap1 = makeLap("session_a", 90000)
     local lap2 = makeLap("session_b", 88000)
@@ -38,15 +37,10 @@ test("save/load roundtrip preserves laps", function()
     history.add(lap1)
     history.add(lap2)
 
-    -- Storage key should be sanitized
-    assert_not_nil(ac.storage["ac_tracer/history/ks_nords_cheife"])
-
-    -- Reload from storage
-    history.laps = {}
-    local loaded = history.load()
-    assert_true(loaded)
+    -- Both laps should be in memory, most recent first
     assert_table_length(history.laps, 2)
     assert_equal(history.laps[1].sessionId, "session_b")
+    assert_equal(history.laps[2].sessionId, "session_a")
 end)
 
 test("getFastestFromSession returns best lap", function()

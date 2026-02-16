@@ -68,7 +68,7 @@ function csv_export.saveLap(lapObj, options)
     end
 
     options = options or {}
-    local baseDir = options.directory or file_utils.getLapDirectory()
+    local baseDir = options.directory or file_utils.getLapDirectory(lapObj.track, lapObj.car)
     local filename = options.filename or buildFilename(lapObj)
     local path = baseDir .. filename
 

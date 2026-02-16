@@ -1,15 +1,17 @@
 -- file_utils.lua - Shared file system utilities
 -- Provides CSV file scanning and formatting helpers
 
+local paths = require('lib.core.paths')
+
 local file_utils = {}
 
 --------------------------------------------------------------------------------
 -- File Info Cache
 --------------------------------------------------------------------------------
 
-local csvFilesCache = nil
-local csvFilesCacheTime = 0
-local csvFilesCacheTrack = nil
+local groupedCache = nil
+local groupedCacheTime = 0
+local groupedCacheKey = nil
 local CACHE_TTL = 5  -- seconds
 
 --------------------------------------------------------------------------------
@@ -54,172 +56,161 @@ end
 -- File Scanning
 --------------------------------------------------------------------------------
 
---- Search paths for CSV files
-local function getUserDocumentsDirs()
-    local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
-    if not profile or profile == "" then return nil, nil end
-    local base = profile .. "\\Documents\\ac-tracer\\"
-    return base .. "saved\\", base .. "references\\"
-end
-
---- Get history directory for a specific track
-local function getHistoryDir(trackId)
-    local profile = os.getenv("USERPROFILE") or os.getenv("HOME")
-    if not profile or profile == "" then return nil end
-    if not trackId or trackId == "" then return nil end
-    -- Sanitize track name for path
-    local sanitized = trackId:gsub('[\\/:*?"<>|]', "_"):gsub("%s+", "_"):gsub("_+", "_")
-    return profile .. "\\Documents\\ac-tracer\\history\\" .. sanitized .. "\\"
-end
-
-local function buildSearchPaths(trackId)
-    local paths = {
-        { path = __dirname .. "/tracks/", source = "tracks" },
-        { path = "C:\\MoTeC\\Logged Data\\", source = "motec" },
-    }
-    local savedDir, refsDir = getUserDocumentsDirs()
-    if refsDir then
-        table.insert(paths, 1, { path = refsDir, source = "references" })
+--- Get default lap directory for manual export (references dir for current track/car)
+---@param trackId string
+---@param carId string
+---@return string
+function file_utils.getLapDirectory(trackId, carId)
+    if trackId and carId then
+        return paths.referencesDir(trackId, carId)
     end
-    if savedDir then
-        table.insert(paths, 1, { path = savedDir, source = "saved" })
+    return paths.root() .. "data\\"
+end
+
+--- Parse lap time from autosave filename (e.g. "20250214_153012-1-23.456" -> 83456 ms)
+---@param filename string
+---@return number|nil Lap time in milliseconds, or nil if unparseable
+local function parseLapTimeFromFilename(filename)
+    -- Pattern: timestamp-M-SS.mmm  (the lap time part at the end)
+    local m, s = filename:match("(%d+)-(%d+%.%d+)%.csv$")
+    if m and s then
+        return tonumber(m) * 60000 + tonumber(s) * 1000
     end
-    -- Add track-specific history directory (highest priority for matching track)
-    local historyDir = getHistoryDir(trackId)
-    if historyDir then
-        table.insert(paths, 1, { path = historyDir, source = "history" })
+    return nil
+end
+
+--- Scan a single directory for CSV files
+---@param dir string Directory path
+---@param source string Source label
+---@return table Array of {path, filename, source, size, lapTimeMs}
+local function scanDir(dir, source)
+    local results = {}
+    if not io.dirExists(dir) then return results end
+
+    local files = io.scanDir(dir, "*.csv")
+    if not files then return results end
+
+    for _, filename in ipairs(files) do
+        local fullPath = dir .. filename
+        table.insert(results, {
+            path = fullPath,
+            filename = filename,
+            source = source,
+            size = io.fileSize(fullPath),
+            lapTimeMs = parseLapTimeFromFilename(filename),
+        })
     end
-    return paths
+    return results
 end
 
---- Get user documents directories for saved and reference laps
----@return string|nil savedDir Path to saved laps directory
----@return string|nil refsDir Path to references directory
-function file_utils.getUserDocumentsDirs()
-    return getUserDocumentsDirs()
-end
-
---- Get default lap directory path
----@return string Default lap directory path
-function file_utils.getLapDirectory()
-    local savedDir = getUserDocumentsDirs()
-    return savedDir or (__dirname .. "/tracks/")
-end
-
-local function normalizeTrackName(name)
-    if not name then return nil end
-    local norm = name:lower():gsub("^%s+", ""):gsub("%s+$", "")
-    norm = norm:gsub("[^%w]+", "_")
-    norm = norm:gsub("_+", "_")
-    return norm
-end
-
-local function getCSVTrack(path)
-    local f = io.open(path, "r")
-    if not f then return nil end
-
-    local lineNum = 0
-    local headers = nil
-    local trackIdx = nil
-    local headerLineNum = 0
-
-    for line in f:lines() do
-        lineNum = lineNum + 1
-        if line:find('"Time"') and (line:find('"Lap Progression"') or line:find('"Distance"')) then
-            headers = file_utils.parseCSVLine(line)
-            headerLineNum = lineNum
-            for i = 1, #headers do
-                local h = headers[i]:gsub('^"', ''):gsub('"$', '')
-                if h:lower() == "track" then
-                    trackIdx = i
-                    break
-                end
-            end
-            break
+--- Sort files by lap time (fastest first), files without parseable time go last
+local function sortByLapTime(files)
+    table.sort(files, function(a, b)
+        if a.lapTimeMs and b.lapTimeMs then
+            return a.lapTimeMs < b.lapTimeMs
         end
-    end
-
-    if not trackIdx then
-        f:close()
-        return nil
-    end
-
-    local targetLine = headerLineNum + 3
-    lineNum = 0
-    local trackValue = nil
-    for line in f:lines() do
-        lineNum = lineNum + 1
-        if lineNum >= targetLine and line ~= "" and not line:match("^%s*$") then
-            local fields = file_utils.parseCSVLine(line)
-            trackValue = fields[trackIdx]
-            break
-        end
-    end
-
-    f:close()
-    return trackValue and trackValue:gsub('^"', ''):gsub('"$', '') or nil
+        if a.lapTimeMs then return true end
+        if b.lapTimeMs then return false end
+        return a.filename:lower() < b.filename:lower()
+    end)
 end
 
---- Scan for CSV files in known directories
+--- Scan CSV files grouped by source for the lap picker
 --- Returns cached results if called within CACHE_TTL seconds
----@param trackId string|nil Current track ID for filtering
----@return table Array of {path, filename, source, size}
-function file_utils.scanCSVFiles(trackId)
+---@param trackId string|nil Current track ID
+---@param carId string|nil Current car ID
+---@return table { autosave: {...}, references: {...}, otherCars: { {car, files}, ... }, legacy: {...}, motec: {...} }
+function file_utils.scanCSVFilesGrouped(trackId, carId)
     local now = os.clock()
-    if csvFilesCache and (now - csvFilesCacheTime) < CACHE_TTL and csvFilesCacheTrack == trackId then
-        return csvFilesCache
+    local cacheKey = (trackId or "") .. "|" .. (carId or "")
+    if groupedCache and (now - groupedCacheTime) < CACHE_TTL and groupedCacheKey == cacheKey then
+        return groupedCache
     end
 
-    local trackNorm = normalizeTrackName(trackId)
-    csvFilesCache = {}
-    local seenFiles = {}  -- Track by lowercase to avoid duplicates
+    local result = {
+        autosave = {},
+        references = {},
+        otherCars = {},  -- Array of { car = string, files = {...} }
+        legacy = {},
+        motec = {},
+    }
 
-    for _, dir in ipairs(buildSearchPaths(trackId)) do
-        if io.dirExists(dir.path) then
-            local files = io.scanDir(dir.path, "*.csv")
-            if files then
-                for _, filename in ipairs(files) do
-                    local lowerName = filename:lower()
-                    if not seenFiles[lowerName] then
-                        seenFiles[lowerName] = true
-                        local fullPath = dir.path .. filename
-                        local includeFile = true
-                        if trackNorm then
-                            local csvTrack = getCSVTrack(fullPath)
-                            if csvTrack then
-                                includeFile = normalizeTrackName(csvTrack) == trackNorm
+    -- 1. Current car's autosave and references
+    if trackId and carId then
+        result.autosave = scanDir(paths.autosaveDir(trackId, carId), "autosave")
+        sortByLapTime(result.autosave)
+
+        result.references = scanDir(paths.referencesDir(trackId, carId), "references")
+        sortByLapTime(result.references)
+    end
+
+    -- 2. Other cars on this track
+    if trackId then
+        local trackDir = paths.trackDir(trackId)
+        if io.dirExists(trackDir) then
+            local entries = io.scanDir(trackDir)
+            if entries then
+                for _, entry in ipairs(entries) do
+                    -- Skip corners.csv and current car directory
+                    if entry ~= "corners.csv" and entry ~= (carId and paths.sanitize(carId) or "") then
+                        local subDir = trackDir .. entry .. "\\"
+                        -- Check if it's a directory by looking for autosave/ or references/ inside
+                        local autoDir = subDir .. "autosave\\"
+                        local refsDir = subDir .. "references\\"
+                        local carFiles = {}
+                        if io.dirExists(autoDir) then
+                            for _, fileInfo in ipairs(scanDir(autoDir, "autosave")) do
+                                table.insert(carFiles, fileInfo)
                             end
                         end
-                        if not includeFile then
-                            goto continue
+                        if io.dirExists(refsDir) then
+                            for _, fileInfo in ipairs(scanDir(refsDir, "references")) do
+                                table.insert(carFiles, fileInfo)
+                            end
                         end
-                        table.insert(csvFilesCache, {
-                            path = fullPath,
-                            filename = filename,
-                            source = dir.source,
-                            size = io.fileSize(fullPath)
-                        })
-                        ::continue::
+                        if #carFiles > 0 then
+                            sortByLapTime(carFiles)
+                            table.insert(result.otherCars, { car = entry, files = carFiles })
+                        end
                     end
                 end
             end
         end
     end
 
-    -- Sort by filename
-    table.sort(csvFilesCache, function(a, b)
-        return a.filename:lower() < b.filename:lower()
-    end)
+    -- 3. Legacy tracks/ directory (bundled with app)
+    result.legacy = scanDir(__dirname .. "/tracks/", "legacy")
 
-    csvFilesCacheTime = now
-    csvFilesCacheTrack = trackId
-    return csvFilesCache
+    -- 4. MoTeC export directory
+    result.motec = scanDir("C:\\MoTeC\\Logged Data\\", "motec")
+
+    groupedCache = result
+    groupedCacheTime = now
+    groupedCacheKey = cacheKey
+    return result
+end
+
+--- Flat scan for backward compatibility (returns all files combined)
+---@param trackId string|nil Current track ID
+---@param carId string|nil Current car ID
+---@return table Array of {path, filename, source, size}
+function file_utils.scanCSVFiles(trackId, carId)
+    local grouped = file_utils.scanCSVFilesGrouped(trackId, carId)
+    local all = {}
+    for _, f in ipairs(grouped.autosave) do table.insert(all, f) end
+    for _, f in ipairs(grouped.references) do table.insert(all, f) end
+    for _, carGroup in ipairs(grouped.otherCars) do
+        for _, f in ipairs(carGroup.files) do table.insert(all, f) end
+    end
+    for _, f in ipairs(grouped.legacy) do table.insert(all, f) end
+    for _, f in ipairs(grouped.motec) do table.insert(all, f) end
+    return all
 end
 
 --- Invalidate the file cache (call when files may have changed)
 function file_utils.invalidateCache()
-    csvFilesCache = nil
-    csvFilesCacheTrack = nil
+    groupedCache = nil
+    groupedCacheKey = nil
 end
 
 --- Check if a file exists
@@ -233,6 +224,9 @@ function file_utils.fileExists(path)
     end
     return false
 end
+
+--- Parse lap time from filename (exposed for lap_picker)
+file_utils.parseLapTimeFromFilename = parseLapTimeFromFilename
 
 --------------------------------------------------------------------------------
 -- CSV Field Parsing

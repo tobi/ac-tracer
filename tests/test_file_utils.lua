@@ -26,23 +26,13 @@ test("CSV escaping and parsing handle quotes", function()
     assert_equal(fields[3], 'd"e')
 end)
 
-test("scanCSVFiles honors track filter", function()
+test("scanCSVFiles finds legacy tracks files", function()
     local originalDir = __dirname
     __dirname = "tests/tmp_scan"
     package.loaded['lib.core.files'] = nil
+    package.loaded['lib.core.paths'] = nil
+    mock.resetVfs()
     local file_utils = require('lib.core.files')
-
-    io.createDir("tests/tmp_scan")
-    io.createDir("tests/tmp_scan/tracks")
-    local csvPath = "tests/tmp_scan/tracks/sample.csv"
-
-    local f = io.open(csvPath, "w")
-    assert_not_nil(f)
-    f:write('"Time","Lap Progression","Track"\n')
-    f:write('"s","",""\n')
-    f:write('""\n')
-    f:write('0,0.01,"Test Track"\n')
-    f:close()
 
     local originalDirExists = io.dirExists
     local originalScanDir = io.scanDir
@@ -64,13 +54,11 @@ test("scanCSVFiles honors track filter", function()
     local files = file_utils.scanCSVFiles("Test Track")
     assert_table_length(files, 1)
     assert_equal(files[1].filename, "sample.csv")
-    assert_equal(files[1].source, "tracks")
+    assert_equal(files[1].source, "legacy")
     assert_equal(files[1].size, 2048)
 
     io.dirExists = originalDirExists
     io.scanDir = originalScanDir
     io.fileSize = originalFileSize
     __dirname = originalDir
-
-    os.remove(csvPath)
 end)

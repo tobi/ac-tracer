@@ -31,6 +31,9 @@ local motecFastestIdx = nil  -- Index of fastest lap
 local motecStatus = nil      -- Status message for UI feedback
 local motecImporting = false -- Currently importing a lap
 
+-- Collapsed section state
+local collapsedSections = {}
+
 --------------------------------------------------------------------------------
 -- Callbacks
 --------------------------------------------------------------------------------
@@ -113,12 +116,9 @@ local function importMotecLap(lapIndex)
     motecImporting = true
 
     local st = getState()
-    local _, refsDir = file_utils.getUserDocumentsDirs()
-    if not refsDir then
-        motecStatus = "Error: Cannot find references directory"
-        motecImporting = false
-        return
-    end
+    local paths = require('lib.core.paths')
+    local refsDir = paths.referencesDir(st.track, st.car)
+    paths.ensureDirs(st.track, st.car)
 
     local filename = motec.buildExportFilename(motecSession, lapIndex)
     local outputPath = refsDir .. filename
@@ -289,6 +289,35 @@ end
 local ROW_HEIGHT = 22
 local BTN_WIDTH = 35
 
+--- Draw a section header with optional collapse toggle
+---@return boolean expanded True if section is expanded
+local function drawSectionHeader(contentX, py, contentW, label, color, sectionKey)
+    local expanded = not collapsedSections[sectionKey]
+
+    ui.setCursor(vec2(contentX, py))
+    ui.pushFont(ui.Font.Small)
+
+    if sectionKey then
+        local arrow = expanded and "v " or "> "
+        ui.pushStyleColor(ui.StyleColor.Text, color)
+        if ui.textWrapped(arrow .. label) then end
+        ui.popStyleColor()
+
+        -- Make the header clickable
+        local headerMin = vec2(contentX, py)
+        local headerMax = vec2(contentX + contentW, py + 16)
+        if ui.rectHovered(headerMin, headerMax) and ui.mouseClicked() then
+            collapsedSections[sectionKey] = expanded
+            expanded = not expanded
+        end
+    else
+        ui.textColored(label, color)
+    end
+
+    ui.popFont()
+    return expanded
+end
+
 --- Draw a lap entry row with C (current) and R (reference) buttons
 ---@param x number Left edge X
 ---@param y number Top edge Y
@@ -387,14 +416,20 @@ end
 ---@param x number Left edge X
 ---@param y number Top edge Y
 ---@param width number Available width
----@param fileInfo table { path, filename, source, size }
----@param idx number Unique identifier
+---@param fileInfo table { path, filename, source, size, lapTimeMs }
+---@param idx number|string Unique identifier
 ---@param options table { showCurrent, showReference }
 ---@return number New Y position after row
 local function drawCSVRow(x, y, width, fileInfo, idx, options)
     options = options or {}
 
-    local displayName = fileInfo.filename:gsub("%.csv$", "")
+    -- Show lap time if parseable, otherwise filename
+    local displayName
+    if fileInfo.lapTimeMs then
+        displayName = file_utils.formatLapTime(fileInfo.lapTimeMs)
+    else
+        displayName = fileInfo.filename:gsub("%.csv$", "")
+    end
     local sizeStr = file_utils.formatFileSize(fileInfo.size)
 
     -- File label
@@ -415,7 +450,7 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         ui.setCursor(vec2(btnAreaX, y))
         ui.pushStyleColor(ui.StyleColor.Button, theme.button.success)
         ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.successHover)
-        if ui.button("C##csvc" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
+        if ui.button("C##csvc" .. tostring(idx), vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
                 if options.onSelectCurrent then
@@ -434,7 +469,7 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
         ui.setCursor(vec2(btnAreaX + BTN_WIDTH + 5, y))
         ui.pushStyleColor(ui.StyleColor.Button, theme.button.reference)
         ui.pushStyleColor(ui.StyleColor.ButtonHovered, theme.button.referenceHover)
-        if ui.button("R##csvr" .. idx, vec2(BTN_WIDTH, 18)) and not isLoadingLap then
+        if ui.button("R##csvr" .. tostring(idx), vec2(BTN_WIDTH, 18)) and not isLoadingLap then
             local loaded, msg = loadCSVLap(fileInfo)
             if loaded then
                 local st = getState()
@@ -453,6 +488,102 @@ local function drawCSVRow(x, y, width, fileInfo, idx, options)
     return y + ROW_HEIGHT
 end
 
+--- Draw a separator line
+local function drawSeparator(contentX, py, contentW)
+    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
+    return py + 8
+end
+
+--- Draw the grouped file sections (autosave, references, other cars, legacy/motec)
+---@return number New Y position
+local function drawFileSections(contentX, py, contentW, rowOptions, maxY)
+    local st = getState()
+    local grouped = file_utils.scanCSVFilesGrouped(st.track, st.car)
+
+    -- Fastest Saved (top 3 from autosave)
+    if #grouped.autosave > 0 then
+        py = drawSeparator(contentX, py, contentW)
+        local expanded = drawSectionHeader(contentX, py, contentW, "Fastest Saved", theme.status.info, nil)
+        py = py + 18
+
+        if expanded then
+            local shown = 0
+            for _, fileInfo in ipairs(grouped.autosave) do
+                if shown >= 3 then break end
+                if maxY and py > maxY - 40 then break end
+                py = drawCSVRow(contentX, py, contentW, fileInfo, "auto" .. shown, rowOptions)
+                shown = shown + 1
+            end
+        end
+    end
+
+    -- References
+    if #grouped.references > 0 then
+        py = drawSeparator(contentX, py, contentW)
+        drawSectionHeader(contentX, py, contentW, "References", theme.status.warning, nil)
+        py = py + 18
+
+        for j, fileInfo in ipairs(grouped.references) do
+            if maxY and py > maxY - 40 then break end
+            py = drawCSVRow(contentX, py, contentW, fileInfo, "ref" .. j, rowOptions)
+        end
+    end
+
+    -- Other Cars (collapsed by default)
+    if #grouped.otherCars > 0 then
+        py = drawSeparator(contentX, py, contentW)
+        local expanded = drawSectionHeader(contentX, py, contentW,
+            string.format("Other Cars (%d)", #grouped.otherCars),
+            theme.text.muted, "other_cars")
+        py = py + 18
+
+        if expanded then
+            for _, carGroup in ipairs(grouped.otherCars) do
+                if maxY and py > maxY - 40 then break end
+                -- Car sub-header
+                ui.setCursor(vec2(contentX + 8, py))
+                ui.pushFont(ui.Font.Small)
+                ui.textColored(carGroup.car, theme.text.primary)
+                ui.popFont()
+                py = py + 16
+
+                local shown = 0
+                for _, fileInfo in ipairs(carGroup.files) do
+                    if shown >= 3 then break end
+                    if maxY and py > maxY - 40 then break end
+                    py = drawCSVRow(contentX + 8, py, contentW - 8, fileInfo,
+                        "oc_" .. carGroup.car .. "_" .. shown, rowOptions)
+                    shown = shown + 1
+                end
+            end
+        end
+    end
+
+    -- Legacy / MoTeC (collapsed by default)
+    local hasLegacy = #grouped.legacy > 0 or #grouped.motec > 0
+    if hasLegacy then
+        py = drawSeparator(contentX, py, contentW)
+        local totalLegacy = #grouped.legacy + #grouped.motec
+        local expanded = drawSectionHeader(contentX, py, contentW,
+            string.format("MoTeC / Legacy (%d)", totalLegacy),
+            theme.text.muted, "legacy_motec")
+        py = py + 18
+
+        if expanded then
+            for j, fileInfo in ipairs(grouped.legacy) do
+                if maxY and py > maxY - 40 then break end
+                py = drawCSVRow(contentX, py, contentW, fileInfo, "leg" .. j, rowOptions)
+            end
+            for j, fileInfo in ipairs(grouped.motec) do
+                if maxY and py > maxY - 40 then break end
+                py = drawCSVRow(contentX, py, contentW, fileInfo, "mot" .. j, rowOptions)
+            end
+        end
+    end
+
+    return py
+end
+
 --------------------------------------------------------------------------------
 -- Public: Draw as Popover
 --------------------------------------------------------------------------------
@@ -462,15 +593,13 @@ end
 ---@param y number Dialog top edge
 ---@param width number Dialog width
 ---@param height number Dialog height
----@param options table { showCurrent, showReference, maxSessionLaps, maxPrevLaps, maxCSVFiles }
+---@param options table { showCurrent, showReference, maxSessionLaps }
 function lap_picker.drawPopover(x, y, width, height, options)
     local st = getState()
     options = options or {}
     local showCurrent = options.showCurrent ~= false
     local showReference = options.showReference ~= false
     local maxSessionLaps = options.maxSessionLaps or 20
-    local maxPrevLaps = options.maxPrevLaps or 20
-    local maxCSVFiles = options.maxCSVFiles or 20
 
     -- Dialog background
     ui.drawRectFilled(vec2(x, y), vec2(x + width, y + height), theme.bg.overlay, 4)
@@ -502,14 +631,10 @@ function lap_picker.drawPopover(x, y, width, height, options)
     end
     py = py + 25
 
-    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
-    py = py + 10
+    py = drawSeparator(contentX, py, contentW)
 
     -- Current Session Laps
-    ui.setCursor(vec2(contentX, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("This Session", theme.status.success)
-    ui.popFont()
+    drawSectionHeader(contentX, py, contentW, "This Session", theme.status.success, nil)
     py = py + 18
 
     local currentSessionLaps = st.getCurrentSessionLaps()
@@ -534,69 +659,14 @@ function lap_picker.drawPopover(x, y, width, height, options)
         py = py + 20
     end
 
-    py = py + 5
-    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
-    py = py + 10
-
-    -- Previous Session Laps
-    ui.setCursor(vec2(contentX, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("Previous Sessions", theme.status.info)
-    ui.popFont()
-    py = py + 18
-
-    local prevSessionLaps = st.getPreviousSessionLaps()
-    if #prevSessionLaps > 0 then
-        local shown = 0
-        for _, entry in ipairs(prevSessionLaps) do
-            if shown < maxPrevLaps then
-                py = drawLapRow(contentX, py, contentW, entry.lap, entry.index + 1000, {
-                    showCurrent = showCurrent,
-                    showReference = showReference,
-                    onSelectCurrent = options.onSelectCurrent,
-                    onSelectReference = options.onSelectReference,
-                })
-                shown = shown + 1
-            end
-        end
-    else
-        ui.setCursor(vec2(contentX + 10, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("No saved laps", theme.text.muted)
-        ui.popFont()
-        py = py + 20
-    end
-
-    py = py + 5
-    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
-    py = py + 10
-
-    -- CSV Files
-    ui.setCursor(vec2(contentX, py))
-    ui.pushFont(ui.Font.Small)
-    ui.textColored("CSV Files", theme.status.warning)
-    ui.popFont()
-    py = py + 18
-
-    local files = file_utils.scanCSVFiles(st.track)
-    if #files > 0 then
-        for j, fileInfo in ipairs(files) do
-            if j <= maxCSVFiles and py < y + height - 40 then
-                py = drawCSVRow(contentX, py, contentW, fileInfo, j, {
-                    showCurrent = showCurrent,
-                    showReference = showReference,
-                    onSelectCurrent = options.onSelectCurrent,
-                    onSelectReference = options.onSelectReference,
-                })
-            end
-        end
-    else
-        ui.setCursor(vec2(contentX + 10, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("No CSV files found", theme.text.muted)
-        ui.popFont()
-        py = py + 20
-    end
+    -- File sections (autosave, references, other cars, legacy)
+    local rowOptions = {
+        showCurrent = showCurrent,
+        showReference = showReference,
+        onSelectCurrent = options.onSelectCurrent,
+        onSelectReference = options.onSelectReference,
+    }
+    py = drawFileSections(contentX, py, contentW, rowOptions, y + height)
 
     -- MoTeC Import
     py = py + 5
@@ -695,10 +765,7 @@ function lap_picker.draw(dt)
         local py = 0
 
         -- Current Session
-        ui.setCursor(vec2(padding, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("This Session", theme.status.success)
-        ui.popFont()
+        drawSectionHeader(padding, py, contentW, "This Session", theme.status.success, nil)
         py = py + 16
 
         local currentSessionLaps = st.getCurrentSessionLaps()
@@ -714,58 +781,13 @@ function lap_picker.draw(dt)
             py = py + 18
         end
 
-        py = py + 6
-        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
-        py = py + 8
-
-        -- Previous Sessions
-        ui.setCursor(vec2(padding, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("Previous Sessions", theme.status.info)
-        ui.popFont()
-        py = py + 16
-
-        local prevSessionLaps = st.getPreviousSessionLaps()
-        if #prevSessionLaps > 0 then
-            for _, entry in ipairs(prevSessionLaps) do
-                py = drawLapRow(padding, py, contentW, entry.lap, entry.index + 1000, rowOptions)
-            end
-        else
-            ui.setCursor(vec2(padding + 10, py))
-            ui.pushFont(ui.Font.Small)
-            ui.textColored("No saved laps", theme.text.muted)
-            ui.popFont()
-            py = py + 18
-        end
-
-        py = py + 6
-        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
-        py = py + 8
-
-        -- CSV Files
-        ui.setCursor(vec2(padding, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("CSV Files (tracks/)", theme.status.warning)
-        ui.popFont()
-        py = py + 16
-
-        local files = file_utils.scanCSVFiles(st.track)
-        if #files > 0 then
-            for j, fileInfo in ipairs(files) do
-                py = drawCSVRow(padding, py, contentW, fileInfo, j, rowOptions)
-            end
-        else
-            ui.setCursor(vec2(padding + 10, py))
-            ui.pushFont(ui.Font.Small)
-            ui.textColored("No CSV files in tracks/", theme.text.muted)
-            ui.popFont()
-            py = py + 18
-        end
+        -- File sections (autosave, references, other cars, legacy)
+        py = drawFileSections(padding, py, contentW, rowOptions, nil)
 
         -- MoTeC Import
-        py = py + 6
+        py = py + 5
         ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
-        py = py + 8
+        py = py + 10
         py = drawMotecImportSection(padding, py, contentW, windowSize.y)
     end)
 end

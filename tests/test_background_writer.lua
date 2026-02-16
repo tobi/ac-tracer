@@ -34,25 +34,25 @@ local function mockCar(opts)
     }
 end
 
-test("sanitizeFilename removes invalid characters", function()
+test("paths.sanitize removes invalid characters", function()
     resetModule()
-    local bg_writer = require('lib.core.background_writer')
-    
+    local paths = require('lib.core.paths')
+
     -- Test basic sanitization
-    assert_equal(bg_writer._testExports.sanitizeFilename("simple"), "simple")
-    assert_equal(bg_writer._testExports.sanitizeFilename("has spaces"), "has_spaces")
-    assert_equal(bg_writer._testExports.sanitizeFilename("has:colons"), "has_colons")
-    assert_equal(bg_writer._testExports.sanitizeFilename("has/slashes"), "has_slashes")
-    assert_equal(bg_writer._testExports.sanitizeFilename("has\\backslashes"), "has_backslashes")
-    assert_equal(bg_writer._testExports.sanitizeFilename('has"quotes'), "has_quotes")
-    assert_equal(bg_writer._testExports.sanitizeFilename("has<>pipes|"), "has_pipes_")
-    
+    assert_equal(paths.sanitize("simple"), "simple")
+    assert_equal(paths.sanitize("has spaces"), "has_spaces")
+    assert_equal(paths.sanitize("has:colons"), "has_colons")
+    assert_equal(paths.sanitize("has/slashes"), "has_slashes")
+    assert_equal(paths.sanitize("has\\backslashes"), "has_backslashes")
+    assert_equal(paths.sanitize('has"quotes'), "has_quotes")
+    assert_equal(paths.sanitize("has<>pipes|"), "has_pipes_")
+
     -- Test multiple underscores get collapsed
-    assert_equal(bg_writer._testExports.sanitizeFilename("too___many___underscores"), "too_many_underscores")
-    
+    assert_equal(paths.sanitize("too___many___underscores"), "too_many_underscores")
+
     -- Test empty/nil returns default
-    assert_equal(bg_writer._testExports.sanitizeFilename(""), "lap")
-    assert_equal(bg_writer._testExports.sanitizeFilename(nil), "lap")
+    assert_equal(paths.sanitize(""), "unknown")
+    assert_equal(paths.sanitize(nil), "unknown")
 end)
 
 test("formatLapTime produces correct format", function()
@@ -67,58 +67,43 @@ test("formatLapTime produces correct format", function()
     assert_equal(bg_writer._testExports.formatLapTime(-1), "0-00.000")     -- negative
 end)
 
-test("buildFilename creates correct format without track", function()
+test("buildFilename creates timestamp-laptime format", function()
     resetModule()
     local bg_writer = require('lib.core.background_writer')
-    
+
     -- Create a mock lap object
     local mockLap = {
         track = "test_track",
         car = "test_car",
         time = 112577,  -- 1:52.577
     }
-    
+
     local filename = bg_writer._testExports.buildFilename(mockLap)
-    
-    -- Should be car-timestamp-laptime (no track since track is in directory)
-    assert_true(filename:match("^test_car%-"), "Filename should start with car name")
+
+    -- Should be timestamp-laptime (track and car are in directory path)
     assert_true(filename:match("%-1%-52%.577$"), "Filename should end with lap time")
     assert_true(not filename:match("test_track"), "Filename should NOT contain track name")
+    assert_true(not filename:match("test_car"), "Filename should NOT contain car name (car is in dir)")
 end)
 
-test("getHistoryBaseDir returns correct path", function()
+test("getSaveDir returns paths.autosaveDir", function()
     resetModule()
-    
+
     -- Mock environment variable
     local originalGetenv = os.getenv
     os.getenv = function(name)
         if name == "USERPROFILE" then return "C:\\Users\\TestUser" end
         return originalGetenv(name)
     end
-    
-    local bg_writer = require('lib.core.background_writer')
-    local baseDir = bg_writer.getSaveDir()
-    
-    assert_equal(baseDir, "C:\\Users\\TestUser\\Documents\\ac-tracer\\history\\")
-    
-    os.getenv = originalGetenv
-end)
 
-test("getTrackHistoryDir includes sanitized track name", function()
-    resetModule()
-    
-    -- Mock environment variable
-    local originalGetenv = os.getenv
-    os.getenv = function(name)
-        if name == "USERPROFILE" then return "C:\\Users\\TestUser" end
-        return originalGetenv(name)
-    end
-    
+    -- Reset paths module too so it picks up mock env
+    package.loaded['lib.core.paths'] = nil
+
     local bg_writer = require('lib.core.background_writer')
-    local trackDir = bg_writer._testExports.getTrackHistoryDir("Test Track")
-    
-    assert_equal(trackDir, "C:\\Users\\TestUser\\Documents\\ac-tracer\\history\\Test_Track\\")
-    
+    local dir = bg_writer.getSaveDir("test_track", "test_car")
+
+    assert_equal(dir, "C:\\Users\\TestUser\\Documents\\ac-tracer\\data\\test_track\\test_car\\autosave\\")
+
     os.getenv = originalGetenv
 end)
 
@@ -179,23 +164,26 @@ end)
 
 test("queueLapSave accepts valid lap and creates files", function()
     resetModule()
-    
+
     -- Mock environment variable
     local originalGetenv = os.getenv
     os.getenv = function(name)
         if name == "USERPROFILE" then return "C:\\Users\\TestUser" end
         return originalGetenv(name)
     end
-    
+
+    -- Reset paths module too
+    package.loaded['lib.core.paths'] = nil
+
     local bg_writer = require('lib.core.background_writer')
     local lap = require('lib.lap')
-    
+
     -- Create a valid lap
     local validLap = lap.new()
     validLap.track = "test_track"
     validLap.car = "test_car"
     validLap.time = 90000  -- 1:30.000
-    
+
     -- Add enough samples (>100)
     for i = 1, 150 do
         validLap:addSample(mockCar({
@@ -207,14 +195,14 @@ test("queueLapSave accepts valid lap and creates files", function()
             gear = 3 + (i % 3),
         }))
     end
-    
+
     local result = bg_writer.queueLapSave(validLap, { includeJSON = false })
     assert_equal(result, true, "Should accept valid lap")
-    
-    -- Check that directory was created
-    assert_true(io.dirExists("C:/Users/TestUser/Documents/ac-tracer/history/test_track"),
-        "Track history directory should be created")
-    
+
+    -- Check that autosave directory was created under data/{track}/{car}/autosave/
+    assert_true(io.dirExists("C:/Users/TestUser/Documents/ac-tracer/data/test_track/test_car/autosave"),
+        "Autosave directory should be created")
+
     os.getenv = originalGetenv
 end)
 

@@ -15,7 +15,17 @@
       "Bash(powershell -Command:*)",
       "Bash(git push)",
       "Bash(ls:*)",
-      "Bash(powershell -File:*)"
+      "Bash(powershell -File:*)",
+      "Bash(git fetch:*)",
+      "Bash(git stash:*)",
+      "Bash(git pull:*)",
+      "Bash(testsrun.cmd)",
+      "Bash(cmd /c \"tests\\\\run.cmd\")",
+      "Bash(luajit:*)",
+      "Bash(cmd.exe /c \"cd /d \"\"C:\\\\Program Files \\(x86\\)\\\\Steam\\\\steamapps\\\\common\\\\assettocorsa\\\\apps\\\\lua\\\\ac-tracer\"\" && \"\"%LOCALAPPDATA%\\\\Programs\\\\LuaJIT\\\\bin\\\\luajit.exe\"\" tests/test_runner.lua 2>&1\")",
+      "Bash(where:*)",
+      "Bash(dir:*)",
+      "Bash(find:*)"
     ]
   }
 }
