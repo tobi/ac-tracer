@@ -1,0 +1,22 @@
+{
+  "name": "ac-tracer-web",
+  "version": "1.0.0",
+  "module": "server.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot server.ts",
+    "start": "bun server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3"
+  },
+  "dependencies": {
+    "fengari-web": "^0.1.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "wasmoon": "^1.16.0"
+  }
+}

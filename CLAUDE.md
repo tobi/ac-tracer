@@ -531,6 +531,63 @@ This pattern:
 
 ---
 
+## Web Viewer (`web/`)
+
+Browser-based telemetry viewer that runs the **real Lua code** (same `lap_telemetry.lua`) in the browser via fengari (pure-JS Lua 5.3 interpreter). Uses Bun for dev server (see `web/CLAUDE.md`).
+
+### Architecture
+
+```
+Browser Canvas ← ui.ts mock ← fengari Lua VM ← real lap_telemetry.lua
+                                     ↑
+                              ac.ts, io.ts, vec.ts mocks
+```
+
+- **`web/src/lua/engine.ts`** - Lua VM lifecycle, loads all `lib/**/*.lua` files into fengari via VFS
+- **`web/src/mocks/`** - JS implementations of CSP APIs (`ui.*`, `ac.*`, `io.*`, `vec2`, `bit.*`)
+- **`web/src/components/TelemetryCanvas.tsx`** - React component that calls `lap_telemetry.draw(dt, context)` each frame via `requestAnimationFrame`
+- **`web/server.ts`** - Bun.serve() serves HTML, Lua files from `../lib/`, and track CSVs from `../tracks/`
+
+### How It Works
+
+1. On page load: fengari initializes, all `lib/**/*.lua` files are fetched and loaded into VFS
+2. User clicks a track (or drops a CSV): file is fetched, added to VFS, parsed via `lap.fromCSV()` in Lua
+3. Each frame: `TelemetryCanvas` calls `doString()` which executes `lap_telemetry.draw(dt, context)` where `context` is a Lua table with `history`, `bestLap`, `brakeScaleBar`, etc.
+4. The Lua draw code calls `ui.*` functions which are JS mocks that draw to canvas 2D
+
+### JS-Lua Bridge Gotchas (fengari)
+
+**These are critical to understand when adding new mocks:**
+
+- **Proxy objects don't survive the bridge.** `pushValue()` uses `Object.entries()` to convert JS objects to Lua tables. Proxy dynamic getters are lost. Use plain objects with own properties instead.
+- **Class instances lose prototype methods.** `Object.entries()` only gets own enumerable properties. Class methods on prototypes aren't transferred. Return plain objects with method properties instead (e.g., `{ pressed: () => false }` not `new MockButton()`).
+- **`ac.storage()` is an in-memory stub.** Returns `{ ...defaults }` directly. The Proxy-backed localStorage approach was lost at the bridge. Settings work because defaults are correct.
+- **Single-frame input (clicks, wheel) must be cleared AFTER draw, not before.** The render loop clears `_mouseClicked`, `_mouseReleased`, `_wheelDelta` after `doString()` returns, so the Lua code can read them during draw.
+- **Mouse coordinates are in CSS pixels** (not DPR-scaled physical pixels). The canvas uses `ctx.scale(dpr, dpr)` so all drawing and input use CSS pixel space.
+
+### Performance
+
+The main bottleneck is **per-draw-call JS-Lua bridge overhead**. Every `ui.drawLine()`, `ui.pathLineTo()`, etc. crosses the fengari bridge. For a telemetry view with thousands of path segments, this is very slow.
+
+**Planned solution:** Command buffer architecture - buffer all draw commands in a Lua-side array during `draw()`, then flush the entire buffer to JS canvas in one batch after draw returns. This minimizes bridge crossings from O(draw_calls) to O(1).
+
+### Adding New Mock Functions
+
+When `lap_telemetry.lua` (or any Lua module) calls a CSP function that doesn't exist in the mocks, fengari will throw a Lua error visible in the browser console. To fix:
+
+1. Check which `ui.*` / `ac.*` function is missing from the error message
+2. Add the mock implementation to the appropriate file in `web/src/mocks/`
+3. Export it in both the class method AND the `ui`/`ac` export object (both are needed)
+4. Use plain objects with own properties (not classes with prototype methods)
+
+### Running
+
+```bash
+cd web && bun run dev    # Start at http://localhost:3000
+```
+
+---
+
 ## File Structure
 
 All user data lives under `%USERPROFILE%\Documents\ac-tracer\`, computed once via `lib/core/paths.lua`:
