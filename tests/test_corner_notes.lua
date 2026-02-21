@@ -573,3 +573,147 @@ test("findDownshiftDelay returns brake/downshift positions", function()
     assert_not_nil(firstDownshiftPos, "Downshift position should be returned")
     assert_true(firstDownshiftPos > brakePos, "Downshift should occur after brake position")
 end)
+
+
+--------------------------------------------------------------------------------
+-- Tests for lockup wheel identification patterns
+--------------------------------------------------------------------------------
+
+suite("Lockup wheel identification")
+
+test("rear-only lockup returns correct wheels", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    for i = 10, 15 do
+        l.flags[i] = bit.bor(lap.FLAGS.LOCKUP_RL, lap.FLAGS.LOCKUP_RR)
+    end
+
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(hasLockup, "Should detect lockup")
+    assert_true(not wheels.fl, "FL should not be locked")
+    assert_true(not wheels.fr, "FR should not be locked")
+    assert_true(wheels.rl, "RL should be locked")
+    assert_true(wheels.rr, "RR should be locked")
+end)
+
+test("all four wheels lockup returns all true", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    for i = 10, 15 do
+        l.flags[i] = bit.bor(
+            bit.bor(lap.FLAGS.LOCKUP_FL, lap.FLAGS.LOCKUP_FR),
+            bit.bor(lap.FLAGS.LOCKUP_RL, lap.FLAGS.LOCKUP_RR)
+        )
+    end
+
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(hasLockup, "Should detect lockup")
+    assert_true(wheels.fl, "FL should be locked")
+    assert_true(wheels.fr, "FR should be locked")
+    assert_true(wheels.rl, "RL should be locked")
+    assert_true(wheels.rr, "RR should be locked")
+end)
+
+test("single wheel lockup (FL only)", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    for i = 12, 14 do
+        l.flags[i] = lap.FLAGS.LOCKUP_FL
+    end
+
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(hasLockup, "Should detect lockup")
+    assert_true(wheels.fl, "FL should be locked")
+    assert_true(not wheels.fr, "FR should not be locked")
+    assert_true(not wheels.rl, "RL should not be locked")
+    assert_true(not wheels.rr, "RR should not be locked")
+end)
+
+test("diagonal lockup (FL + RR)", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    for i = 10, 15 do
+        l.flags[i] = bit.bor(lap.FLAGS.LOCKUP_FL, lap.FLAGS.LOCKUP_RR)
+    end
+
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(hasLockup, "Should detect lockup")
+    assert_true(wheels.fl, "FL should be locked")
+    assert_true(not wheels.fr, "FR should not be locked")
+    assert_true(not wheels.rl, "RL should not be locked")
+    assert_true(wheels.rr, "RR should be locked")
+end)
+
+test("lockup wheels included in flag summary", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    for i = 10, 15 do
+        l.flags[i] = bit.bor(lap.FLAGS.LOCKUP_FL, lap.FLAGS.LOCKUP_FR)
+    end
+
+    local summary = l:getFlagSummary(0.1, 0.2)
+
+    assert_true(summary.lockup.count > 0, "Should have lockup count")
+    assert_true(summary.lockup.wheels.fl, "Summary should include FL lockup")
+    assert_true(summary.lockup.wheels.fr, "Summary should include FR lockup")
+    assert_true(not summary.lockup.wheels.rl, "Summary should not include RL lockup")
+    assert_true(not summary.lockup.wheels.rr, "Summary should not include RR lockup")
+end)
+
+test("no lockup returns false and nil wheels", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    -- No lockup flags set
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(not hasLockup, "Should not detect lockup")
+    assert_nil(wheels, "Wheels should be nil when no lockup")
+end)
+
+test("lockup on different samples aggregates all wheels", function()
+    local l = createTestLap({
+        numSamples = 30,
+        startPos = 0.1,
+        endPos = 0.2,
+    })
+
+    -- FL locks on sample 10, RR locks on sample 20 (different times)
+    l.flags[10] = lap.FLAGS.LOCKUP_FL
+    l.flags[20] = lap.FLAGS.LOCKUP_RR
+
+    local hasLockup, wheels = l:hasLockupInRange(0.1, 0.2)
+
+    assert_true(hasLockup, "Should detect lockup")
+    assert_true(wheels.fl, "FL should be locked (from sample 10)")
+    assert_true(not wheels.fr, "FR should not be locked")
+    assert_true(not wheels.rl, "RL should not be locked")
+    assert_true(wheels.rr, "RR should be locked (from sample 20)")
+end)
