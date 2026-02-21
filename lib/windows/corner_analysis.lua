@@ -320,7 +320,7 @@ local function analyzeLockups(currentLap, data)
     else
         text = table.concat(locked, "+") .. " lockup"
     end
-    return { text = text, severity = "error" }
+    return { text = text, severity = "error", wheels = wheels }
 end
 
 --- Analyze traction control interventions
@@ -1334,6 +1334,53 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals, data)
     ui.drawRect(vec2(x, y), vec2(x + w, y + h), rgbm(0.4, 0.4, 0.4, 0.5), 4, 1)
 end
 
+--- Draw a top-down car diagram showing which tires locked up
+---@param cx number Center X of the diagram
+---@param cy number Center Y of the diagram
+---@param wheels table {fl, fr, rl, rr} booleans
+local function drawLockupDiagram(cx, cy, wheels)
+    -- Car body dimensions
+    local bodyW = 30
+    local bodyH = 52
+    local tireW = 8
+    local tireH = 14
+    local axleGap = 2  -- gap between tire and body edge
+
+    local bx = cx - bodyW / 2
+    local by = cy - bodyH / 2
+
+    -- Colors
+    local bodyColor = rgbm(0.35, 0.35, 0.4, 0.6)
+    local bodyOutline = rgbm(0.5, 0.5, 0.55, 0.7)
+    local axleColor = rgbm(0.45, 0.45, 0.5, 0.5)
+    local tireDefault = rgbm(0.4, 0.4, 0.45, 0.7)
+    local tireLockup = rgbm(1, 0.2, 0.2, 0.95)
+
+    -- Axle lines (front and rear, connecting tires through body)
+    local frontAxleY = by + tireH / 2 + 2
+    local rearAxleY = by + bodyH - tireH / 2 - 2
+    ui.drawLine(vec2(bx - axleGap - tireW, frontAxleY), vec2(bx + bodyW + axleGap + tireW, frontAxleY), axleColor, 2)
+    ui.drawLine(vec2(bx - axleGap - tireW, rearAxleY), vec2(bx + bodyW + axleGap + tireW, rearAxleY), axleColor, 2)
+
+    -- Car body (rounded rect)
+    ui.drawRectFilled(vec2(bx, by), vec2(bx + bodyW, by + bodyH), bodyColor, 4)
+    ui.drawRect(vec2(bx, by), vec2(bx + bodyW, by + bodyH), bodyOutline, 4, 1)
+
+    -- Tire positions: FL, FR, RL, RR
+    local tires = {
+        { x = bx - axleGap - tireW, y = frontAxleY - tireH / 2, locked = wheels.fl },
+        { x = bx + bodyW + axleGap, y = frontAxleY - tireH / 2, locked = wheels.fr },
+        { x = bx - axleGap - tireW, y = rearAxleY - tireH / 2,  locked = wheels.rl },
+        { x = bx + bodyW + axleGap, y = rearAxleY - tireH / 2,  locked = wheels.rr },
+    }
+
+    for _, t in ipairs(tires) do
+        local color = t.locked and tireLockup or tireDefault
+        ui.drawRectFilled(vec2(t.x, t.y), vec2(t.x + tireW, t.y + tireH), color, 2)
+        ui.drawRect(vec2(t.x, t.y), vec2(t.x + tireW, t.y + tireH), bodyOutline, 2, 1)
+    end
+end
+
 --- Main window rendering
 function corner_analysis.draw(dt, currentLap, referenceLap, corners)
     local windowSize = ui.availableSpace()
@@ -1762,6 +1809,24 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
                     drawNote(note)
                 end
             end
+        end
+
+        -- Lockup diagram: find wheels data from lockup note
+        local lockupWheels = nil
+        if notes then
+            for _, note in ipairs(notes) do
+                if note and note.wheels then
+                    lockupWheels = note.wheels
+                    break
+                end
+            end
+        end
+        if lockupWheels then
+            statsY = statsY + 8
+            local diagramCx = panelInnerX + panelW / 2
+            local diagramCy = statsY + 30
+            drawLockupDiagram(diagramCx, diagramCy, lockupWheels)
+            statsY = diagramCy + 34
         end
 
         -- Draw pedal traces at bottom (same width as speed graph above) - uses captured snapshot data
