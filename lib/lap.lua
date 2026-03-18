@@ -795,6 +795,31 @@ function lap:suspensionAt(pos)
     }
 end
 
+--- Get G-force at position (lateral and longitudinal in G)
+--- Returns nil if no G-force data recorded
+---@param pos number Spline position
+---@return number|nil lateral G (positive = right turn)
+---@return number|nil longitudinal G (positive = acceleration, negative = braking)
+function lap:gforceAt(pos)
+    if not self.gforce or #self.gforce < 2 then return nil, nil end
+
+    local lo, hi = findIndicesAtPos(self.pos, pos, self._lastSearchIdx)
+    if not lo then return nil, nil end
+    self._lastSearchIdx = lo
+
+    local p1, p2 = self.pos[lo], self.pos[hi]
+    local g1, g2 = self.gforce[lo], self.gforce[hi]
+    if not g1 or not g2 then
+        local g = g1 or g2
+        if g then return g.x, g.z end
+        return nil, nil
+    end
+    if p1 == p2 then return g1.x, g1.z end
+
+    local t = math.clamp((pos - p1) / (p2 - p1), 0, 1)
+    return g1.x + (g2.x - g1.x) * t, g1.z + (g2.z - g1.z) * t
+end
+
 --- Get fuel at position (liters) - sparse field
 ---@param pos number Spline position
 ---@return number|nil

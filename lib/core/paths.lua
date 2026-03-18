@@ -72,24 +72,34 @@ function paths.referencesDir(trackId, carId)
     return paths.carDir(trackId, carId) .. "references\\"
 end
 
+-- Cache of already-created directories (avoids redundant io.createDir calls)
+local createdDirs = {}
+
+local function ensureDir(path)
+    if not createdDirs[path] then
+        io.createDir(path)
+        createdDirs[path] = true
+    end
+end
+
 --- Ensure all directories exist for a track/car combo
 ---@param trackId string
 ---@param carId string
 function paths.ensureDirs(trackId, carId)
-    io.createDir(paths.root())
-    io.createDir(paths.dataDir())
-    io.createDir(paths.trackDir(trackId))
-    io.createDir(paths.carDir(trackId, carId))
-    io.createDir(paths.autosaveDir(trackId, carId))
-    io.createDir(paths.referencesDir(trackId, carId))
+    ensureDir(paths.root())
+    ensureDir(paths.dataDir())
+    ensureDir(paths.trackDir(trackId))
+    ensureDir(paths.carDir(trackId, carId))
+    ensureDir(paths.autosaveDir(trackId, carId))
+    ensureDir(paths.referencesDir(trackId, carId))
 end
 
 --- Ensure track directory exists (for corners, before car is known)
 ---@param trackId string
 function paths.ensureTrackDir(trackId)
-    io.createDir(paths.root())
-    io.createDir(paths.dataDir())
-    io.createDir(paths.trackDir(trackId))
+    ensureDir(paths.root())
+    ensureDir(paths.dataDir())
+    ensureDir(paths.trackDir(trackId))
 end
 
 return paths

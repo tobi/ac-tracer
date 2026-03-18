@@ -1131,31 +1131,29 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
     -- posToX(pos) = x + ((pos - startPos + wrap) / posRange) * w
     -- where wrap = 1 if (pos - startPos) < 0, else 0
 
-    -- Cache theme colors to avoid repeated table lookups
-    local colorOnSpeed = theme.corner.onSpeed
-    local colorFaster = theme.corner.faster
-    local colorSlower = theme.corner.slower
+    -- Cache theme fill colors to avoid repeated table lookups
+    local colorOnSpeed = theme.corner.onSpeedFill
+    local colorFaster = theme.corner.fasterFill
+    local colorSlower = theme.corner.slowerFill
 
-    -- Draw filled comparison using quads (more reliable than pathFillConvex)
+    -- Pre-compute pixel-snapped X and Y for each point (computed once, used for both edges)
+    local pointX = {}
+    local pointY = {}
+    for i = 1, numPoints do
+        local s = currentSpeeds[i]
+        local relPos = s.pos - startPos
+        if relPos < 0 then relPos = relPos + 1 end
+        pointX[i] = math.floor(x + relPos * posScale + 0.5)
+        pointY[i] = bottomY - (s.speed - minSpeed) * hOverRange
+    end
+
+    -- Draw filled comparison using quads with shared snapped X coordinates
+    -- Each quad's left X = pointX[i], right X = pointX[i+1] — no overlap, no gaps
     for i = 1, numPoints - 1 do
-        local s1 = currentSpeeds[i]
-        local s2 = currentSpeeds[i + 1]
-        local ref1 = refSpeeds[i] and refSpeeds[i].speed or s1.speed
-        local ref2 = refSpeeds[i + 1] and refSpeeds[i + 1].speed or s2.speed
-        
-        -- Inline posToX: x + relPos * posScale (with wrap handling)
-        local relPos1 = s1.pos - startPos
-        if relPos1 < 0 then relPos1 = relPos1 + 1 end
-        local x1 = x + relPos1 * posScale
-        
-        local relPos2 = s2.pos - startPos
-        if relPos2 < 0 then relPos2 = relPos2 + 1 end
-        local x2 = x + relPos2 * posScale
-        
-        local curY1 = bottomY - (s1.speed - minSpeed) * hOverRange
-        local curY2 = bottomY - (s2.speed - minSpeed) * hOverRange
-        
-        local speedDiff = (s1.speed + s2.speed) * 0.5 - (ref1 + ref2) * 0.5
+        local ref1 = refSpeeds[i] and refSpeeds[i].speed or currentSpeeds[i].speed
+        local ref2 = refSpeeds[i + 1] and refSpeeds[i + 1].speed or currentSpeeds[i + 1].speed
+
+        local speedDiff = (currentSpeeds[i].speed + currentSpeeds[i + 1].speed) * 0.5 - (ref1 + ref2) * 0.5
         local color
         if speedDiff > SPEED_TOLERANCE then
             color = colorFaster
@@ -1164,12 +1162,11 @@ local function drawFilledComparison(x, y, w, h, currentSpeeds, refSpeeds)
         else
             color = colorOnSpeed
         end
-        
-        -- Use pre-allocated vec2 objects to avoid GC pressure
-        _v1:set(x1, curY1)
-        _v2:set(x2, curY2)
-        _v3:set(x2, bottomY)
-        _v4:set(x1, bottomY)
+
+        _v1:set(pointX[i], pointY[i])
+        _v2:set(pointX[i + 1], pointY[i + 1])
+        _v3:set(pointX[i + 1], bottomY)
+        _v4:set(pointX[i], bottomY)
         ui.drawQuadFilled(_v1, _v2, _v3, _v4, color)
     end
 
@@ -1325,7 +1322,7 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals, data)
         if data.currentBrakePos then
             local curBrakeX = posToX(data.currentBrakePos)
             if curBrakeX then
-                ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), rgbm(1, 0.8, 0, 1), 3)
+                ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), rgbm(1, 1, 1, 1), 3)
             end
         end
     end

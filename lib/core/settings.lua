@@ -89,10 +89,6 @@ local config = ac.storage({
     -- Values: "off", "on" (uses comparison lap)
     brakeBeepMode = "off",
 
-    -- Brake marker system (3D line on track at brakepoint)
-    -- Values: "off", "next" (next corner only), "all" (all visible corners)
-    brakeMarkerMode = "next",
-
     -- Lookahead traces (show future reference lap data)
     showFutureTraces = true,
 
@@ -162,12 +158,6 @@ function M.brakeBeepModeDisplay()
 end
 
 -- Brake marker system (3D line on track)
---- Get brake marker mode: "off", "next", or "all"
-function M.brakeMarkerMode() return config.brakeMarkerMode or "next" end
-
---- Set brake marker mode
-function M.setBrakeMarkerMode(mode) config.brakeMarkerMode = mode end
-
 -- Lookahead/future traces from reference lap
 function M.showFutureTraces() return config.showFutureTraces end
 function M.setShowFutureTraces(v) config.showFutureTraces = v end
@@ -354,13 +344,13 @@ function M.windowSettings()
     configCheckbox("Enable checkpoint system", "checkpointEnabled")
     
     if config.checkpointEnabled then
-        labeledControl("Save", CONTROL_WIDTH, function() 
-            saveCheckpointButton:control(vec2(CONTROL_WIDTH, 0)) 
+        labeledControl("Save", CONTROL_WIDTH, function()
+            saveCheckpointButton:control(vec2(CONTROL_WIDTH, 0))
         end)
-        labeledControl("Load", CONTROL_WIDTH, function() 
-            loadCheckpointButton:control(vec2(CONTROL_WIDTH, 0)) 
+        labeledControl("Load", CONTROL_WIDTH, function()
+            loadCheckpointButton:control(vec2(CONTROL_WIDTH, 0))
         end)
-        hint("Save position, then Load to teleport back")
+        hint("Save position, then Load to teleport back.")
     end
     
     ui.dummy(vec2(0, 8))
@@ -381,16 +371,6 @@ function M.windowSettings()
     ui.dummy(vec2(0, 8))
     
     -- BRAKE MARKER
-    ui.header("Brake Marker")
-    
-    if ui.radioButton("Off##marker", config.brakeMarkerMode == "off") then config.brakeMarkerMode = "off" end
-    if ui.radioButton("Next Corner##marker", config.brakeMarkerMode == "next") then config.brakeMarkerMode = "next" end
-    if ui.radioButton("All Corners##marker", config.brakeMarkerMode == "all") then config.brakeMarkerMode = "all" end
-    
-    hint("Red line on track at brakepoint")
-    
-    ui.dummy(vec2(0, 8))
-    
     -- COMPARISON MODE
     ui.header("Comparison Mode")
     

@@ -8,6 +8,7 @@ local lap_telemetry = require('lib.windows.lap_telemetry')
 local lap_picker = require('lib.windows.lap_picker')
 local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
+
 local ui_utils = require('lib.ui.utils')
 
 -- History for trace display (rolling window)
@@ -17,6 +18,10 @@ local updateTimer = 0
 -- Overlap tracking state (for flag detection)
 local overlapState = { startTime = nil }
 
+-- Checkpoint load button hold tracking
+local loadButtonHeldTime = 0
+local loadButtonHeldTriggered = false
+
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
 
@@ -25,9 +30,24 @@ function script.update(dt)
     if not currentCar then return end
 
     local sim = ac.getSim()
+    local isReplay = sim.isReplayActive
 
-    -- Skip all updates during pause or replay (TimeShift rewind)
-    if sim.isPaused or sim.isReplayActive then return end
+    -- Skip all updates during pause (but allow replay)
+    if sim.isPaused then return end
+
+    -- In replay mode, update traces + ghost/delta but skip lap recording, checkpoints, etc.
+    if isReplay then
+        -- Keep track position current so ghost traces and delta work
+        state.trackPosition = currentCar.splinePosition
+
+        updateTimer = updateTimer + dt
+        local sampleInterval = 1 / settings.sampleRate()
+        if updateTimer >= sampleInterval then
+            updateTimer = updateTimer - sampleInterval
+            main_window.updateHistory(currentCar, history, overlapState, true)
+        end
+        return
+    end
 
     -- Checkpoint keybind polling (check before state update)
     if settings.checkpointEnabled() then
@@ -39,20 +59,37 @@ function script.update(dt)
             state.saveCheckpoint(history)
         end
 
-        -- Load checkpoint on button press
-        if loadButton:pressed() and state.hasCheckpoint() then
+        -- Load checkpoint: press to cycle, hold to jump to 1/N
+        if loadButton:pressed() then
+            loadButtonHeldTime = 0
+            loadButtonHeldTriggered = false
+            -- Immediate response: cycle to next checkpoint
             if state.loadCheckpoint() then
-                -- Restore trace history from checkpoint snapshot
                 local traceSnapshot = state.getCheckpointTraceHistory()
                 main_window.restoreHistory(history, traceSnapshot)
-
-                -- Reset delta bar smoothing
                 delta_bar.reset()
-
-                -- Reset overlap tracking
                 overlapState.startTime = nil
             end
         end
+
+        if loadButton:down() then
+            loadButtonHeldTime = loadButtonHeldTime + dt
+            -- Hold: jump back to checkpoint 1/N
+            if loadButtonHeldTime > 0.5 and not loadButtonHeldTriggered then
+                state.resetCheckpointIndex()
+                if state.loadCheckpoint() then
+                    local traceSnapshot = state.getCheckpointTraceHistory()
+                    main_window.restoreHistory(history, traceSnapshot)
+                    delta_bar.reset()
+                    overlapState.startTime = nil
+                end
+                loadButtonHeldTriggered = true
+            end
+        else
+            loadButtonHeldTime = 0
+            loadButtonHeldTriggered = false
+        end
+
     end
 
     -- Brake beep toggle hotkey
@@ -83,9 +120,6 @@ function script.update(dt)
     -- Update corner analysis (live tracking)
     corner_analysis.update(currentCar, state.currentLap, state.getComparisonLap(), state.trackCorners)
 
-    -- Draw brake markers on track (3D rendering)
-    main_window.drawBrakeMarkers(currentCar)
-
     -- Auto-hide telemetry window when above speed threshold (traces always visible)
     if settings.telemetryAutoHide() then
         ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed(), {"telemetry"})
@@ -114,6 +148,7 @@ function script.windowReferenceLap(dt)
     lap_picker.showCurrentButton = false
     lap_picker.draw(dt)
 end
+
 
 function script.windowDelta(dt)
     delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners, currentCar)

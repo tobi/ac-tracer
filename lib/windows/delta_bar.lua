@@ -24,6 +24,11 @@ local smoothedBarWidth = 0
 local smoothedDelta = 0
 local displayDelta = 0
 
+-- Outlap tracking: outlap only while pit limiter is active (exiting pits)
+-- Once S/F is crossed without pit limiter, it's a real lap
+local isOutlap = false
+local prevLapCount = -1
+
 -- Lap completion display
 local lastLapCount = 0
 local lastLapTime = 0       -- The completed lap time in ms
@@ -55,10 +60,22 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
     local centerX = windowSize.x / 2
     local padding = 10
 
-    local isOutlap = car.lapCount == 0
+    -- Outlap detection: only an outlap if the S/F crossing happened with pit limiter on
+    -- Once you cross S/F without pit limiter, you're on a real lap
+    if car.lapCount ~= prevLapCount then
+        -- S/F crossing just happened
+        if car.speedLimiterInAction then
+            -- Crossed S/F while pit limiter active = still outlap (exiting pits)
+            isOutlap = true
+        else
+            -- Crossed S/F normally = real lap start
+            isOutlap = false
+        end
+        prevLapCount = car.lapCount
+    end
 
-    -- Skip updates during replay/rewind (keep showing last known values)
-    if not sim.isReplayActive and not sim.isPaused then
+    -- Skip updates during pause (but allow replay)
+    if not sim.isPaused then
         -- Throttle delta updates to 2 Hz
         updateTimer = updateTimer + dt
         if updateTimer >= updateInterval then

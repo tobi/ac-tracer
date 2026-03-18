@@ -57,11 +57,19 @@ state.cornerRecording = false
 state.cornerRecordStart = nil
 state.cornerRecordTime = nil
 
--- Checkpoint system (session-only, not persisted)
-state.checkpoint = nil  -- { carState, lapSnapshot, pos, lapCount, lapTimeMs }
+-- Checkpoint stack system (session-only, not persisted)
+local checkpointStack = {}         -- Array of checkpoint entries, index 1 = most recent
+local MAX_CHECKPOINTS = 20
+local checkpointDriveTimer = 0     -- Seconds driving since last checkpoint load
+local currentCheckpointMarker = nil -- Index of last-loaded checkpoint (bookmark into stack)
+local CHECKPOINT_REPEAT_TIME = 1   -- Seconds within which a press is considered "repeat" (cycle)
 local checkpointCallbacks = {}  -- Callbacks to notify on checkpoint load
 local isLoadingCheckpoint = false  -- Flag to prevent onCarJumped from discarding lap during our restore
 local lastCheckpointLoadTime = 0  -- Time when checkpoint was last loaded (for grace period)
+
+-- Auto-checkpoint positions (computed from corners + bestLap)
+local autoCheckpointPositions = nil  -- nil = needs recompute
+local checkpointPrevPos = nil        -- Previous spline position for crossing detection
 
 -- Lap time offset (corrects for AC not restoring lapTimeMs on teleport)
 -- After checkpoint load: correctedTime = car.lapTimeMs - lapTimeOffset
@@ -674,6 +682,7 @@ local function saveCornersToFile()
     f:close()
     ac.log("AC Tracer: Saved " .. #state.trackCorners .. " corners to " .. path)
     invalidateBrakepointCache()  -- Corners changed, recalculate brakepoints
+    state.invalidateAutoCheckpoints()  -- Corners changed, recalculate auto-checkpoint positions
     return true
 end
 
@@ -1280,6 +1289,7 @@ function state.update(dt, car)
                     saveBestLap()
                     updateAutoDetectedCorners()
                     state.updateBrakeScale()
+                    state.invalidateAutoCheckpoints()
                     ac.log('Traces: New best lap: ' .. (state.currentLap.time / 1000) .. 's')
                 end
             end
@@ -1304,10 +1314,8 @@ function state.update(dt, car)
         lap.resetOverlapTracking()  -- Reset overlap detection state
         lapTimeOffset = 0  -- Reset time offset for new lap
 
-        -- Auto-save a checkpoint on start/finish if none exists (silent)
-        if not state.hasCheckpoint() then
-            state.saveCheckpoint(nil, false)
-        end
+        -- Auto-save a checkpoint at start/finish (silent, pushes to stack)
+        state.saveCheckpoint(nil, false)
     end
     
     -- Now check for abnormal discards (teleport, pit entry, session reset)
@@ -1358,6 +1366,15 @@ function state.update(dt, car)
     -- Update position
     state.trackPosition = car.splinePosition
     
+    -- Checkpoint stack: update drive timer and check auto-checkpoint positions
+    -- NOTE: prevPosition was already updated to car.splinePosition above (line ~1343),
+    -- so we use the saved previous value captured before that update.
+    state.updateCheckpointDriveTimer(dt)
+    if checkpointPrevPos then
+        state.checkAutoCheckpoints(checkpointPrevPos, car.splinePosition, car, nil)
+    end
+    checkpointPrevPos = car.splinePosition
+
     -- Brake beep system (uses comparison lap for position-based triggers)
     local brakeBeepEnabled = settings.brakeBeepMode() == "on"
     local beepLap = state.getComparisonLap()
@@ -1523,6 +1540,7 @@ function state.setBestLap(lapData)
     saveBestLap()
     updateAutoDetectedCorners()
     state.updateBrakeScale()
+    state.invalidateAutoCheckpoints()
 end
 
 --- Reset best lap
@@ -1941,8 +1959,145 @@ end
 -- Pending trace history to be captured when async save completes
 local pendingTraceHistory = nil
 
---- Save current state as a checkpoint (async car state capture)
---- Call this when save checkpoint button is pressed
+--- Find the next corner ahead of a track position
+---@param pos number Spline position (0.0 to 1.0)
+---@return table|nil Corner definition of the next corner
+local function getNextCorner(pos)
+    if not state.trackCorners or #state.trackCorners == 0 then return nil end
+    local best = nil
+    local bestDist = 2
+    for _, c in ipairs(state.trackCorners) do
+        if c.startPos then
+            local dist = c.startPos - pos
+            if dist < 0 then dist = dist + 1 end
+            if dist > 0 and dist < bestDist then
+                bestDist = dist
+                best = c
+            end
+        end
+    end
+    return best
+end
+
+--- Compute auto-checkpoint positions: 2 seconds before every corner entry
+--- Uses bestLap timing to find the track position that is 2s before each corner start
+---@return table Array of spline positions
+local function computeAutoCheckpointPositions()
+    local positions = {}
+    -- Always include start/finish
+    table.insert(positions, 0.0)
+
+    if state.trackCorners and #state.trackCorners >= 1 and state.bestLap
+        and state.bestLap.time and state.bestLap.time > 0 then
+        local lapTimeSec = state.bestLap.time / 1000
+
+        -- Build list of corner exit times for proximity filtering
+        local exitTimes = {}
+        for _, c in ipairs(state.trackCorners) do
+            if c.endPos then
+                local t = state.bestLap:timeAt(c.endPos)
+                if t then table.insert(exitTimes, t) end
+            end
+        end
+
+        for _, c in ipairs(state.trackCorners) do
+            if c.startPos then
+                local cornerTime = state.bestLap:timeAt(c.startPos)
+                if cornerTime then
+                    local targetTime = cornerTime - 2
+                    if targetTime < 0 then targetTime = targetTime + lapTimeSec end
+
+                    -- Skip if within 5s of any corner exit (too tight between corners)
+                    local tooClose = false
+                    for _, exitTime in ipairs(exitTimes) do
+                        local gap = targetTime - exitTime
+                        -- Handle wrap-around
+                        if gap < -lapTimeSec / 2 then gap = gap + lapTimeSec end
+                        if gap > lapTimeSec / 2 then gap = gap - lapTimeSec end
+                        if gap >= 0 and gap < 5 then
+                            tooClose = true
+                            break
+                        end
+                    end
+
+                    if not tooClose then
+                        local cpPos = state.bestLap:getPosAtTime(targetTime)
+                        if cpPos then
+                            table.insert(positions, cpPos)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return positions
+end
+
+--- Invalidate auto-checkpoint positions (call when corners or bestLap change)
+function state.invalidateAutoCheckpoints()
+    autoCheckpointPositions = nil
+end
+
+--- Find checkpoint in stack near a position (within threshold)
+---@param pos number Spline position
+---@param threshold number|nil Distance threshold (default 0.005)
+---@return number|nil Index of nearby checkpoint
+local function findNearbyCheckpoint(pos, threshold)
+    threshold = threshold or 0.005
+    for i, cp in ipairs(checkpointStack) do
+        local dist = math.abs(cp.pos - pos)
+        if dist > 0.5 then dist = 1 - dist end
+        if dist < threshold then
+            return i
+        end
+    end
+    return nil
+end
+
+--- Insert checkpoint into stack (sorted by position, replacing nearby, capping at max)
+---@param checkpoint table Checkpoint entry
+local function insertIntoStack(checkpoint)
+    -- If marker is set, discard all checkpoints more recent than it
+    -- (marker is "top of stack" from user's perspective)
+    if currentCheckpointMarker and currentCheckpointMarker > 1 then
+        for _ = 1, currentCheckpointMarker - 1 do
+            table.remove(checkpointStack, 1)
+        end
+    end
+
+    -- Replace nearby checkpoint if one exists at roughly the same position
+    local existing = findNearbyCheckpoint(checkpoint.pos)
+    if existing then
+        table.remove(checkpointStack, existing)
+    end
+
+    -- Insert at front (most recent = index 1)
+    table.insert(checkpointStack, 1, checkpoint)
+
+    -- Cap at MAX_CHECKPOINTS (remove oldest = last)
+    while #checkpointStack > MAX_CHECKPOINTS do
+        table.remove(checkpointStack, #checkpointStack)
+    end
+
+    -- Clear marker — new checkpoint is now the top
+    currentCheckpointMarker = nil
+end
+
+--- Build the checkpoint message string (e.g. "Checkpoint 2/5: Bus Stop")
+---@param idx number Checkpoint index
+---@param pos number Spline position of the checkpoint
+---@return string Message string
+local function checkpointMessage(idx, pos)
+    local msg = string.format("Checkpoint %d/%d", idx, #checkpointStack)
+    local nextCorner = getNextCorner(pos)
+    if nextCorner and nextCorner.name then
+        msg = msg .. ": " .. nextCorner.name
+    end
+    return msg
+end
+
+--- Save current state as a checkpoint and push to stack (async car state capture)
 ---@param traceHistory table|nil Trace history to save (pass from ac-tracer.lua)
 ---@param notify boolean|nil Whether to show toast/sound (default true)
 function state.saveCheckpoint(traceHistory, notify)
@@ -1952,8 +2107,7 @@ function state.saveCheckpoint(traceHistory, notify)
     end
     if notify == nil then notify = true end
 
-    -- Store trace history to be captured when async callback fires
-    -- We deep-copy it NOW so it's captured at save time, not when callback runs
+    -- Deep-copy trace history NOW so it's captured at save time
     if traceHistory then
         pendingTraceHistory = {}
         for field, arr in pairs(traceHistory) do
@@ -1973,41 +2127,45 @@ function state.saveCheckpoint(traceHistory, notify)
         end
 
         local car = ac.getCar(0)
-        if not car then 
+        if not car then
             pendingTraceHistory = nil
-            return 
+            return
         end
 
-        -- Store checkpoint data (including lapTimeMs for time offset calculation on load)
-        state.checkpoint = {
+        local checkpoint = {
             carState = carStateBlob,
             lapSnapshot = state.currentLap and state.currentLap:clone() or nil,
             pos = car.splinePosition,
             lapCount = car.lapCount,
-            lapTimeMs = car.lapTimeMs,  -- Save this to correct delta after load
+            lapTimeMs = car.lapTimeMs,
             traceSnapshot = pendingTraceHistory,
         }
         pendingTraceHistory = nil
 
-        -- Show toast notification and play sound (optional)
+        insertIntoStack(checkpoint)
+
         if notify then
-            ac.setMessage("Checkpoint Saved", "Press load key to return here")
-            notification.playSave()
+            local nextCorner = getNextCorner(checkpoint.pos)
+            local label = nextCorner and nextCorner.name or ""
+            ac.setMessage("Checkpoint Saved", label)
+            if notify ~= "silent" then
+                notification.playSave()
+            end
         end
 
-        ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f, lap %d",
-            state.checkpoint.pos, state.checkpoint.lapCount))
+        ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f (stack: %d)",
+            checkpoint.pos, #checkpointStack))
     end)
 
     return true
 end
 
---- Load checkpoint and restore state
---- Call this when load checkpoint button is pressed
+--- Load next checkpoint from stack (cycles through on repeated presses)
+--- After driving for 10+ seconds, reloads the same checkpoint instead of advancing.
 ---@return boolean success True if checkpoint was loaded
 function state.loadCheckpoint()
-    if not state.checkpoint then
-        ac.log("AC Tracer: No checkpoint to load")
+    if #checkpointStack == 0 then
+        ac.log("AC Tracer: No checkpoints to load")
         return false
     end
 
@@ -2016,96 +2174,196 @@ function state.loadCheckpoint()
         return false
     end
 
+    -- Repeat press = within 1 second of last load (using drive timer, which
+    -- tracks real driving time since last checkpoint load)
+    local isRepeat = currentCheckpointMarker ~= nil
+        and checkpointDriveTimer <= CHECKPOINT_REPEAT_TIME
+
+    local loadIndex
+    if isRepeat then
+        -- Repeat press: go to next older checkpoint (deeper in stack)
+        loadIndex = currentCheckpointMarker + 1
+        if loadIndex > #checkpointStack then
+            loadIndex = 1  -- wrap around
+        end
+    else
+        -- Non-repeat press: go to marker if set, otherwise top of stack
+        loadIndex = currentCheckpointMarker or 1
+    end
+
+    -- Clamp index
+    if loadIndex < 1 or loadIndex > #checkpointStack then
+        loadIndex = 1
+    end
+
+    local cp = checkpointStack[loadIndex]
+
     -- Set flags to prevent onCarJumped from discarding our restored state
     isLoadingCheckpoint = true
     lastCheckpointLoadTime = os.preciseClock()
 
-    local carState = state.checkpoint.carState
-
-    -- Restore car state using TimeShift-style API
-    -- ac.loadCarState(state0, state1, interpolation, flags)
-    -- With same state for both and interpolation=0, this is a point restore
-    -- Flag 30 is used by TimeShift (seems to work best)
-    ac.loadCarState(carState, carState, 0, 30)
-
-    -- Clear the flag
+    -- Restore car state
+    ac.loadCarState(cp.carState, cp.carState, 0, 30)
     isLoadingCheckpoint = false
 
     -- Get current car state after teleport
     local car = ac.getCar(0)
 
-    -- Calculate lap time offset: AC doesn't restore lapTimeMs on teleport,
-    -- so we need to correct for the difference between current time and saved time
-    if car and state.checkpoint.lapTimeMs then
-        lapTimeOffset = car.lapTimeMs - state.checkpoint.lapTimeMs
-        ac.log(string.format("AC Tracer: Lap time offset calculated: %d ms (current: %d, saved: %d)",
-            lapTimeOffset, car.lapTimeMs, state.checkpoint.lapTimeMs))
+    -- Calculate lap time offset
+    if car and cp.lapTimeMs then
+        lapTimeOffset = car.lapTimeMs - cp.lapTimeMs
     else
         lapTimeOffset = 0
     end
 
     -- Restore plugin state
-    if state.checkpoint.lapSnapshot then
-        state.currentLap = state.checkpoint.lapSnapshot:clone()
+    if cp.lapSnapshot then
+        state.currentLap = cp.lapSnapshot:clone()
     end
 
     -- Update lap tracking
-    local currentLapCount = state.checkpoint.lapCount
+    local currentLapCount = cp.lapCount
     if car then
-        if state.checkpoint.lapCount ~= nil and car.lapCount ~= state.checkpoint.lapCount then
-            ac.log(string.format(
-                "AC Tracer: Checkpoint lap mismatch (saved %d, current %d) - keeping current lap count",
-                state.checkpoint.lapCount, car.lapCount))
-        end
         currentLapCount = car.lapCount
     end
     state.lapNumber = currentLapCount
-    state.trackPosition = state.checkpoint.pos
+    state.trackPosition = cp.pos
 
     -- Reset overlap tracking
     lap.resetOverlapTracking()
 
-    -- Invalidate position-based caches (position has changed)
+    -- Invalidate position-based caches
     _lastCornerPos = nil
     _lastCornerResult = nil
     _cornersPosCache = nil
 
-    -- Notify registered callbacks (corner_analysis, etc.)
-    notifyCheckpointCallbacks(state.checkpoint.pos)
+    -- Notify registered callbacks
+    notifyCheckpointCallbacks(cp.pos)
 
-    -- Show brief toast notification and play sound
-    ac.setMessage("Checkpoint Loaded", "")
+    -- Show message with index and next corner name
+    local msg = checkpointMessage(loadIndex, cp.pos)
+    ac.setMessage(msg, "")
     notification.playLoad()
 
-    ac.log(string.format("AC Tracer: Checkpoint loaded at pos %.3f, lap %d",
-        state.checkpoint.pos, state.checkpoint.lapCount))
+    ac.log(string.format("AC Tracer: Loaded checkpoint %d/%d at pos %.3f",
+        loadIndex, #checkpointStack, cp.pos))
+
+    -- Set marker to the checkpoint we just loaded
+    currentCheckpointMarker = loadIndex
+    checkpointDriveTimer = 0
 
     return true
 end
 
---- Check if a checkpoint exists
+--- Move checkpoint by a distance in meters along the track
+---@param meters number Distance to move (positive = forward, negative = backward)
+---@return boolean success
+function state.moveCheckpoint(meters)
+    if #checkpointStack == 0 then
+        ac.log("AC Tracer: No checkpoint to move")
+        return false
+    end
+
+    if not ac.isCarResetAllowed() then
+        ac.log("AC Tracer: Cannot move checkpoint - car reset not allowed")
+        return false
+    end
+
+    -- Use marker (last loaded checkpoint), or first in stack
+    local idx = currentCheckpointMarker or 1
+    if idx < 1 or idx > #checkpointStack then idx = 1 end
+
+    -- First load the checkpoint to teleport car there
+    currentCheckpointMarker = idx
+    if not state.loadCheckpoint() then
+        return false
+    end
+
+    local cp = checkpointStack[idx]
+    if not cp then return false end
+
+    -- Convert meters to spline offset
+    local trackLength = ac.getSim().trackLengthM or 5000
+    local splineOffset = meters / trackLength
+
+    -- Calculate new spline position
+    local newPos = cp.pos + splineOffset
+    if newPos > 1 then newPos = newPos - 1 end
+    if newPos < 0 then newPos = newPos + 1 end
+
+    -- Get world position and direction at the new spline position
+    local worldPos = ac.trackProgressToWorldCoordinate(newPos)
+    local aheadPos = newPos + 0.0001
+    if aheadPos > 1 then aheadPos = aheadPos - 1 end
+    local worldAhead = ac.trackProgressToWorldCoordinate(aheadPos)
+    local dir = (worldAhead - worldPos):normalize()
+
+    -- Move car to new position
+    physics.setCarPosition(0, worldPos, dir)
+
+    -- Update checkpoint spline position
+    cp.pos = newPos
+
+    -- Re-save car state at new position
+    ac.saveCarStateAsync(function(err, carStateBlob)
+        if err or not carStateBlob then
+            ac.log("AC Tracer: Failed to re-save checkpoint after move: " .. tostring(err))
+            return
+        end
+        cp.carState = carStateBlob
+        local car = ac.getCar(0)
+        if car then
+            cp.lapTimeMs = car.lapTimeMs
+        end
+        -- Re-sort stack since position changed
+        table.sort(checkpointStack, function(a, b) return a.pos < b.pos end)
+        ac.log(string.format("AC Tracer: Checkpoint moved %+dm to pos %.3f", meters, newPos))
+    end)
+
+    ac.setMessage("Checkpoint", string.format("Moved %+d m", meters))
+    return true
+end
+
+--- Check if any checkpoints exist
 ---@return boolean
 function state.hasCheckpoint()
-    return state.checkpoint ~= nil and state.checkpoint.carState ~= nil
+    return #checkpointStack > 0
 end
 
---- Clear the current checkpoint
+--- Get the number of checkpoints in the stack
+---@return number
+function state.getCheckpointCount()
+    return #checkpointStack
+end
+
+--- Clear all checkpoints
 function state.clearCheckpoint()
-    state.checkpoint = nil
-    ac.log("AC Tracer: Checkpoint cleared")
+    checkpointStack = {}
+    currentCheckpointMarker = nil
+    checkpointDriveTimer = 0
+    ac.log("AC Tracer: Checkpoints cleared")
 end
 
---- Get trace history snapshot from checkpoint
----@return table|nil The trace history snapshot, or nil if no checkpoint
+--- Get trace history snapshot from the last loaded checkpoint
+---@return table|nil The trace history snapshot, or nil if none
 function state.getCheckpointTraceHistory()
-    if state.checkpoint and state.checkpoint.traceSnapshot then
-        return state.checkpoint.traceSnapshot
+    local idx = currentCheckpointMarker or 1
+    if idx >= 1 and idx <= #checkpointStack then
+        local cp = checkpointStack[idx]
+        if cp and cp.traceSnapshot then
+            return cp.traceSnapshot
+        end
+    end
+    -- Fallback: first checkpoint with a snapshot
+    for _, cp in ipairs(checkpointStack) do
+        if cp.traceSnapshot then
+            return cp.traceSnapshot
+        end
     end
     return nil
 end
 
 --- Get the lap time offset (for correcting delta after checkpoint load)
---- Use this to get the corrected lap time: (car.lapTimeMs - offset) / 1000
 ---@return number Offset in milliseconds (0 if no checkpoint was loaded)
 function state.getLapTimeOffset()
     return lapTimeOffset
@@ -2114,6 +2372,54 @@ end
 --- Reset the lap time offset (call when starting a new lap normally)
 function state.resetLapTimeOffset()
     lapTimeOffset = 0
+end
+
+--- Update checkpoint drive timer (call from update loop)
+---@param dt number Delta time in seconds
+function state.updateCheckpointDriveTimer(dt)
+    if currentCheckpointMarker then
+        checkpointDriveTimer = checkpointDriveTimer + dt
+    end
+end
+
+--- Check auto-checkpoint positions and save when car crosses them at full throttle
+---@param prevPos number|nil Previous spline position
+---@param curPos number Current spline position
+---@param car table Car state (needs .gas for throttle check)
+---@param traceHistory table|nil Trace history for snapshot
+function state.checkAutoCheckpoints(prevPos, curPos, car, traceHistory)
+    if not prevPos or not car then return end
+
+    -- Compute positions lazily
+    if not autoCheckpointPositions then
+        autoCheckpointPositions = computeAutoCheckpointPositions()
+    end
+
+    for _, targetPos in ipairs(autoCheckpointPositions) do
+        if hasCrossedPosition(prevPos, curPos, targetPos) then
+            -- Only checkpoint if throttle is full (on a straight, not already braking)
+            if car.gas >= 0.95 then
+                state.saveCheckpoint(traceHistory, "silent")
+            end
+        end
+    end
+end
+
+--- Reset checkpoint marker (next press goes to top of stack)
+function state.resetCheckpointIndex()
+    currentCheckpointMarker = nil
+end
+
+--- Push a checkpoint entry directly into the stack (for testing)
+---@param checkpoint table Checkpoint entry with at minimum { carState, pos }
+function state.pushCheckpoint(checkpoint)
+    insertIntoStack(checkpoint)
+end
+
+--- Get the checkpoint stack (for testing/inspection)
+---@return table Array of checkpoint entries
+function state.getCheckpointStack()
+    return checkpointStack
 end
 
 --------------------------------------------------------------------------------

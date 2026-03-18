@@ -28,12 +28,18 @@ end
 ---@param car table Car state from ac.getCar()
 ---@param history table History table to update
 ---@param overlapState table Overlap tracking state { startTime = number|nil }
-function main_window.updateHistory(car, history, overlapState)
+---@param isReplay boolean|nil True if in replay mode (skip cphys DLL, use car.brake fallback)
+function main_window.updateHistory(car, history, overlapState, isReplay)
     local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
 
     table.insert(history.throttle, car.gas)
-    -- Use extended brake pressure if available, otherwise fall back to pedal position
-    table.insert(history.brake, extended_brake.getNormalizedBrake(car))
+    -- In replay mode, cphys DLL doesn't update — use car.brake pedal position directly
+    if isReplay then
+        table.insert(history.brake, car.brake)
+    else
+        -- Use extended brake pressure if available, otherwise fall back to pedal position
+        table.insert(history.brake, extended_brake.getNormalizedBrake(car))
+    end
     table.insert(history.clutch, 1 - car.clutch)
     local s = lap.normalizeSteer(car.steer)
     table.insert(history.steering, s)
@@ -41,8 +47,8 @@ function main_window.updateHistory(car, history, overlapState)
     table.insert(history.gear, car.gear)
     table.insert(history.pos, car.splinePosition)
 
-    -- Build flags bitmask using shared detection function
-    local flagBits = lap.detectFlags(car, overlapState)
+    -- Build flags bitmask (skip in replay — flag data isn't reliable)
+    local flagBits = isReplay and 0 or lap.detectFlags(car, overlapState)
 
     table.insert(history.flags, flagBits)
 
@@ -73,104 +79,6 @@ function main_window.restoreHistory(history, snapshot)
     end
 end
 
---------------------------------------------------------------------------------
--- Brake Marker System (3D line on track at brakepoint)
---------------------------------------------------------------------------------
-
---- Find upcoming brake points from the reference lap
----@param refLap table Reference lap data
----@param currentPos number Current car position (0-1)
----@param corners table Corner definitions
----@param mode string "next" or "all"
----@return table Array of brake positions (up to 4)
-local function findUpcomingBrakePoints(refLap, currentPos, corners, mode)
-    if not refLap or not corners or #corners == 0 then return {} end
-
-    local brakePoints = {}
-    local trackLength = ac.getSim().trackLengthM or 5000
-    local maxDistance = 500  -- meters ahead to look
-    local maxDistanceSpline = maxDistance / trackLength
-
-    for _, corner in ipairs(corners) do
-        if corner.startPos and corner.endPos then
-            -- Find brake point for this corner
-            local brakePos = refLap:findBrakePoint(corner.startPos, corner.endPos, settings.brakeThreshold())
-
-            if brakePos then
-                -- Calculate distance ahead (handling wrap-around)
-                local distance = brakePos - currentPos
-                if distance < 0 then distance = distance + 1 end
-
-                -- Only include if ahead and within render distance
-                if distance > 0.002 and distance < maxDistanceSpline then
-                    table.insert(brakePoints, { pos = brakePos, distance = distance })
-                end
-            end
-        end
-    end
-
-    -- Sort by distance
-    table.sort(brakePoints, function(a, b) return a.distance < b.distance end)
-
-    -- Return based on mode
-    local result = {}
-    if mode == "next" then
-        if #brakePoints > 0 then
-            result[1] = brakePoints[1].pos
-        end
-    else  -- "all"
-        for i = 1, math.min(4, #brakePoints) do
-            result[i] = brakePoints[i].pos
-        end
-    end
-
-    return result
-end
-
---- Draw a single brake marker line across the track using debug lines
----@param brakePos number Track position (0-1)
-local function drawBrakeMarkerLine(brakePos)
-    if not brakePos or brakePos < 0 then return end
-
-    -- Get left and right points across the track
-    -- X: -1 = left edge, 1 = right edge
-    -- Y: height above track (0.1m to avoid z-fighting)
-    -- Z: track progress
-    local leftPoint = ac.trackCoordinateToWorld(vec3(-0.95, 0.1, brakePos))
-    local rightPoint = ac.trackCoordinateToWorld(vec3(0.95, 0.1, brakePos))
-
-    -- Draw thick bright red line
-    -- HDR values > 1 create a glowing effect
-    render.debugLine(leftPoint, rightPoint, rgbm(8, 0.2, 0.1, 1), rgbm(8, 0.2, 0.1, 1))
-
-    -- Draw a second line slightly offset for thickness
-    local leftPoint2 = ac.trackCoordinateToWorld(vec3(-0.95, 0.15, brakePos))
-    local rightPoint2 = ac.trackCoordinateToWorld(vec3(0.95, 0.15, brakePos))
-    render.debugLine(leftPoint2, rightPoint2, rgbm(6, 0.1, 0.05, 1), rgbm(6, 0.1, 0.05, 1))
-end
-
---- Draw brake markers on the track
----@param car table Current car state
-function main_window.drawBrakeMarkers(car)
-    local mode = settings.brakeMarkerMode()
-    if mode == "off" then return end
-
-    local refLap = state.getComparisonLap()
-    if not refLap or refLap:length() < 10 then return end
-
-    if not car then return end
-
-    local corners = state.trackCorners
-    if not corners or #corners == 0 then return end
-
-    -- Find brake points to display
-    local brakePoints = findUpcomingBrakePoints(refLap, car.splinePosition, corners, mode)
-
-    -- Draw each brake point as a line across the track
-    for i = 1, #brakePoints do
-        drawBrakeMarkerLine(brakePoints[i])
-    end
-end
 
 --------------------------------------------------------------------------------
 -- Drawing Helpers

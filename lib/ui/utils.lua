@@ -199,18 +199,18 @@ function ui_utils.drawTrace(x, y, w, h, data, color, opts)
     -- Draw filled area first if requested (use quads for non-convex shapes)
     if filled then
         local fillColor = rgbm(color.r, color.g, color.b, color.mult * 0.7 * 0.5)  -- 30% more transparent
+        -- Pre-compute pixel-snapped X for each point to avoid gaps/overlap between quads
+        local snappedX = {}
+        for i = 1, numPoints do
+            snappedX[i] = math.floor(x + (i - 1) * step + 0.5)
+        end
         for i = 1, numPoints - 1 do
             local val1 = math.clamp(data[i] / maxVal, 0, 1)
             local val2 = math.clamp(data[i + 1] / maxVal, 0, 1)
-            local x1 = x + (i - 1) * step
-            local x2 = x + i * step
-            local y1 = baseY - val1 * h
-            local y2 = baseY - val2 * h
-            -- Reuse pre-allocated vec2 objects to avoid GC pressure
-            _v1:set(x1, y1)
-            _v2:set(x2, y2)
-            _v3:set(x2, baseY)
-            _v4:set(x1, baseY)
+            _v1:set(snappedX[i], baseY - val1 * h)
+            _v2:set(snappedX[i + 1], baseY - val2 * h)
+            _v3:set(snappedX[i + 1], baseY)
+            _v4:set(snappedX[i], baseY)
             ui.drawQuadFilled(_v1, _v2, _v3, _v4, fillColor)
         end
     end
@@ -248,23 +248,22 @@ function ui_utils.drawGearTrace(x, y, w, h, data, color, opts)
     -- Draw filled area first if requested
     if filled then
         local fillColor = rgbm(color.r, color.g, color.b, color.mult * 0.7 * 0.5)
+        -- Pre-compute pixel-snapped X for each point
+        local snappedX = {}
+        for i = 1, numPoints do
+            snappedX[i] = math.floor(x + (i - 1) * step + 0.5)
+        end
         local prevGear = nil
-        local prevX = nil
         for i = 1, numPoints do
             local gear = data[i]
-            local px = x + (i - 1) * step
-            
             if prevGear ~= nil then
                 local prevNorm = prevGear > 0 and math.clamp(prevGear / maxGear, 0, 1) or 0
                 local prevY = baseY - prevNorm * h
-                -- Reuse pre-allocated vec2 objects
-                _v1:set(prevX, prevY)
-                _v2:set(px, baseY)
+                _v1:set(snappedX[i - 1], prevY)
+                _v2:set(snappedX[i], baseY)
                 ui.drawRectFilled(_v1, _v2, fillColor)
             end
-            
             prevGear = gear
-            prevX = px
         end
     end
     

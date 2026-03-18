@@ -102,6 +102,10 @@ theme.corner = {
     faster = rgbm(0.7, 0.3, 1.0, 1.0),       -- Purple: faster than ref (vibrant)
     onSpeed = rgbm(0.20, 0.70, 0.20, 1.0),   -- Green: matching ref (solid)
     slower = rgbm(0.70, 0.20, 0.20, 1.0),    -- Red: slower than ref (solid)
+    -- Fill variants (for speed comparison graph)
+    fasterFill = rgbm(0.7, 0.3, 1.0, 0.45),
+    onSpeedFill = rgbm(0.20, 0.70, 0.20, 0.45),
+    slowerFill = rgbm(0.70, 0.20, 0.20, 0.45),
     -- Zone backgrounds (alternating)
     even = rgbm(0.25, 0.25, 0.35, 0.12),
     odd = rgbm(0.2, 0.3, 0.25, 0.12),
@@ -118,7 +122,7 @@ theme.corner = {
 
 -- Marker lines
 theme.marker = {
-    apex = rgbm(1, 1, 0, 1),                 -- Current apex
+    apex = rgbm(1, 1, 1, 1),                 -- Current apex
     apexRef = rgbm(1, 1, 1, 0.8),            -- Reference apex (white, matches ref speed line)
     brake = rgbm(1, 0.2, 0.2, 1),            -- Current brake point
     brakeRef = rgbm(1, 0.4, 0.4, 0.6),       -- Reference brake

@@ -27,8 +27,9 @@ local COLUMN_MAPPINGS = {
     -- Note: Real car telemetry uses various names for speed
     speed = { "ground speed", "corr speed", "wheel speed avg", "aero speed", "uspeed", "vehrefspeed", "speed" },
 
-    -- Input columns - driver throttle pos preferred over throttle pos
-    throttle = { "driver throttle pos", "accel pedal pos", "acc pedal pos", "pps", "aps", "driver demand", "tps driver", "throttle pos" },
+    -- Input columns - "driver throttle pos" preferred (actual driver pedal input)
+    -- "throttle pos" is ECU-controlled throttle plate (stays open during TC/ABS, not driver intent)
+    throttle = { "driver throttle pos", "throttle pos", "accel pedal pos", "acc pedal pos", "pps", "aps", "driver demand", "tps driver" },
     clutch = { "clutch pos" },
     steering = { "steering angle" },
 
@@ -543,16 +544,20 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         brakeBar = math.max(0, brakeBar)
                         brakeBarR = math.max(0, brakeBarR)
 
-                        -- Normalize 0-100 to 0-1 and clamp to valid range
-                        if throttle > 1 and throttle <= 2 then
-                            throttle = 1
-                        elseif throttle > 2 then
+                        -- Normalize throttle: use unit row if available, otherwise heuristic
+                        if config.throttleIsPercentage then
                             throttle = throttle / 100
+                        elseif throttle > 1 then
+                            throttle = throttle / 100  -- Assume 0-100 range
                         end
-                        -- Clamp throttle to 0-1 (real car data may have negative values during engine braking)
                         throttle = math.max(0, math.min(1, throttle))
 
-                        if clutch > 1 then clutch = clutch / 100 end
+                        -- Normalize clutch: use unit row if available, otherwise heuristic
+                        if config.clutchIsPercentage then
+                            clutch = clutch / 100
+                        elseif clutch > 1 then
+                            clutch = clutch / 100
+                        end
                         clutch = math.max(0, math.min(1, clutch))
 
                         speed = speed * config.speedFactor
@@ -815,19 +820,51 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedT
     local gLatFactor = gLatUnit and UNIT_CONVERSIONS.g[gLatUnit] or 1.0
     local gLongFactor = gLongUnit and UNIT_CONVERSIONS.g[gLongUnit] or 1.0
 
-    -- Detect if position is in percentage format (0-100) by scanning first ~100 data rows
-    -- If any value > 1, the entire file uses percentage format
+    -- Detect percentage format for throttle/clutch using unit row
+    local throttleIsPercentage = false
+    local clutchIsPercentage = false
+    if units and indices.throttle then
+        local throttleUnit = units[headers[indices.throttle]]
+        if throttleUnit == "%" then
+            throttleIsPercentage = true
+            ac.log("csv_parser: Throttle unit is '%' - will divide by 100")
+        end
+    end
+    if units and indices.clutch then
+        local clutchUnit = units[headers[indices.clutch]]
+        if clutchUnit == "%" then
+            clutchIsPercentage = true
+            ac.log("csv_parser: Clutch unit is '%' - will divide by 100")
+        end
+    end
+
+    -- Detect if position is in percentage format (0-100)
+    -- Method 1: Check unit row - if unit is "%" it's percentage
+    -- Method 2: Sample data rows spread throughout the file for values > 1
     local posIsPercentage = false
     if not useDistance and indices.pos then
-        for i = dataStartLine, math.min(dataStartLine + 100, #allLines) do
-            local line = allLines[i]
-            if line and line ~= "" and not line:match("^%s*$") then
-                local fields = extractFields(line, { pos = indices.pos })
-                local pos = tonumber(fields.pos)
-                if pos and pos > 1 then
-                    posIsPercentage = true
-                    ac.log("csv_parser: Detected percentage format for Lap Progression (value > 1 found: " .. pos .. ")")
-                    break
+        -- Check unit row first (most reliable)
+        local posUnit = units and (units["lap progression"] or units["Lap Progression"])
+        if posUnit == "%" then
+            posIsPercentage = true
+            ac.log("csv_parser: Detected percentage format for Lap Progression (unit is '%')")
+        end
+
+        -- Fallback: sample data rows spread throughout the file
+        if not posIsPercentage then
+            local totalDataLines = #allLines - dataStartLine + 1
+            -- Check ~20 evenly spaced rows across the entire file
+            local step = math.max(1, math.floor(totalDataLines / 20))
+            for i = dataStartLine, #allLines, step do
+                local line = allLines[i]
+                if line and line ~= "" and not line:match("^%s*$") then
+                    local fields = extractFields(line, { pos = indices.pos })
+                    local pos = tonumber(fields.pos)
+                    if pos and pos > 1 then
+                        posIsPercentage = true
+                        ac.log("csv_parser: Detected percentage format for Lap Progression (value > 1 found: " .. pos .. ")")
+                        break
+                    end
                 end
             end
         end
@@ -847,6 +884,8 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedT
         gLatFactor = gLatFactor,
         gLongFactor = gLongFactor,
         posIsPercentage = posIsPercentage,
+        throttleIsPercentage = throttleIsPercentage,
+        clutchIsPercentage = clutchIsPercentage,
         targetSampleRate = targetSampleRate,
     }
 
