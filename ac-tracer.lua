@@ -9,11 +9,13 @@ local lap_picker = require('lib.windows.lap_picker')
 local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
 
-local traffic = require('lib.traffic')
 local ui_utils = require('lib.ui.utils')
 
--- Track lap number for train mode new-lap detection
+-- Traffic module (lazy-loaded only when AI cars detected)
+local traffic = nil
+local trafficButton = nil
 local lastLapNumber = nil
+local trafficChecked = false  -- only check for AI cars once
 
 
 -- History for trace display (rolling window)
@@ -111,29 +113,34 @@ function script.update(dt)
         ac.setMessage("Comparison", settings.comparisonModeDisplay())
     end
 
-    -- Traffic: only active after first button press (no physics calls on load)
-    local trafficButton = settings.getTrafficTeleportButton()
-    if trafficButton:pressed() then
-        -- Lazy init on first press
-        if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
-            traffic.init()
+    -- Traffic: entirely disabled unless AI cars are in the session
+    -- Lazy-load module and button only once, only if AI cars detected
+    if not trafficChecked then
+        if ac.getSim().carsCount > 1 then
+            traffic = require('lib.traffic')
+            trafficButton = ac.ControlButton('__AC_TRACER_TRAFFIC_TELEPORT')
         end
-        if traffic.isInitialized() then
+        trafficChecked = true
+    end
+
+    if traffic and trafficButton then
+        if trafficButton:pressed() then
+            if not traffic.isInitialized() then
+                traffic.init()
+            end
             local name = traffic.teleportScenario(state.trackCorners)
             if name then
                 ac.setMessage("Traffic", name .. " → " .. traffic.nextScenario() .. " next")
             end
         end
-    end
 
-    if traffic.isInitialized() then
-        traffic.update(dt, state.trackCorners, currentCar.splinePosition, currentCar.lapCount)
-
-        -- Detect new lap for train mode
-        if lastLapNumber and currentCar.lapCount ~= lastLapNumber then
-            traffic.onNewLap(state.trackCorners)
+        if traffic.isInitialized() then
+            traffic.update(dt, state.trackCorners, currentCar.splinePosition, currentCar.lapCount)
+            if lastLapNumber and currentCar.lapCount ~= lastLapNumber then
+                traffic.onNewLap(state.trackCorners)
+            end
+            lastLapNumber = currentCar.lapCount
         end
-        lastLapNumber = currentCar.lapCount
     end
 
     -- Update centralized state (handles lap recording, completion, best lap)

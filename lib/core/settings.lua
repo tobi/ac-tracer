@@ -24,7 +24,6 @@ local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
 local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
 local brakeBeepButton = ac.ControlButton('__AC_TRACER_BRAKE_BEEP_TOGGLE')
 local comparisonModeButton = ac.ControlButton('__AC_TRACER_COMPARISON_MODE')
-local trafficTeleportButton = ac.ControlButton('__AC_TRACER_TRAFFIC_TELEPORT')
 
 --- Get the save checkpoint button (for polling in main loop)
 ---@return ac.ControlButton
@@ -174,12 +173,6 @@ function M.setComparisonMode(mode) config.comparisonMode = mode end
 ---@return ac.ControlButton
 function M.getComparisonModeButton()
     return comparisonModeButton
-end
-
---- Get the traffic teleport button (for polling in main loop)
----@return ac.ControlButton
-function M.getTrafficTeleportButton()
-    return trafficTeleportButton
 end
 
 --- Toggle comparison mode: reference -> sessionBest -> recentBest -> bestCorners -> off -> reference
