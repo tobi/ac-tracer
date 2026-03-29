@@ -10,7 +10,6 @@ local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
 
 local traffic = require('lib.traffic')
-local training_window = require('lib.windows.training')
 local ui_utils = require('lib.ui.utils')
 
 -- Track lap number for train mode new-lap detection
@@ -180,10 +179,6 @@ function script.windowReferenceLap(dt)
     lap_picker.draw(dt)
 end
 
-
-function script.windowTraining(dt)
-    training_window.draw(dt)
-end
 
 function script.windowDelta(dt)
     delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners, currentCar)

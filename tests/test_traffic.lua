@@ -156,14 +156,16 @@ test("init detects AI cars from session", function()
     assert_equal(traffic.aiCarCount(), 3, "Should detect 3 AI cars")
 end)
 
-test("init makes no physics calls (lazy)", function()
+test("init parks all AI cars in pits", function()
     resetAll()
     mockCarsCount = 3
     traffic.init()
     local teleportCalls = getCallsFor("teleportCarTo")
-    assert_equal(#teleportCalls, 0, "No physics calls on init")
+    assert_equal(#teleportCalls, 2, "Should teleport 2 AI cars to pits")
+    assert_equal(teleportCalls[1][2], "PIT", "Teleport to pits")
     local noInputCalls = getCallsFor("setAINoInput")
-    assert_equal(#noInputCalls, 0, "No AI input changes on init")
+    assert_equal(#noInputCalls, 2, "Should disable AI input")
+    assert_equal(noInputCalls[1][2], true, "Input disabled")
 end)
 
 test("init with no AI cars", function()
@@ -523,25 +525,20 @@ end)
 
 suite("Traffic: Speed Handling")
 
-test("uses minimum 100 km/h when player is slow", function()
+test("does not cap AI speed (all top speeds are math.huge)", function()
     resetAll()
     mockCarsCount = 2
     mockPlayerPos = 0.05
-    mockPlayerSpeed = 30
+    mockPlayerSpeed = 180
     traffic.init()
     resetPhysicsCalls()
 
     traffic.teleportScenario(makeCorners())
 
-    -- First scenario is Braking Zone: 90% of min(100) = 90
-    local found = false
+    -- All setAITopSpeed calls should be math.huge (no cap)
     for _, args in ipairs(getCallsFor("setAITopSpeed")) do
-        if args[1] == 1 and args[2] < 200 then
-            assert_near(args[2], 90, 1, "Should use 90% of minimum 100 km/h")
-            found = true
-        end
+        assert_equal(args[2], math.huge, "AI top speed should be uncapped")
     end
-    assert_true(found, "Should set scenario speed")
 end)
 
 --------------------------------------------------------------------------------

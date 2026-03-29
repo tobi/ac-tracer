@@ -109,19 +109,19 @@ local function placeCarAtSpline(carIndex, splinePos, speedKmh, laneOffset)
     local worldPos = ac.trackProgressToWorldCoordinate(splinePos)
     local dir = getTrackDirection(splinePos)
 
-    -- Place car first, then set velocity, then enable AI
+    -- Place car, give it initial velocity in the right direction
     physics.setCarPosition(carIndex, worldPos, dir)
     physics.setCarVelocity(carIndex, dir * (speedKmh / 3.6))
 
-    -- Set lateral offset before enabling AI so it doesn't immediately steer back
+    -- Set lateral offset before enabling AI
     if laneOffset and laneOffset ~= 0 then
         physics.setAISplineOffset(carIndex, laneOffset)
     else
         physics.setAISplineOffset(carIndex, 0)
     end
 
-    -- Cap speed
-    physics.setAITopSpeed(carIndex, speedKmh)
+    -- No speed cap — let AI drive at its natural pace
+    physics.setAITopSpeed(carIndex, math.huge)
 
     -- Enable AI last so it starts driving from the placed position
     physics.setAILevel(carIndex, 1)
@@ -218,7 +218,18 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
---- Initialize: just detect AI car indices, no physics calls
+-- Send all AI cars to pits with zero velocity
+local function parkAllInPits()
+    for _, carIndex in ipairs(aiCars) do
+        physics.teleportCarTo(carIndex, ac.SpawnSet.Pits)
+        physics.setAINoInput(carIndex, true, false)
+        physics.setAITopSpeed(carIndex, math.huge)
+        physics.setAISplineOffset(carIndex, 0)
+    end
+end
+
+--- Initialize: detect AI car indices and schedule pit parking
+--- Called on first button press (not on load)
 function M.init()
     local totalCars = ac.getSim().carsCount
     aiCars = {}
@@ -226,6 +237,8 @@ function M.init()
         table.insert(aiCars, i)
     end
     initialized = true
+    -- Park cars in pits immediately (called from button press, sim is ready)
+    parkAllInPits()
 end
 
 --- Teleport AI cars into the current scenario at the next corner
