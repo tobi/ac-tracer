@@ -16,8 +16,6 @@ local ui_utils = require('lib.ui.utils')
 -- Track lap number for train mode new-lap detection
 local lastLapNumber = nil
 
--- Delay traffic init to avoid physics calls before sim is ready
-local trafficInitDelay = 3  -- seconds after first update
 
 -- History for trace display (rolling window)
 local history = main_window.createHistory()
@@ -114,16 +112,21 @@ function script.update(dt)
         ac.setMessage("Comparison", settings.comparisonModeDisplay())
     end
 
-    -- Traffic: init after delay to let physics fully load
-    if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
-        if trafficInitDelay > 0 then
-            trafficInitDelay = trafficInitDelay - dt
-        else
+    -- Traffic: only active after first button press (no physics calls on load)
+    local trafficButton = settings.getTrafficTeleportButton()
+    if trafficButton:pressed() then
+        -- Lazy init on first press
+        if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
             traffic.init()
+        end
+        if traffic.isInitialized() then
+            local name = traffic.teleportScenario(state.trackCorners)
+            if name then
+                ac.setMessage("Traffic", name .. " → " .. traffic.nextScenario() .. " next")
+            end
         end
     end
 
-    -- Traffic teleport hotkey (press = deploy scenario, cycles through on repeated press)
     if traffic.isInitialized() then
         traffic.update(dt, state.trackCorners, currentCar.splinePosition, currentCar.lapCount)
 
@@ -132,14 +135,6 @@ function script.update(dt)
             traffic.onNewLap(state.trackCorners)
         end
         lastLapNumber = currentCar.lapCount
-
-        local trafficButton = settings.getTrafficTeleportButton()
-        if trafficButton:pressed() then
-            local name = traffic.teleportScenario(state.trackCorners)
-            if name then
-                ac.setMessage("Traffic", name .. " → " .. traffic.nextScenario() .. " next")
-            end
-        end
     end
 
     -- Update centralized state (handles lap recording, completion, best lap)

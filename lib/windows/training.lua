@@ -54,9 +54,17 @@ function M.draw(dt)
     ui.textColored(trainLabel, trainColor)
     ui.sameLine(ui.availableSpaceX() - 80)
     if ui.button(trainActive and "Stop##train" or "Start##train", vec2(80, 0)) then
-        local newState = traffic.toggleTrainMode(state.trackCorners)
-        local msg = newState and "ON — random scenarios each lap" or "OFF"
-        ac.setMessage("Train Mode", msg)
+        -- Lazy init on first use
+        if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
+            traffic.init()
+        end
+        if traffic.isInitialized() then
+            local newState = traffic.toggleTrainMode(state.trackCorners)
+            local msg = newState and "ON — random scenarios each lap" or "OFF"
+            ac.setMessage("Train Mode", msg)
+        else
+            ac.setMessage("Traffic", "Add AI opponents to your session first")
+        end
     end
 
     if trainActive then
