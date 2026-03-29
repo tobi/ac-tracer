@@ -16,6 +16,9 @@ local ui_utils = require('lib.ui.utils')
 -- Track lap number for train mode new-lap detection
 local lastLapNumber = nil
 
+-- Delay traffic init to avoid physics calls before sim is ready
+local trafficInitDelay = 3  -- seconds after first update
+
 -- History for trace display (rolling window)
 local history = main_window.createHistory()
 local updateTimer = 0
@@ -111,9 +114,13 @@ function script.update(dt)
         ac.setMessage("Comparison", settings.comparisonModeDisplay())
     end
 
-    -- Traffic: init on first frame if AI cars exist
+    -- Traffic: init after delay to let physics fully load
     if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
-        traffic.init()
+        if trafficInitDelay > 0 then
+            trafficInitDelay = trafficInitDelay - dt
+        else
+            traffic.init()
+        end
     end
 
     -- Traffic teleport hotkey (press = deploy scenario, cycles through on repeated press)
