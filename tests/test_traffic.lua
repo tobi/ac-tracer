@@ -156,25 +156,14 @@ test("init detects AI cars from session", function()
     assert_equal(traffic.aiCarCount(), 3, "Should detect 3 AI cars")
 end)
 
-test("init parks all AI cars in pits", function()
+test("init makes no physics calls (lazy)", function()
     resetAll()
     mockCarsCount = 3
     traffic.init()
     local teleportCalls = getCallsFor("teleportCarTo")
-    assert_equal(#teleportCalls, 2, "Should teleport 2 AI cars")
-    assert_equal(teleportCalls[1][1], 1, "First car index = 1")
-    assert_equal(teleportCalls[1][2], "PIT", "Teleport to pits")
-    assert_equal(teleportCalls[2][1], 2, "Second car index = 2")
-end)
-
-test("init disables AI input on all cars", function()
-    resetAll()
-    mockCarsCount = 3
-    traffic.init()
+    assert_equal(#teleportCalls, 0, "No physics calls on init")
     local noInputCalls = getCallsFor("setAINoInput")
-    assert_equal(#noInputCalls, 2, "Should disable 2 AI cars")
-    assert_equal(noInputCalls[1][2], true, "Input disabled")
-    assert_equal(noInputCalls[1][3], false, "No stall")
+    assert_equal(#noInputCalls, 0, "No AI input changes on init")
 end)
 
 test("init with no AI cars", function()

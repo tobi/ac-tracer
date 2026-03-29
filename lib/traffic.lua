@@ -24,11 +24,13 @@ local trainActiveScenario = nil   -- name of scenario active in train mode
 -- Helpers
 --------------------------------------------------------------------------------
 
--- Get track direction (tangent) at a spline position
+-- Get track direction (tangent) at a spline position using larger step for stability
 local function getTrackDirection(splinePos)
-    local eps = 0.0005
-    local p1 = ac.trackProgressToWorldCoordinate((splinePos - eps) % 1.0)
-    local p2 = ac.trackProgressToWorldCoordinate((splinePos + eps) % 1.0)
+    local eps = 0.002
+    local behind = (splinePos - eps) % 1.0
+    local ahead = (splinePos + eps) % 1.0
+    local p1 = ac.trackProgressToWorldCoordinate(behind)
+    local p2 = ac.trackProgressToWorldCoordinate(ahead)
     return (p2 - p1):normalize()
 end
 
@@ -37,10 +39,10 @@ end
 local function findSplineAtDistance(startSpline, meters)
     local forward = meters >= 0
     local remaining = math.abs(meters)
-    local step = 0.0005
+    local step = 0.001
     local pos = startSpline
     local prevWorld = ac.trackProgressToWorldCoordinate(pos)
-    local maxIter = 10000
+    local maxIter = 5000
     local iter = 0
     while remaining > 0 and iter < maxIter do
         if forward then
@@ -103,19 +105,27 @@ end
 
 -- Teleport a car to a spline position at given speed, with optional lateral offset
 local function placeCarAtSpline(carIndex, splinePos, speedKmh, laneOffset)
+    -- Get position and direction on track
     local worldPos = ac.trackProgressToWorldCoordinate(splinePos)
     local dir = getTrackDirection(splinePos)
+
+    -- Place car first, then set velocity, then enable AI
     physics.setCarPosition(carIndex, worldPos, dir)
-    local speedMs = speedKmh / 3.6
-    physics.setCarVelocity(carIndex, dir * speedMs)
-    physics.setAINoInput(carIndex, false, false)
-    physics.setAILevel(carIndex, 1)
+    physics.setCarVelocity(carIndex, dir * (speedKmh / 3.6))
+
+    -- Set lateral offset before enabling AI so it doesn't immediately steer back
     if laneOffset and laneOffset ~= 0 then
         physics.setAISplineOffset(carIndex, laneOffset)
     else
         physics.setAISplineOffset(carIndex, 0)
     end
+
+    -- Cap speed
     physics.setAITopSpeed(carIndex, speedKmh)
+
+    -- Enable AI last so it starts driving from the placed position
+    physics.setAILevel(carIndex, 1)
+    physics.setAINoInput(carIndex, false, false)
 end
 
 -- Park a car (disable AI)
@@ -179,7 +189,6 @@ local function buildTrainQueue(corners)
     trainCornerQueue = {}
     if not corners or #corners == 0 then return end
 
-    -- Pick 2-4 random corners (or all if fewer)
     local indices = {}
     for i = 1, #corners do
         if corners[i].startPos then
@@ -209,14 +218,12 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
---- Initialize: detect AI cars and park them in pits
+--- Initialize: just detect AI car indices, no physics calls
 function M.init()
     local totalCars = ac.getSim().carsCount
     aiCars = {}
     for i = 1, totalCars - 1 do
         table.insert(aiCars, i)
-        physics.teleportCarTo(i, ac.SpawnSet.Pits)
-        physics.setAINoInput(i, true, false)
     end
     initialized = true
 end
@@ -291,7 +298,6 @@ function M.toggleTrainMode(corners)
     else
         trainCornerQueue = {}
         trainActiveScenario = nil
-        -- Park all cars when turning off
         for _, carIndex in ipairs(aiCars) do
             parkCar(carIndex)
         end
@@ -310,10 +316,6 @@ function M.trainScenarioName()
 end
 
 --- Update (call each frame)
----@param dt number Delta time
----@param corners table|nil Track corners (needed for train mode)
----@param playerPos number|nil Current spline position
----@param lapNumber number|nil Current lap number (to detect new lap)
 function M.update(dt, corners, playerPos, lapNumber)
     -- Reset timer for AI constraints
     if resetTimer then
@@ -329,10 +331,8 @@ function M.update(dt, corners, playerPos, lapNumber)
         local _, nextIdx = getNextCorner(playerPos, corners)
         if nextIdx and trainCornerQueue[nextIdx] and nextIdx ~= trainLastCornerIdx then
             local corner = corners[nextIdx]
-            -- Deploy when within ~100m of corner entry
             local dist = corner.startPos - playerPos
             if dist < 0 then dist = dist + 1 end
-            -- Convert to rough meters (assume ~5km track, so 0.02 ≈ 100m)
             if dist < 0.025 and dist > 0 then
                 local scenario = trainCornerQueue[nextIdx]
                 local player = ac.getCar(0)
@@ -340,7 +340,7 @@ function M.update(dt, corners, playerPos, lapNumber)
                 deployScenario(scenario, corner, playerSpeed)
                 trainActiveScenario = scenario.name
                 trainLastCornerIdx = nextIdx
-                trainCornerQueue[nextIdx] = nil  -- consume it
+                trainCornerQueue[nextIdx] = nil
             end
         end
     end
