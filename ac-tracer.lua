@@ -9,7 +9,12 @@ local lap_picker = require('lib.windows.lap_picker')
 local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
 
+local traffic = require('lib.traffic')
+local training_window = require('lib.windows.training')
 local ui_utils = require('lib.ui.utils')
+
+-- Track lap number for train mode new-lap detection
+local lastLapNumber = nil
 
 -- History for trace display (rolling window)
 local history = main_window.createHistory()
@@ -106,6 +111,30 @@ function script.update(dt)
         ac.setMessage("Comparison", settings.comparisonModeDisplay())
     end
 
+    -- Traffic: init on first frame if AI cars exist
+    if not traffic.isInitialized() and ac.getSim().carsCount > 1 then
+        traffic.init()
+    end
+
+    -- Traffic teleport hotkey (press = deploy scenario, cycles through on repeated press)
+    if traffic.isInitialized() then
+        traffic.update(dt, state.trackCorners, currentCar.splinePosition, currentCar.lapCount)
+
+        -- Detect new lap for train mode
+        if lastLapNumber and currentCar.lapCount ~= lastLapNumber then
+            traffic.onNewLap(state.trackCorners)
+        end
+        lastLapNumber = currentCar.lapCount
+
+        local trafficButton = settings.getTrafficTeleportButton()
+        if trafficButton:pressed() then
+            local name = traffic.teleportScenario(state.trackCorners)
+            if name then
+                ac.setMessage("Traffic", name .. " → " .. traffic.nextScenario() .. " next")
+            end
+        end
+    end
+
     -- Update centralized state (handles lap recording, completion, best lap)
     state.update(dt, currentCar)
 
@@ -149,6 +178,10 @@ function script.windowReferenceLap(dt)
     lap_picker.draw(dt)
 end
 
+
+function script.windowTraining(dt)
+    training_window.draw(dt)
+end
 
 function script.windowDelta(dt)
     delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners, currentCar)

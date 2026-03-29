@@ -282,6 +282,7 @@ if #test_files == 0 then
         "tests/test_sim_playback.lua",
         "tests/test_background_writer.lua",
         "tests/test_motec_parser.lua",
+        "tests/test_traffic.lua",
     }
 end
 
