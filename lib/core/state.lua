@@ -2144,17 +2144,9 @@ function state.saveCheckpoint(traceHistory, notify)
 
         insertIntoStack(checkpoint)
 
-        if notify then
-            local nextCorner = getNextCorner(checkpoint.pos)
-            local label = nextCorner and nextCorner.name or ""
-            ac.setMessage("Checkpoint Saved", label)
-            if notify ~= "silent" then
-                notification.playSave()
-            end
+        if notify and notify ~= "silent" then
+            notification.playSave()
         end
-
-        ac.log(string.format("AC Tracer: Checkpoint saved at pos %.3f (stack: %d)",
-            checkpoint.pos, #checkpointStack))
     end)
 
     return true
