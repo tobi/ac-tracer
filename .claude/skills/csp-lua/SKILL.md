@@ -474,6 +474,47 @@ Common CSP Lua failures:
 - `error loading module`: syntax error, bad `require()` path, or module returning nothing unexpectedly.
 - Window draw failure: check the first stack frame in the CSP log; repeated draw exceptions can hide later useful messages.
 
+## Profiling And Automation
+
+There is no known public CSP CLI command that starts or stops the Lua Debug app profiler directly. Treat profiling as an in-game/debug-app workflow unless a project includes its own bridge.
+
+Useful CSP debug surfaces:
+- `ac.debug(key, value)` publishes live values and graphs in Lua Debug.
+- `ac.setLogSilent(true)` keeps debug logging in Lua Debug without also writing every line to CSP logs.
+- `render.measure(key, drawFn)` measures GPU/render sections that happen inside the passed draw function.
+- `ac.accessAppWindow('Lua Debug')` can inspect, show, move, resize, or pin an existing app window once the app is available.
+- `ac.getAppWindows()` lists available app windows, useful before trying to automate a debug window.
+
+Useful local toggles, generally requiring CSP/AC restart or Content Manager settings reload:
+```ini
+; assettocorsa/extension/config/gui.ini
+[NEW_UI_2]
+APP_LUA_DEBUG=1
+APP_PYTHON_PROFILER=1
+
+; assettocorsa/extension/config/general.ini
+[DEV]
+SILENT_LUA=0
+KEEP_BACKGROUND_WORKERS_AROUND=0
+PROFILE_LOADING=0
+PROFILE_MEMORY=0
+PROFILE_FREEZES_THRESHOLD=30
+```
+
+User overrides live under:
+```text
+%USERPROFILE%\Documents\Assetto Corsa\cfg\extension\
+%USERPROFILE%\Documents\Assetto Corsa\cfg\extension\state\imgui_settings.ini
+```
+
+For repeatable automation, build a small project-specific profiling bridge instead of trying to remote-control Lua Debug internals:
+- A PowerShell/Node CLI writes a command file or memory-mapped command block.
+- A CSP Lua app polls that command at a throttled cadence.
+- Instrumented code records `os.preciseClock()` spans, frame counts, memory counters where available, and selected `ac.debug()` graphs.
+- The bridge writes JSON/CSV snapshots to the app folder or Documents logs for external tools to consume.
+
+Use this bridge for app-level timings and regression comparisons. Do not claim it controls CSP's internal profiler unless the project has verified an explicit API or console command for that CSP build.
+
 ## Testing
 
 For this repo, run:
