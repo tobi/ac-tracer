@@ -563,7 +563,6 @@ local function detectTurnIn(lapData, startPos, endPos, apexPos)
     local steerRange = peakSteer - baselineSteer
     local latRange = peakLat - baselineLat
     if steerRange < 5 then return nil, nil end
-    local steerThreshold = baselineSteer + math.max(3, steerRange * 0.18)
     local committedSteer = baselineSteer + steerRange * 0.45
     local latThreshold = baselineLat + math.max(0.12, latRange * 0.18)
     local SUSTAINED = 3
@@ -579,28 +578,36 @@ local function detectTurnIn(lapData, startPos, endPos, apexPos)
         end
         if not lateralOnset then return nil, nil end
     else
-        lateralOnset = #indices
+        -- Imported laps without G data use committed steering as a fallback.
+        for n = baselineCount + 1, #indices - SUSTAINED + 1 do
+            local sustained = true
+            for k = n, n + SUSTAINED - 1 do
+                if steerAbs[k] < committedSteer then sustained = false break end
+            end
+            if sustained then lateralOnset = n break end
+        end
+        if not lateralOnset then return nil, nil end
     end
 
-    -- Turn-in should precede lateral response, but only by a short physical delay.
-    local searchStart = math.max(baselineCount + 1, lateralOnset - 12)
-    for n = searchStart, lateralOnset do
-        local sustained = true
-        for k = n, math.min(n + SUSTAINED - 1, #indices) do
-            if steerAbs[k] < steerThreshold then sustained = false break end
-        end
-        if sustained then
-            local commits = false
-            for k = n, math.min(lateralOnset + 3, #indices) do
-                if steerAbs[k] >= committedSteer then commits = true break end
-            end
-            if commits then
-                local i = indices[n]
-                return lapData.pos[i], i
-            end
-        end
+    -- Confirm that the lateral-G event belongs to a committed steering input.
+    local commits = false
+    for n = math.max(baselineCount + 1, lateralOnset - 6), math.min(lateralOnset + 3, #indices) do
+        if steerAbs[n] >= committedSteer then commits = true break end
     end
-    return nil, nil
+    if not commits then return nil, nil end
+
+    -- Starting at the lateral-G hit, walk backward through the same contiguous
+    -- steering build. The first sample after steering leaves its approach
+    -- baseline is the physical beginning of turn-in.
+    local baselineExit = baselineSteer + math.max(1, steerRange * 0.07)
+    local onset = lateralOnset
+    local searchStart = math.max(baselineCount + 1, lateralOnset - 20)
+    while onset > searchStart and steerAbs[onset - 1] > baselineExit do
+        onset = onset - 1
+    end
+
+    local i = indices[onset]
+    return lapData.pos[i], i
 end
 
 local function nearestIndexForPos(lapData, targetPos, startIndex)

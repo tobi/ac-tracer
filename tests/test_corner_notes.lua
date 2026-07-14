@@ -156,6 +156,21 @@ test("turn-in ignores an early steering correction without lateral response", fu
     assert_true(analysis.turnInPos > current.pos[20], "turn-in should not use the early correction")
 end)
 
+test("turn-in backtracks from lateral G onset to steering initiation", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60 })
+    for i = 1, 60 do
+        current.speed[i] = 80 + math.abs(45 - i)
+        local steerDeg = i >= 18 and math.min(16, (i - 17) * 2) or 0
+        current.steering[i] = lap.normalizeSteer(steerDeg)
+        current.gforce[i] = vec3(i >= 25 and 0.7 or 0, 0, -0.3)
+    end
+    local analysis = corner_analysis.analyzeCorner(current, { number = 1, startPos = 0.1, endPos = 0.2 })
+    assert_not_nil(analysis.turnInPos)
+    assert_near(analysis.turnInPos, current.pos[18], 0.0001,
+        "turn-in should be the start of steering build, not the later G-force hit")
+end)
+
 test("flags combined grip underuse early and mid-corner", function()
     local corner_analysis = require('lib.windows.corner_analysis')
     local data = {
