@@ -47,6 +47,10 @@ test("analyzeCorner and compareCorners return data", function()
 
     local comparison = corner_analysis.compareCorners(current, reference)
     assert_not_nil(comparison)
+
+    local displayData = corner_analysis.compare(corner, currentLap, refLap, { apply = false })
+    assert_not_nil(displayData)
+    assert_equal(displayData.cornerInfo, corner, "comparison should retain corner range for marker rendering")
     assert_equal(comparison.number, 1)
 
     package.loaded['lib.state'] = originalState

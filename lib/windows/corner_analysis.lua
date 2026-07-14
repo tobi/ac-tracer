@@ -1008,6 +1008,9 @@ function corner_analysis.compare(cornerDef, currentLap, referenceLap, opts)
 
     local data = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
     if not data then return nil end
+    -- Marker rendering needs the exact corner range to map spline positions
+    -- into the graph. Keep it on every comparison path, including telemetry.
+    data.cornerInfo = cornerDef
 
     local numSpeedSamples = opts and opts.numSpeedSamples or 50
     local numPedalSamples = opts and opts.numPedalSamples or 100
