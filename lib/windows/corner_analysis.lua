@@ -616,6 +616,23 @@ local function nearestIndexForPos(lapData, targetPos, startIndex)
     return bestIndex
 end
 
+local function lateralGMetrics(lapData, startPos, endPos, turnInIndex)
+    if not lapData or not lapData.gforce or #lapData.gforce == 0 then return nil, nil end
+    local peak = nil
+    for i = 1, #lapData.pos do
+        if lap.isInRange(lapData.pos[i], startPos, endPos) then
+            local latG = gforceComponents(lapData.gforce[i])
+            if latG ~= nil then peak = math.max(peak or 0, math.abs(latG)) end
+        end
+    end
+    local turnInLatG = nil
+    if turnInIndex then
+        local latG = gforceComponents(lapData.gforce[turnInIndex])
+        turnInLatG = latG and math.abs(latG) or nil
+    end
+    return peak, turnInLatG
+end
+
 --- Average combined braking/lateral acceleration in early and mid-corner phases.
 local function combinedGripPhases(lapData, turnInIndex, apexPos)
     if not lapData or not turnInIndex or not lapData.gforce or #lapData.gforce == 0 then return nil, nil end
@@ -846,6 +863,7 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
 
     local turnInPos, turnInIndex = detectTurnIn(lapData, cornerDef.startPos, cornerDef.endPos, apexPos)
     local combinedGripEarly, combinedGripMid = combinedGripPhases(lapData, turnInIndex, apexPos)
+    local peakLateralG, turnInLateralG = lateralGMetrics(lapData, cornerDef.startPos, cornerDef.endPos, turnInIndex)
 
     return {
         number = cornerDef.number,
@@ -868,6 +886,8 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         turnInPos = turnInPos,
         combinedGripEarly = combinedGripEarly,
         combinedGripMid = combinedGripMid,
+        peakLateralG = peakLateralG,
+        turnInLateralG = turnInLateralG,
     }
 end
 
@@ -935,9 +955,13 @@ function corner_analysis.compareCorners(current, reference)
         refTurnInPos = reference.turnInPos,
         refCombinedGripEarly = reference.combinedGripEarly,
         refCombinedGripMid = reference.combinedGripMid,
+        refPeakLateralG = reference.peakLateralG,
+        refTurnInLateralG = reference.turnInLateralG,
         currentTurnInPos = current.turnInPos,
         currentCombinedGripEarly = current.combinedGripEarly,
         currentCombinedGripMid = current.combinedGripMid,
+        currentPeakLateralG = current.peakLateralG,
+        currentTurnInLateralG = current.turnInLateralG,
         -- Deltas
         timeDelta = timeDelta,
         entrySpeedDelta = current.entrySpeed and reference.entrySpeed and
@@ -955,6 +979,8 @@ function corner_analysis.compareCorners(current, reference)
             (current.combinedGripEarly - reference.combinedGripEarly) or nil,
         combinedGripMidDelta = (current.combinedGripMid and reference.combinedGripMid) and
             (current.combinedGripMid - reference.combinedGripMid) or nil,
+        peakLateralGDelta = (current.peakLateralG and reference.peakLateralG) and
+            (current.peakLateralG - reference.peakLateralG) or nil,
     }
 end
 

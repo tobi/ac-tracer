@@ -360,11 +360,21 @@ local function buildJSONPayload(lapObj, basePath, options)
                 cornerOut.brakePos = currentAnalysis.brakePos
                 cornerOut.liftOffPos = currentAnalysis.liftOffPos
                 cornerOut.minGear = currentAnalysis.minGear
+                cornerOut.turnInPos = currentAnalysis.turnInPos
+                cornerOut.turnInLateralG = currentAnalysis.turnInLateralG
+                cornerOut.peakLateralG = currentAnalysis.peakLateralG
+                cornerOut.combinedGripEarly = currentAnalysis.combinedGripEarly
+                cornerOut.combinedGripMid = currentAnalysis.combinedGripMid
             end
             if refAnalysis then
                 cornerOut.refEntrySpeed = refAnalysis.entrySpeed
                 cornerOut.refApexSpeed = refAnalysis.apexSpeed
                 cornerOut.refExitSpeed = refAnalysis.exitSpeed
+                cornerOut.refTurnInPos = refAnalysis.turnInPos
+                cornerOut.refTurnInLateralG = refAnalysis.turnInLateralG
+                cornerOut.refPeakLateralG = refAnalysis.peakLateralG
+                cornerOut.refCombinedGripEarly = refAnalysis.combinedGripEarly
+                cornerOut.refCombinedGripMid = refAnalysis.combinedGripMid
             end
             if comparison then
                 cornerOut.timeDelta = comparison.timeDelta
