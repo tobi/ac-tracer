@@ -75,6 +75,18 @@ test("notes when brake application rate is materially slower", function()
     assert_true(hasNote(notes, "brake application rate"))
 end)
 
+test("does not flag a moderately slower brake ramp against an elite reference", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+    local reference = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+    for i = 1, 60 do
+        current.brake[i] = i < 10 and 0 or math.min(100, (i - 9) * 14)
+        reference.brake[i] = i < 10 and 0 or math.min(100, (i - 9) * 20)
+    end
+    local notes = corner_analysis.collectNotes({ refStartPos = 0.1, refEndPos = 0.2 }, current, reference)
+    assert_true(not hasNote(notes, "brake application rate"))
+end)
+
 test("notes when reference trail-brakes materially longer", function()
     local corner_analysis = require('lib.windows.corner_analysis')
     local current = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
@@ -124,6 +136,21 @@ test("detects and compares steering plus lateral-load turn-in", function()
     assert_not_nil(currentAnalysis.turnInPos)
     assert_true(comparison.turnInDeltaM > 10)
     assert_true(hasNote(corner_analysis.collectNotes(comparison), "turn-in"))
+end)
+
+test("turn-in ignores an early steering correction without lateral response", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60 })
+    for i = 1, 60 do
+        current.speed[i] = 80 + math.abs(45 - i)
+        local correction = i >= 10 and i <= 14
+        local actualTurn = i >= 28
+        current.steering[i] = lap.normalizeSteer(correction and 7 or (actualTurn and 14 or 0))
+        current.gforce[i] = vec3(actualTurn and 0.7 or 0, 0, -0.3)
+    end
+    local analysis = corner_analysis.analyzeCorner(current, { number = 1, startPos = 0.1, endPos = 0.2 })
+    assert_not_nil(analysis.turnInPos)
+    assert_true(analysis.turnInPos > current.pos[20], "turn-in should not use the early correction")
 end)
 
 test("flags combined grip underuse early and mid-corner", function()

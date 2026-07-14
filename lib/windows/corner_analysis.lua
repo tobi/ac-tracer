@@ -527,33 +527,76 @@ local function gforceComponents(sample)
     return sample.x or sample[1], sample.z or sample[3]
 end
 
---- Find first sustained steering input which produces lateral load.
+--- Find steering onset associated with the corner's lateral-load build-up.
+--- Uses an approach baseline and a fraction of this corner's eventual peak,
+--- avoiding fixed-angle triggers caused by corrections on the straight.
 local function detectTurnIn(lapData, startPos, endPos, apexPos)
     if not lapData or not lapData.pos or not lapData.steering then return nil, nil end
     local endSearch = apexPos or endPos
-    local STEER_DEG = 5
-    local SUSTAINED = 4
-    local CONFIRM_WINDOW = 12
-    local LAT_G_CONFIRM = 0.15
-
+    local indices = {}
     for i = 1, #lapData.pos do
-        local pos = lapData.pos[i]
-        if lap.isInRange(pos, startPos, endSearch) then
+        if lap.isInRange(lapData.pos[i], startPos, endSearch) then indices[#indices + 1] = i end
+    end
+    if #indices < 8 then return nil, nil end
+
+    local steerAbs, latAbs = {}, {}
+    local peakSteer, peakLat, hasGData = 0, 0, false
+    for n, i in ipairs(indices) do
+        steerAbs[n] = math.abs(lap.steerToDegrees(lapData.steering[i] or 0.5))
+        local latG = gforceComponents(lapData.gforce and lapData.gforce[i])
+        latAbs[n] = latG and math.abs(latG) or 0
+        if latG ~= nil then hasGData = true end
+        peakSteer = math.max(peakSteer, steerAbs[n])
+        peakLat = math.max(peakLat, latAbs[n])
+    end
+
+    -- First 15% is treated as the approach. Average suppresses single-sample noise.
+    local baselineCount = math.max(3, math.min(10, math.floor(#indices * 0.15)))
+    local baselineSteer, baselineLat = 0, 0
+    for n = 1, baselineCount do
+        baselineSteer = baselineSteer + steerAbs[n]
+        baselineLat = baselineLat + latAbs[n]
+    end
+    baselineSteer = baselineSteer / baselineCount
+    baselineLat = baselineLat / baselineCount
+
+    local steerRange = peakSteer - baselineSteer
+    local latRange = peakLat - baselineLat
+    if steerRange < 5 then return nil, nil end
+    local steerThreshold = baselineSteer + math.max(3, steerRange * 0.18)
+    local committedSteer = baselineSteer + steerRange * 0.45
+    local latThreshold = baselineLat + math.max(0.12, latRange * 0.18)
+    local SUSTAINED = 3
+
+    local lateralOnset = nil
+    if hasGData and latRange >= 0.15 then
+        for n = baselineCount + 1, #indices - SUSTAINED + 1 do
             local sustained = true
-            for j = i, math.min(i + SUSTAINED - 1, #lapData.steering) do
-                local deg = math.abs(lap.steerToDegrees(lapData.steering[j] or 0.5))
-                if deg < STEER_DEG then sustained = false break end
+            for k = n, n + SUSTAINED - 1 do
+                if latAbs[k] < latThreshold then sustained = false break end
             end
-            if sustained then
-                local hasGData, lateralConfirmed = false, false
-                for j = i, math.min(i + CONFIRM_WINDOW, #lapData.pos) do
-                    local latG = gforceComponents(lapData.gforce and lapData.gforce[j])
-                    if latG ~= nil then
-                        hasGData = true
-                        if math.abs(latG) >= LAT_G_CONFIRM then lateralConfirmed = true break end
-                    end
-                end
-                if lateralConfirmed or not hasGData then return pos, i end
+            if sustained then lateralOnset = n break end
+        end
+        if not lateralOnset then return nil, nil end
+    else
+        lateralOnset = #indices
+    end
+
+    -- Turn-in should precede lateral response, but only by a short physical delay.
+    local searchStart = math.max(baselineCount + 1, lateralOnset - 12)
+    for n = searchStart, lateralOnset do
+        local sustained = true
+        for k = n, math.min(n + SUSTAINED - 1, #indices) do
+            if steerAbs[k] < steerThreshold then sustained = false break end
+        end
+        if sustained then
+            local commits = false
+            for k = n, math.min(lateralOnset + 3, #indices) do
+                if steerAbs[k] >= committedSteer then commits = true break end
+            end
+            if commits then
+                local i = indices[n]
+                return lapData.pos[i], i
             end
         end
     end
@@ -668,7 +711,9 @@ local function analyzeBrakeApplicationRate(currentLap, refLap, data)
     if not currentRate or not refRate or refRate < 50 then return nil end
 
     local ratio = currentRate / refRate
-    if ratio >= 0.7 or refRate - currentRate < 30 then return nil end
+    -- Elite references can spike pressure extremely quickly. Only coach this
+    -- when the driver's ramp is less than half as fast and clearly separated.
+    if ratio >= 0.5 or refRate - currentRate < 100 then return nil end
 
     return {
         text = string.format("brake application rate %.0f%% slower than reference", (1 - ratio) * 100),
