@@ -5,11 +5,11 @@ local scoring = {}
 
 -- Weight configuration (must sum to 1.0)
 local weights = {
-    time = 0.40,      -- Time through corner vs reference (primary measure)
-    exit = 0.25,      -- Exit speed vs reference (critical for lap time)
-    apex = 0.15,      -- Apex speed vs reference (commitment indicator)
-    brake = 0.10,     -- Brake point technique (conditional bonus)
-    liftOff = 0.10    -- Lift-off point technique (conditional bonus)
+    time = 0.25,      -- Time through corner vs reference
+    exit = 0.35,      -- Exit speed vs reference (critical for lap time)
+    apex = 0.25,      -- Apex / mid-corner speed (commitment indicator)
+    brake = 0.075,    -- Brake point technique (conditional bonus)
+    liftOff = 0.075   -- Lift-off point technique (conditional bonus)
 }
 
 -- Get track length for meter calculations

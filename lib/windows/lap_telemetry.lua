@@ -297,6 +297,8 @@ local function drawSeriesPath(x, y, w, h, minVal, maxVal, values, valueValid, po
 
     if inSegment and segmentPoints > 1 then
         ui.pathStroke(color, false, thickness)
+    else
+        ui.pathClear()
     end
 end
 
@@ -1267,8 +1269,9 @@ end
 -- Main Window
 --------------------------------------------------------------------------------
 
-function lap_telemetry.draw(dt, context)
+function lap_telemetry.draw(dt, context, options)
     ctx = context or ctx or {}
+    options = options or {}
 
     local windowSize = ui.availableSpace()
     if windowSize.x <= 0 or windowSize.y <= 0 then return end
@@ -1295,6 +1298,21 @@ function lap_telemetry.draw(dt, context)
     local referenceLap = getReferenceLap()
 
     ui.pushFont(ui.Font.Small)
+
+    -- Open the matching corner analysis surface for the current UI context.
+    -- The pause overlay supplies its own handler; the regular app uses CSP's
+    -- native Corner Analysis window.
+    ui.setCursor(vec2(125, 4))
+    if ui.button("Corner Analysis", vec2(120, 22)) then
+        if options.openCornerAnalysis then
+            options.openCornerAnalysis()
+        else
+            -- Ask CSP to expose the manifest window first (important with
+            -- LAZY=FULL), then focus it through the regular window accessor.
+            ac.setAppWindowVisible("ac-tracer", "corners", true)
+            ui_utils.openWindow("corners")
+        end
+    end
 
     -- Load Lap button (far right)
     ui.setCursor(vec2(windowSize.x - 100, 4))

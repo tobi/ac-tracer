@@ -8,6 +8,7 @@ local lap_telemetry = require('lib.windows.lap_telemetry')
 local lap_picker = require('lib.windows.lap_picker')
 local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
+local focus = require('lib.windows.focus')
 
 local ui_utils = require('lib.ui.utils')
 local theme = require('lib.ui.theme')
@@ -184,87 +185,82 @@ ui.onExclusiveHUD(function(mode)
         pauseScoreCacheId = cacheId
     end
 
-    ui.toolWindow('ac_tracer_pause', pauseWinPos, vec2(winW, winH), false, true, function()
+    -- Stats panel: draw background manually, then content
+    ui.drawRectFilled(pauseWinPos, pauseWinPos + vec2(winW, winH), rgbm(0.08, 0.08, 0.1, 0.92), 6)
+    ui.drawRect(pauseWinPos, pauseWinPos + vec2(winW, winH), rgbm(0.3, 0.3, 0.4, 0.5), 6)
 
-        ui.pushFont(ui.Font.Title)
-        ui.text('AC Tracer')
-        ui.popFont()
-        ui.separator()
+    ui.setCursorScreenPos(pauseWinPos + vec2(8, 8))
+    ui.pushFont(ui.Font.Title)
+    ui.text('AC Tracer')
+    ui.popFont()
 
-        -- === LAP TIMES ===
-        ui.offsetCursorY(2)
-        ui.pushFont(ui.Font.Small)
-        ui.textColored('LAP TIMES', rgbm(0.5, 0.8, 1, 1))
-        ui.popFont()
+    ui.setCursorScreenPos(pauseWinPos + vec2(0, 32))
+    ui.beginGroup()
+    ui.offsetCursorX(8)
 
-        local hist = state.history or {}
-        if #hist == 0 then
-            ui.textColored('  No laps yet', rgbm(1, 1, 1, 0.4))
-        else
-            local bestTime = state.bestLap and state.bestLap.time or 0
-            for i = 1, math.min(#hist, 8) do
-                local l = hist[i]
-                local t = formatLapTime(l.time)
-                local isBest = bestTime > 0 and l.time > 0 and math.abs(l.time - bestTime) < 1
-                local color = isBest and rgbm(0.3, 1, 0.3, 1) or (l.valid and rgbm(1, 1, 1, 0.9) or rgbm(1, 1, 1, 0.4))
-                ui.textColored(string.format('  %d. %s%s', i, t, isBest and '  *' or ''), color)
-            end
+    -- === LAP TIMES ===
+    ui.offsetCursorY(2)
+    ui.pushFont(ui.Font.Small)
+    ui.textColored('LAP TIMES', rgbm(0.5, 0.8, 1, 1))
+    ui.popFont()
+
+    local hist = state.history or {}
+    if #hist == 0 then
+        ui.textColored('  No laps yet', rgbm(1, 1, 1, 0.4))
+    else
+        local bestTime = state.bestLap and state.bestLap.time or 0
+        for i = 1, math.min(#hist, 8) do
+            local l = hist[i]
+            local t = formatLapTime(l.time)
+            local isBest = bestTime > 0 and l.time > 0 and math.abs(l.time - bestTime) < 1
+            local color = isBest and rgbm(0.3, 1, 0.3, 1) or (l.valid and rgbm(1, 1, 1, 0.9) or rgbm(1, 1, 1, 0.4))
+            ui.textColored(string.format('  %d. %s%s', i, t, isBest and '  *' or ''), color)
         end
+    end
 
-        ui.offsetCursorY(6)
-        ui.separator()
-        ui.offsetCursorY(2)
+    ui.offsetCursorY(6)
+    ui.textColored('─────────────────────────', rgbm(0.3, 0.3, 0.4, 0.5))
+    ui.offsetCursorY(2)
 
-        -- === CORNER SCORES ===
-        ui.pushFont(ui.Font.Small)
-        ui.textColored('CORNER SCORES  (last 5 avg vs best)', rgbm(0.5, 0.8, 1, 1))
-        ui.popFont()
+    -- === CORNER SCORES ===
+    ui.pushFont(ui.Font.Small)
+    ui.textColored('CORNER SCORES  (last 5 avg vs best)', rgbm(0.5, 0.8, 1, 1))
+    ui.popFont()
 
-        if not pauseScoreCache or #pauseScoreCache == 0 then
-            ui.textColored('  No corner data', rgbm(1, 1, 1, 0.4))
-        else
-            for _, c in ipairs(pauseScoreCache) do
-                local trend = ''
-                local trendColor = rgbm(1, 1, 1, 0.5)
-                if c.count >= 2 then
-                    local diff = c.avgScore - c.bestScore
-                    if diff >= 3 then
-                        trend = ' ^^'
-                        trendColor = rgbm(0.3, 1, 0.3, 1)
-                    elseif diff >= 0 then
-                        trend = ' ='
-                        trendColor = rgbm(1, 1, 1, 0.6)
-                    elseif diff >= -5 then
-                        trend = ' v'
-                        trendColor = rgbm(1, 0.7, 0.3, 1)
-                    else
-                        trend = ' vv'
-                        trendColor = rgbm(1, 0.3, 0.3, 1)
-                    end
+    if not pauseScoreCache or #pauseScoreCache == 0 then
+        ui.textColored('  No corner data', rgbm(1, 1, 1, 0.4))
+    else
+        for _, c in ipairs(pauseScoreCache) do
+            local trend = ''
+            local trendColor = rgbm(1, 1, 1, 0.5)
+            if c.count >= 2 then
+                local diff = c.avgScore - c.bestScore
+                if diff >= 3 then
+                    trend = ' ^^'
+                    trendColor = rgbm(0.3, 1, 0.3, 1)
+                elseif diff >= 0 then
+                    trend = ' ='
+                    trendColor = rgbm(1, 1, 1, 0.6)
+                elseif diff >= -5 then
+                    trend = ' v'
+                    trendColor = rgbm(1, 0.7, 0.3, 1)
+                else
+                    trend = ' vv'
+                    trendColor = rgbm(1, 0.3, 0.3, 1)
                 end
-
-                -- Name (left)
-                local nameW = 140
-                local scoreText = string.format('%3d / %3d', c.avgScore, c.bestScore)
-                ui.text(string.format('  %-14s', c.name))
-                ui.sameLine(nameW)
-                ui.text(scoreText)
-                ui.sameLine(0, 2)
-                ui.textColored(trend, trendColor)
             end
-        end
 
-        ui.offsetCursorY(6)
-        ui.separator()
-        ui.offsetCursorY(4)
-
-        -- Toggle corner analysis button
-        local btnW = ui.availableSpaceX()
-        if ui.button(caVisible and 'Hide Corner Analysis' or 'Show Corner Analysis', vec2(btnW, 0)) then
-            caVisible = not caVisible
-            savePauseLayout()
+            local nameW = 140
+            local scoreText = string.format('%3d / %3d', c.avgScore, c.bestScore)
+            ui.text(string.format('  %-14s', c.name))
+            ui.sameLine(nameW)
+            ui.text(scoreText)
+            ui.sameLine(0, 2)
+            ui.textColored(trend, trendColor)
         end
-    end)
+    end
+
+    ui.endGroup()
 
     -- === TELEMETRY WINDOW (pause-only, draggable + resizable) ===
     if not telWinSize then
@@ -333,16 +329,29 @@ ui.onExclusiveHUD(function(mode)
         end
     end
 
-    ui.toolWindow('ac_tracer_pause_tel', telWinPos, telWinSize, true, true, function()
-        lap_telemetry.draw(0, state)
+    -- Draw telemetry background
+    ui.drawRectFilled(telWinPos, telWinPos + telWinSize, rgbm(0.08, 0.08, 0.1, 0.95), 4)
+    ui.drawRect(telWinPos, telWinPos + telWinSize, rgbm(0.3, 0.3, 0.4, 0.5), 4)
 
-        -- Resize grip visual (bottom-right triangle)
-        local ws = ui.windowSize()
-        local g = vec2(ws.x, ws.y)
-        ui.drawLine(g - vec2(12, 0), g - vec2(0, 12), rgbm(1, 1, 1, 0.3), 1.5)
-        ui.drawLine(g - vec2(8, 0), g - vec2(0, 8), rgbm(1, 1, 1, 0.3), 1.5)
-        ui.drawLine(g - vec2(4, 0), g - vec2(0, 4), rgbm(1, 1, 1, 0.3), 1.5)
-    end)
+    -- Draw telemetry content inside a child window for clipping
+    ui.setCursorScreenPos(telWinPos)
+    ui.beginChild('pause_tel', telWinSize, false, ui.WindowFlags.NoScrollbar + ui.WindowFlags.NoScrollWithMouse)
+    local ok, err = pcall(lap_telemetry.draw, 0, state, {
+        openCornerAnalysis = function()
+            caVisible = true
+            savePauseLayout()
+        end,
+    })
+    if not ok then
+        ui.textColored('Telemetry error: ' .. tostring(err), rgbm(1, 0.3, 0.3, 1))
+    end
+    ui.endChild()
+
+    -- Resize grip
+    local g = telWinPos + telWinSize
+    ui.drawLine(g - vec2(12, 0), g - vec2(0, 12), rgbm(1, 1, 1, 0.3), 1.5)
+    ui.drawLine(g - vec2(8, 0), g - vec2(0, 8), rgbm(1, 1, 1, 0.3), 1.5)
+    ui.drawLine(g - vec2(4, 0), g - vec2(0, 4), rgbm(1, 1, 1, 0.3), 1.5)
 
     -- === CORNER ANALYSIS WINDOW (pause-only, toggled by button) ===
     if caVisible then
@@ -363,6 +372,10 @@ ui.onExclusiveHUD(function(mode)
                 end
             end
         end
+
+        -- Keep restored layouts reachable after resolution/monitor changes.
+        caWinPos.x = math.max(0, math.min(math.max(0, screen.x - caWinSize.x), caWinPos.x))
+        caWinPos.y = math.max(0, math.min(math.max(0, screen.y - caWinSize.y), caWinPos.y))
 
         local cx, cy = caWinPos.x, caWinPos.y
         local cw, ch = caWinSize.x, caWinSize.y
@@ -413,15 +426,23 @@ ui.onExclusiveHUD(function(mode)
             end
         end
 
-        ui.toolWindow('ac_tracer_pause_ca', caWinPos, caWinSize, true, true, function()
-            corner_analysis.draw(0, state.currentLap, state.getComparisonLap(), state.trackCorners)
+        -- Draw corner analysis background
+        ui.drawRectFilled(caWinPos, caWinPos + caWinSize, rgbm(0.08, 0.08, 0.1, 0.95), 4)
+        ui.drawRect(caWinPos, caWinPos + caWinSize, rgbm(0.3, 0.3, 0.4, 0.5), 4)
 
-            local ws = ui.windowSize()
-            local g = vec2(ws.x, ws.y)
-            ui.drawLine(g - vec2(12, 0), g - vec2(0, 12), rgbm(1, 1, 1, 0.3), 1.5)
-            ui.drawLine(g - vec2(8, 0), g - vec2(0, 8), rgbm(1, 1, 1, 0.3), 1.5)
-            ui.drawLine(g - vec2(4, 0), g - vec2(0, 4), rgbm(1, 1, 1, 0.3), 1.5)
-        end)
+        ui.setCursorScreenPos(caWinPos)
+        ui.beginChild('pause_ca', caWinSize, false, ui.WindowFlags.NoScrollbar + ui.WindowFlags.NoScrollWithMouse)
+        local ok, err = pcall(corner_analysis.draw, 0, state.currentLap, state.getComparisonLap(), state.trackCorners)
+        if not ok then
+            ui.textColored('Corner analysis error: ' .. tostring(err), rgbm(1, 0.3, 0.3, 1))
+        end
+        ui.endChild()
+
+        -- Resize grip
+        local g = caWinPos + caWinSize
+        ui.drawLine(g - vec2(12, 0), g - vec2(0, 12), rgbm(1, 1, 1, 0.3), 1.5)
+        ui.drawLine(g - vec2(8, 0), g - vec2(0, 8), rgbm(1, 1, 1, 0.3), 1.5)
+        ui.drawLine(g - vec2(4, 0), g - vec2(0, 4), rgbm(1, 1, 1, 0.3), 1.5)
     end
 
 end)
@@ -446,6 +467,9 @@ local loadButtonHeldTriggered = false
 
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
+
+-- Focus window: tracks last-known content state so we only call setVisible on transitions
+local focusContentLastFrame = nil
 
 function script.update(dt)
     currentCar = ac.getCar(0)
@@ -572,9 +596,20 @@ function script.update(dt)
     -- Update corner analysis (live tracking)
     corner_analysis.update(currentCar, state.currentLap, state.getComparisonLap(), state.trackCorners)
 
-    -- Auto-hide telemetry window when above speed threshold (traces always visible)
+    -- Hide focus window entirely when no notes/images exist for this track.
+    -- Only act on transitions to avoid fighting manual toggles every frame.
+    local hasFocus = focus.hasContent()
+    if hasFocus ~= focusContentLastFrame then
+        ui_utils.setWindowVisible("focus", hasFocus)
+        focusContentLastFrame = hasFocus
+    end
+
+    -- Auto-hide telemetry/focus windows when above speed threshold
+    -- (traces always visible). Focus only joins the auto-hide list when
+    -- it has content; otherwise it's already force-hidden above.
     if settings.telemetryAutoHide() then
-        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed(), {"telemetry"})
+        local autoHideIds = hasFocus and {"telemetry", "focus"} or {"telemetry"}
+        ui_utils.updateAutoHide(dt, currentCar.speedKmh, settings.telemetryAutoHideSpeed(), autoHideIds)
     end
 end
 
@@ -604,6 +639,10 @@ end
 
 function script.windowDelta(dt)
     delta_bar.draw(dt, state.currentLap, state.getComparisonLap(), state.trackPosition, state.trackCorners, currentCar)
+end
+
+function script.windowFocus(dt)
+    focus.draw(dt)
 end
 
 -- Called when app is shutting down

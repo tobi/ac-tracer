@@ -31,8 +31,16 @@ local motecFastestIdx = nil  -- Index of fastest lap
 local motecStatus = nil      -- Status message for UI feedback
 local motecImporting = false -- Currently importing a lap
 
--- Collapsed section state
-local collapsedSections = {}
+-- Collapsed section state (keyed per-section).
+-- Defaults: user-curated laps ("this_session" and "references") are expanded.
+-- Secondary sources ("fastest_saved", "other_cars", "legacy_motec",
+-- "motec_import") are collapsed to keep the picker compact.
+local collapsedSections = {
+    fastest_saved = true,
+    other_cars = true,
+    legacy_motec = true,
+    motec_import = true,
+}
 
 --------------------------------------------------------------------------------
 -- Callbacks
@@ -498,16 +506,43 @@ local function drawSeparator(contentX, py, contentW)
     return py + 8
 end
 
---- Draw the grouped file sections (autosave, references, other cars, legacy/motec)
+--- Draw the grouped file sections.
+--- Order: References (primary, expanded) → Fastest Saved → Other Cars →
+--- MoTeC / Legacy. All sections are collapsible; only References is expanded
+--- by default since that's where user-curated laps live.
 ---@return number New Y position
 local function drawFileSections(contentX, py, contentW, rowOptions, maxY)
     local st = getState()
     local grouped = file_utils.scanCSVFilesGrouped(st.track, st.car)
 
+    -- References (primary, always shown even when empty so the user sees where to put laps)
+    py = drawSeparator(contentX, py, contentW)
+    local refsExpanded = drawSectionHeader(contentX, py, contentW,
+        string.format("References (%d)", #grouped.references),
+        theme.status.warning, "references")
+    py = py + 18
+
+    if refsExpanded then
+        if #grouped.references > 0 then
+            for j, fileInfo in ipairs(grouped.references) do
+                if maxY and py > maxY - 40 then break end
+                py = drawCSVRow(contentX, py, contentW, fileInfo, "ref" .. j, rowOptions)
+            end
+        else
+            ui.setCursor(vec2(contentX + 10, py))
+            ui.pushFont(ui.Font.Small)
+            ui.textColored("No reference laps saved for this car yet", theme.text.muted)
+            ui.popFont()
+            py = py + 18
+        end
+    end
+
     -- Fastest Saved (top 3 from autosave)
     if #grouped.autosave > 0 then
         py = drawSeparator(contentX, py, contentW)
-        local expanded = drawSectionHeader(contentX, py, contentW, "Fastest Saved", theme.status.info, nil)
+        local expanded = drawSectionHeader(contentX, py, contentW,
+            string.format("Fastest Saved (%d)", math.min(3, #grouped.autosave)),
+            theme.status.info, "fastest_saved")
         py = py + 18
 
         if expanded then
@@ -518,18 +553,6 @@ local function drawFileSections(contentX, py, contentW, rowOptions, maxY)
                 py = drawCSVRow(contentX, py, contentW, fileInfo, "auto" .. shown, rowOptions)
                 shown = shown + 1
             end
-        end
-    end
-
-    -- References
-    if #grouped.references > 0 then
-        py = drawSeparator(contentX, py, contentW)
-        drawSectionHeader(contentX, py, contentW, "References", theme.status.warning, nil)
-        py = py + 18
-
-        for j, fileInfo in ipairs(grouped.references) do
-            if maxY and py > maxY - 40 then break end
-            py = drawCSVRow(contentX, py, contentW, fileInfo, "ref" .. j, rowOptions)
         end
     end
 
@@ -635,52 +658,67 @@ function lap_picker.drawPopover(x, y, width, height, options)
     end
     py = py + 25
 
-    py = drawSeparator(contentX, py, contentW)
+    -- Scrollable content area (reserves space for the Close button)
+    local closeBtnH = 24
+    local scrollY = py
+    local scrollH = (y + height) - scrollY - padding - closeBtnH
+    if scrollH < 60 then scrollH = 60 end
 
-    -- Current Session Laps
-    drawSectionHeader(contentX, py, contentW, "This Session", theme.status.success, nil)
-    py = py + 18
-
-    local currentSessionLaps = st.getCurrentSessionLaps()
-    if #currentSessionLaps > 0 then
-        local shown = 0
-        for _, entry in ipairs(currentSessionLaps) do
-            if shown < maxSessionLaps then
-                py = drawLapRow(contentX, py, contentW, entry.lap, entry.index, {
-                    showCurrent = showCurrent,
-                    showReference = showReference,
-                    onSelectCurrent = options.onSelectCurrent,
-                    onSelectReference = options.onSelectReference,
-                })
-                shown = shown + 1
-            end
-        end
-    else
-        ui.setCursor(vec2(contentX + 10, py))
-        ui.pushFont(ui.Font.Small)
-        ui.textColored("No laps yet", theme.text.muted)
-        ui.popFont()
-        py = py + 20
-    end
-
-    -- File sections (autosave, references, other cars, legacy)
     local rowOptions = {
         showCurrent = showCurrent,
         showReference = showReference,
         onSelectCurrent = options.onSelectCurrent,
         onSelectReference = options.onSelectReference,
     }
-    py = drawFileSections(contentX, py, contentW, rowOptions, y + height)
 
-    -- MoTeC Import
-    py = py + 5
-    ui.drawLine(vec2(contentX, py), vec2(contentX + contentW, py), theme.grid.separator, 1)
-    py = py + 10
-    py = drawMotecImportSection(contentX, py, contentW, y + height - 40)
+    ui.setCursor(vec2(contentX, scrollY))
+    ui.childWindow('lap_picker_popover_scroll', vec2(contentW, scrollH), function()
+        local innerX = 0
+        local innerW = contentW
+        local innerY = 0
 
-    -- Close button
-    py = y + height - 30
-    ui.setCursor(vec2(contentX, py))
+        -- File sections first (References primary)
+        innerY = drawFileSections(innerX, innerY, innerW, rowOptions, nil)
+
+        -- Current Session (collapsible)
+        innerY = drawSeparator(innerX, innerY, innerW)
+        local currentSessionLaps = st.getCurrentSessionLaps()
+        local sessionExpanded = drawSectionHeader(innerX, innerY, innerW,
+            string.format("This Session (%d)", #currentSessionLaps),
+            theme.status.success, "this_session")
+        innerY = innerY + 18
+
+        if sessionExpanded then
+            if #currentSessionLaps > 0 then
+                local shown = 0
+                for _, entry in ipairs(currentSessionLaps) do
+                    if shown < maxSessionLaps then
+                        innerY = drawLapRow(innerX, innerY, innerW, entry.lap, entry.index, rowOptions)
+                        shown = shown + 1
+                    end
+                end
+            else
+                ui.setCursor(vec2(innerX + 10, innerY))
+                ui.pushFont(ui.Font.Small)
+                ui.textColored("No laps yet", theme.text.muted)
+                ui.popFont()
+                innerY = innerY + 20
+            end
+        end
+
+        -- MoTeC Import (collapsible)
+        innerY = drawSeparator(innerX, innerY, innerW)
+        local motecExpanded = drawSectionHeader(innerX, innerY, innerW,
+            "Import MoTeC .ld", theme.text.muted, "motec_import")
+        innerY = innerY + 18
+        if motecExpanded then
+            innerY = drawMotecImportSection(innerX, innerY, innerW, innerY + scrollH)
+        end
+    end)
+
+    -- Close button (pinned to the bottom of the popover)
+    local closeY = y + height - closeBtnH
+    ui.setCursor(vec2(contentX, closeY))
     if ui.button("Close##picker", vec2(contentW, 0)) then
         if options.onClose then
             options.onClose()
@@ -768,31 +806,39 @@ function lap_picker.draw(dt)
     ui.childWindow('lap_picker_scroll', vec2(windowSize.x, scrollAreaHeight), function()
         local py = 0
 
-        -- Current Session
-        drawSectionHeader(padding, py, contentW, "This Session", theme.status.success, nil)
-        py = py + 16
-
-        local currentSessionLaps = st.getCurrentSessionLaps()
-        if #currentSessionLaps > 0 then
-            for _, entry in ipairs(currentSessionLaps) do
-                py = drawLapRow(padding, py, contentW, entry.lap, entry.index, rowOptions)
-            end
-        else
-            ui.setCursor(vec2(padding + 10, py))
-            ui.pushFont(ui.Font.Small)
-            ui.textColored("No laps yet", theme.text.muted)
-            ui.popFont()
-            py = py + 18
-        end
-
-        -- File sections (autosave, references, other cars, legacy)
+        -- File sections (References first, then Fastest Saved, Other Cars, Legacy)
         py = drawFileSections(padding, py, contentW, rowOptions, nil)
 
-        -- MoTeC Import
-        py = py + 5
-        ui.drawLine(vec2(padding, py), vec2(contentW + padding, py), theme.grid.separator, 1)
-        py = py + 10
-        py = drawMotecImportSection(padding, py, contentW, windowSize.y)
+        -- Current Session (collapsible)
+        py = drawSeparator(padding, py, contentW)
+        local currentSessionLaps = st.getCurrentSessionLaps()
+        local sessionExpanded = drawSectionHeader(padding, py, contentW,
+            string.format("This Session (%d)", #currentSessionLaps),
+            theme.status.success, "this_session")
+        py = py + 18
+
+        if sessionExpanded then
+            if #currentSessionLaps > 0 then
+                for _, entry in ipairs(currentSessionLaps) do
+                    py = drawLapRow(padding, py, contentW, entry.lap, entry.index, rowOptions)
+                end
+            else
+                ui.setCursor(vec2(padding + 10, py))
+                ui.pushFont(ui.Font.Small)
+                ui.textColored("No laps yet", theme.text.muted)
+                ui.popFont()
+                py = py + 18
+            end
+        end
+
+        -- MoTeC Import (collapsible)
+        py = drawSeparator(padding, py, contentW)
+        local motecExpanded = drawSectionHeader(padding, py, contentW,
+            "Import MoTeC .ld", theme.text.muted, "motec_import")
+        py = py + 18
+        if motecExpanded then
+            py = drawMotecImportSection(padding, py, contentW, windowSize.y)
+        end
     end)
 end
 

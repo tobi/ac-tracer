@@ -784,11 +784,47 @@ local function loadBestLap()
     local key = getStorageKey('bestlap')
     local data = ac.storage[key]
     if not data then return false end
-    
+
     local loaded = lap.deserialize(data)
     if loaded and loaded:length() > 10 then
         state.bestLap = loaded
         ac.log("AC Tracer: Loaded best lap from storage")
+        return true
+    end
+    return false
+end
+
+--- Auto-load fastest lap from the references folder for the current track/car
+--- Called on session init when no best lap was restored from storage
+local function loadFastestReferenceFromDisk()
+    if not state.track or not state.car then return false end
+
+    local refsDir = paths.referencesDir(state.track, state.car)
+    if not io.dirExists(refsDir) then return false end
+
+    local files = io.scanDir(refsDir, "*.csv")
+    if not files or #files == 0 then return false end
+
+    -- Pick the fastest by parsed lap time from filename
+    local bestPath, bestTime = nil, nil
+    for _, filename in ipairs(files) do
+        local ms = file_utils.parseLapTimeFromFilename(filename)
+        if ms and (not bestTime or ms < bestTime) then
+            bestTime = ms
+            bestPath = refsDir .. filename
+        end
+    end
+
+    -- Fallback: if nothing had a parseable time, just use the first file
+    if not bestPath then
+        bestPath = refsDir .. files[1]
+    end
+
+    local trackLength = ac.getSim().trackLengthM
+    local loaded = lap.fromCSV(bestPath, state.track, state.car, trackLength)
+    if loaded and loaded:length() > 10 then
+        state.bestLap = loaded
+        ac.log("AC Tracer: Auto-loaded fastest reference: " .. bestPath)
         return true
     end
     return false
@@ -1189,7 +1225,10 @@ function state.init(car)
     loadCornersFromFile()
     
     -- Load best lap from ac.storage (fast restore cache)
-    loadBestLap()
+    -- If none cached, fall back to the fastest CSV in the references folder
+    if not loadBestLap() then
+        loadFastestReferenceFromDisk()
+    end
     -- History is session-only now (past laps live on disk as CSV)
     state.history = history_storage.laps
     

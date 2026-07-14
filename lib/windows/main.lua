@@ -30,6 +30,9 @@ end
 ---@param overlapState table Overlap tracking state { startTime = number|nil }
 ---@param isReplay boolean|nil True if in replay mode (skip cphys DLL, use car.brake fallback)
 function main_window.updateHistory(car, history, overlapState, isReplay)
+    -- Don't record trace samples when nearly stationary
+    if car.speedKmh < 5 then return end
+
     local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
 
     table.insert(history.throttle, car.gas)
@@ -354,8 +357,11 @@ end
 -- Position to X Coordinate Conversion
 --------------------------------------------------------------------------------
 
-local function posToX(pos, positions, x, w)
+local function posToX(pos, positions, x, w, maxPts)
     if not positions or #positions < 2 then return nil end
+    maxPts = maxPts or #positions
+    local step = w / (maxPts - 1)
+    local offsetX = (maxPts - #positions) * step
     for i = 1, #positions - 1 do
         local p1, p2 = positions[i], positions[i + 1]
         local targetPos = pos
@@ -363,8 +369,7 @@ local function posToX(pos, positions, x, w)
         if targetPos < p1 and p1 > 0.5 then targetPos = targetPos + 1 end
         if targetPos >= p1 and targetPos <= p2 then
             local t = (targetPos - p1) / (p2 - p1)
-            local step = w / (#positions - 1)
-            return x + (i - 1 + t) * step
+            return x + offsetX + (i - 1 + t) * step
         end
     end
     return nil
@@ -471,6 +476,8 @@ function main_window.draw(dt, car, history)
 
         drawGrid(traceOrigin, innerX, innerY, innerW, innerH)
 
+        local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
+
         -- Start/finish line (checkered flag pattern) - only at position 0
         -- Check if position 0 is within our sampled data range
         local hasZeroCrossing = false
@@ -485,7 +492,7 @@ function main_window.draw(dt, car, history)
         end
 
         if hasZeroCrossing then
-            local sfX = posToX(0, history.pos, innerX, historyW)
+            local sfX = posToX(0, history.pos, innerX, historyW, maxPoints)
             if sfX then
                 local sfW = 5
                 local squareSize = 4
@@ -509,7 +516,6 @@ function main_window.draw(dt, car, history)
         local maxGear = getMaxGear(history, ghostTraces)
         local ghostThickness = theme.style.ghostThickness
         local traceThickness = theme.style.traceThickness
-        local maxPoints = math.ceil(settings.timeWindow() * settings.sampleRate())
 
         -- Draw flag markers as background highlights (before traces) - in history area
         drawFlagMarkers(traceOrigin, innerX, innerY, historyW, innerH, history.flags, maxPoints)
