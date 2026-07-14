@@ -33,6 +33,7 @@ local function createTestLap(opts)
         table.insert(l.speed, opts.speed and opts.speed[i] or 100)
         table.insert(l.gear, opts.gear and opts.gear[i] or 3)
         table.insert(l.flags, opts.flags and opts.flags[i] or 0)
+        table.insert(l.gforce, opts.gforce and opts.gforce[i] or vec3(0, 0, 0))
     end
     
     return l
@@ -92,6 +93,48 @@ test("notes when reference trail-brakes materially longer", function()
 
     local notes = corner_analysis.collectNotes({ refStartPos = 0.1, refEndPos = 0.2 }, current, reference)
     assert_true(hasNote(notes, "reference trail-brakes"))
+end)
+
+test("brake pressure note requires more than ten percent difference", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 30 })
+    local reference = createTestLap({ numSamples = 30 })
+    for i = 1, 30 do current.brake[i], reference.brake[i] = 95, 100 end
+    local data = { refStartPos = 0.1, refEndPos = 0.2 }
+    assert_true(not hasNote(corner_analysis.collectNotes(data, current, reference), "braking ("))
+    for i = 1, 30 do current.brake[i] = 85 end
+    assert_true(hasNote(corner_analysis.collectNotes(data, current, reference), "braking ("))
+end)
+
+test("detects and compares steering plus lateral-load turn-in", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60 })
+    local reference = createTestLap({ numSamples = 60 })
+    for i = 1, 60 do
+        local speed = 80 + math.abs(45 - i)
+        current.speed[i], reference.speed[i] = speed, speed
+        current.steering[i] = i >= 20 and lap.normalizeSteer(12) or 0.5
+        reference.steering[i] = i >= 10 and lap.normalizeSteer(12) or 0.5
+        current.gforce[i] = vec3(i >= 20 and 0.5 or 0, 0, -0.4)
+        reference.gforce[i] = vec3(i >= 10 and 0.5 or 0, 0, -0.4)
+    end
+    local currentAnalysis = corner_analysis.analyzeCorner(current, { number = 1, startPos = 0.1, endPos = 0.2 })
+    local refAnalysis = corner_analysis.analyzeCorner(reference, { number = 1, startPos = 0.1, endPos = 0.2 })
+    local comparison = corner_analysis.compareCorners(currentAnalysis, refAnalysis)
+    assert_not_nil(currentAnalysis.turnInPos)
+    assert_true(comparison.turnInDeltaM > 10)
+    assert_true(hasNote(corner_analysis.collectNotes(comparison), "turn-in"))
+end)
+
+test("flags combined grip underuse early and mid-corner", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local data = {
+        currentCombinedGripEarly = 0.65, refCombinedGripEarly = 1.0,
+        currentCombinedGripMid = 0.70, refCombinedGripMid = 1.0,
+    }
+    local notes = corner_analysis.collectNotes(data)
+    assert_true(hasNote(notes, "less combined grip early corner"))
+    assert_true(hasNote(notes, "less combined grip mid corner"))
 end)
 
 --------------------------------------------------------------------------------

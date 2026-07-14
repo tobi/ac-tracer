@@ -484,9 +484,9 @@ local function analyzeBrakePressure(currentLap, refLap, data)
         end
     end
 
-    -- Only report if significant difference (> 5 bar)
+    -- Only report if pressure differs by more than 10% from the reference.
     local diffBar = currentMaxBar - refMaxBar
-    if math.abs(diffBar) < 5 then return nil end
+    if refMaxBar <= 0 or math.abs(diffBar) / refMaxBar <= 0.10 then return nil end
 
     local dir = diffBar < 0 and "lighter" or "harder"
     return { text = string.format("%s braking (%.0f vs %.0f bar)", dir, currentMaxBar, refMaxBar), severity = "info" }
@@ -520,6 +520,98 @@ local function analyzeDownshiftReaction(data)
 
     local text = string.format("downshift after %.1fm of braking", data.currentDownshiftDistanceM)
     return { text = text, severity = "info" }
+end
+
+local function gforceComponents(sample)
+    if not sample then return nil, nil end
+    return sample.x or sample[1], sample.z or sample[3]
+end
+
+--- Find first sustained steering input which produces lateral load.
+local function detectTurnIn(lapData, startPos, endPos, apexPos)
+    if not lapData or not lapData.pos or not lapData.steering then return nil, nil end
+    local endSearch = apexPos or endPos
+    local STEER_DEG = 5
+    local SUSTAINED = 4
+    local CONFIRM_WINDOW = 12
+    local LAT_G_CONFIRM = 0.15
+
+    for i = 1, #lapData.pos do
+        local pos = lapData.pos[i]
+        if lap.isInRange(pos, startPos, endSearch) then
+            local sustained = true
+            for j = i, math.min(i + SUSTAINED - 1, #lapData.steering) do
+                local deg = math.abs(lap.steerToDegrees(lapData.steering[j] or 0.5))
+                if deg < STEER_DEG then sustained = false break end
+            end
+            if sustained then
+                local hasGData, lateralConfirmed = false, false
+                for j = i, math.min(i + CONFIRM_WINDOW, #lapData.pos) do
+                    local latG = gforceComponents(lapData.gforce and lapData.gforce[j])
+                    if latG ~= nil then
+                        hasGData = true
+                        if math.abs(latG) >= LAT_G_CONFIRM then lateralConfirmed = true break end
+                    end
+                end
+                if lateralConfirmed or not hasGData then return pos, i end
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function nearestIndexForPos(lapData, targetPos, startIndex)
+    if not targetPos then return nil end
+    local bestIndex, bestDistance
+    for i = startIndex or 1, #lapData.pos do
+        local distance = math.abs((lapData.pos[i] or 0) - targetPos)
+        distance = math.min(distance, 1 - distance)
+        if not bestDistance or distance < bestDistance then
+            bestIndex, bestDistance = i, distance
+        end
+    end
+    return bestIndex
+end
+
+--- Average combined braking/lateral acceleration in early and mid-corner phases.
+local function combinedGripPhases(lapData, turnInIndex, apexPos)
+    if not lapData or not turnInIndex or not lapData.gforce or #lapData.gforce == 0 then return nil, nil end
+    local apexIndex = nearestIndexForPos(lapData, apexPos, turnInIndex)
+    if not apexIndex or apexIndex <= turnInIndex + 1 then return nil, nil end
+    local splitIndex = math.floor((turnInIndex + apexIndex) / 2)
+
+    local function average(fromIndex, toIndex)
+        local sum, count = 0, 0
+        for i = fromIndex, toIndex do
+            local latG, longG = gforceComponents(lapData.gforce[i])
+            if latG ~= nil and longG ~= nil then
+                local brakingG = math.max(0, -longG)
+                sum = sum + math.sqrt(latG * latG + brakingG * brakingG)
+                count = count + 1
+            end
+        end
+        return count >= 2 and sum / count or nil
+    end
+
+    return average(turnInIndex, splitIndex), average(splitIndex + 1, apexIndex)
+end
+
+local function analyzeTurnIn(data)
+    if not data.turnInDeltaM or math.abs(data.turnInDeltaM) < 10 then return nil end
+    local direction = data.turnInDeltaM > 0 and "later" or "earlier"
+    return { text = string.format("turn-in %.0fm %s than reference", math.abs(data.turnInDeltaM), direction), severity = "info" }
+end
+
+local function analyzeCombinedGrip(data, phase)
+    local current = phase == "early" and data.currentCombinedGripEarly or data.currentCombinedGripMid
+    local reference = phase == "early" and data.refCombinedGripEarly or data.refCombinedGripMid
+    if not current or not reference or reference < 0.2 then return nil end
+    local deficit = reference - current
+    if deficit < 0.15 or current / reference >= 0.88 then return nil end
+    return {
+        text = string.format("%.2fg less combined grip %s corner", deficit, phase == "early" and "early" or "mid"),
+        severity = "info"
+    }
 end
 
 --- Compare completion timing of the downshift sequence with the reference.
@@ -655,6 +747,9 @@ function corner_analysis.collectNotes(data, currentLap, refLap)
     addNote(analyzeEntrySpeed(data))
     addNote(analyzeDownshiftReaction(data))
     addNote(analyzeLastDownshiftTiming(data))
+    addNote(analyzeTurnIn(data))
+    addNote(analyzeCombinedGrip(data, "early"))
+    addNote(analyzeCombinedGrip(data, "mid"))
 
     -- Lap-based analysis (flags, pressure, timing)
     if currentLap then
@@ -704,6 +799,9 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         downshiftDistanceM = math.abs(ui_utils.positionDeltaToMeters(firstDownshiftPos, brakePos) or 0)
     end
 
+    local turnInPos, turnInIndex = detectTurnIn(lapData, cornerDef.startPos, cornerDef.endPos, apexPos)
+    local combinedGripEarly, combinedGripMid = combinedGripPhases(lapData, turnInIndex, apexPos)
+
     return {
         number = cornerDef.number,
         startPos = cornerDef.startPos,
@@ -722,6 +820,9 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         downshiftFirstMs = downshiftFirstMs,  -- Reaction time: brake to first downshift
         downshiftLastMs = downshiftLastMs,    -- Total shift time: brake to last downshift
         downshiftDistanceM = downshiftDistanceM,  -- Brake to first downshift distance
+        turnInPos = turnInPos,
+        combinedGripEarly = combinedGripEarly,
+        combinedGripMid = combinedGripMid,
     }
 end
 
@@ -786,6 +887,12 @@ function corner_analysis.compareCorners(current, reference)
         refMinGear = reference.minGear,
         refDownshiftFirstMs = reference.downshiftFirstMs,
         refDownshiftLastMs = reference.downshiftLastMs,
+        refTurnInPos = reference.turnInPos,
+        refCombinedGripEarly = reference.combinedGripEarly,
+        refCombinedGripMid = reference.combinedGripMid,
+        currentTurnInPos = current.turnInPos,
+        currentCombinedGripEarly = current.combinedGripEarly,
+        currentCombinedGripMid = current.combinedGripMid,
         -- Deltas
         timeDelta = timeDelta,
         entrySpeedDelta = current.entrySpeed and reference.entrySpeed and
@@ -797,6 +904,12 @@ function corner_analysis.compareCorners(current, reference)
         steeringDelta = (current.maxSteeringDeg or 0) - (reference.maxSteeringDeg or 0),
         gearDelta = (current.minGear and reference.minGear) and (current.minGear - reference.minGear) or nil,
         refOverlapTime = reference.overlapTime or 0,
+        turnInDeltaM = (current.turnInPos and reference.turnInPos) and
+            scoring.positionDeltaToMeters(current.turnInPos, reference.turnInPos) or nil,
+        combinedGripEarlyDelta = (current.combinedGripEarly and reference.combinedGripEarly) and
+            (current.combinedGripEarly - reference.combinedGripEarly) or nil,
+        combinedGripMidDelta = (current.combinedGripMid and reference.combinedGripMid) and
+            (current.combinedGripMid - reference.combinedGripMid) or nil,
     }
 end
 
@@ -1440,6 +1553,21 @@ local function drawPedalTraces(x, y, w, h, currentPedals, refPedals, data)
                 ui.drawLine(vec2(curBrakeX, y), vec2(curBrakeX, y + h), rgbm(1, 1, 1, 1), 3)
             end
         end
+
+
+        -- Turn-in markers: reference dashed cyan, current solid cyan.
+        if data.refTurnInPos then
+            local refTurnX = posToX(data.refTurnInPos)
+            if refTurnX then
+                ui_utils.drawDashedLine(vec2(refTurnX, y), vec2(refTurnX, y + h), rgbm(0.2, 0.8, 1, 0.75), 2, 4, 3)
+            end
+        end
+        if data.currentTurnInPos then
+            local curTurnX = posToX(data.currentTurnInPos)
+            if curTurnX then
+                ui.drawLine(vec2(curTurnX, y), vec2(curTurnX, y + h), rgbm(0.2, 0.8, 1, 1), 2)
+            end
+        end
     end
 
     -- Outline
@@ -1736,10 +1864,10 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         local barTotalW = panelW - panelPadding * 2 - 4
         local barH = 14
         local barSpacing = 2
-        local labelW = 32
+        local labelW = 38
         local valueW = 50  -- Width for value text with unit
         
-        local function drawDeltaBar(label, delta, maxDelta, unit, invertColor)
+        local function drawDeltaBar(label, delta, maxDelta, unit, invertColor, decimals)
             if delta == nil then return end
             
             local barW = barTotalW - labelW - valueW - 8
@@ -1792,7 +1920,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             
             -- Value text with unit (right side)
             local sign = delta >= 0 and "+" or ""
-            local valueText = string.format("%s%.0f %s", sign, delta, unit)
+            local valueText = string.format("%s%." .. tostring(decimals or 0) .. "f %s", sign, delta, unit)
             local valueColor = delta > 0 and theme.delta.positive or (delta < 0 and theme.delta.negative or theme.text.muted)
             if invertColor then
                 valueColor = delta < 0 and theme.delta.positive or (delta > 0 and theme.delta.negative or theme.text.muted)
@@ -1880,6 +2008,11 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             local apexMeters = scoring.positionDeltaToMeters(displayData.currentApexPos, displayData.refApexPos)
             drawPositionBar("Apex", apexMeters, barMaxPos)
         end
+        drawPositionBar("Turn", displayData.turnInDeltaM, barMaxPos)
+
+        statsY = statsY + 6
+        drawDeltaBar("Grip E", displayData.combinedGripEarlyDelta, 0.5, "g", false, 2)
+        drawDeltaBar("Grip M", displayData.combinedGripMidDelta, 0.5, "g", false, 2)
 
         -- Get lap data (use frozen lap data if viewing from telemetry, or displayLap for live)
         local liveLap, refLap
@@ -1895,7 +2028,7 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
 
         -- NOTES section (only shown if there are significant observations)
         local notes = corner_analysis.collectNotes(displayData, liveLap, refLap)
-        local maxNotes = 3  -- Limit to prevent overflow
+        local maxNotes = 5  -- Keep the new technique observations visible
 
         -- Draw notes section if we have any valid notes
         if notes and #notes > 0 then
