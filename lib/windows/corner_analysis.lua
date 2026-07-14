@@ -522,6 +522,118 @@ local function analyzeDownshiftReaction(data)
     return { text = text, severity = "info" }
 end
 
+--- Compare completion timing of the downshift sequence with the reference.
+local function analyzeLastDownshiftTiming(data)
+    if not data.currentDownshiftLastMs or not data.refDownshiftLastMs then return nil end
+
+    local diffMs = data.currentDownshiftLastMs - data.refDownshiftLastMs
+    local LATE_THRESHOLD_MS = 300
+    if diffMs < LATE_THRESHOLD_MS then return nil end
+
+    return {
+        text = string.format("last downshift %.1fs later than reference", diffMs / 1000),
+        severity = "info"
+    }
+end
+
+--- Measure how quickly brake pressure rises from initial application to 90% of peak.
+local function brakeApplicationRate(lapData, startPos, endPos)
+    if not lapData or not lapData.pos or not lapData.times then return nil end
+
+    local peakBar = 0
+    for i = 1, #lapData.pos do
+        if lap.isInRange(lapData.pos[i], startPos, endPos) then
+            peakBar = math.max(peakBar, lapData.brake[i] or 0)
+        end
+    end
+    if peakBar < 20 then return nil end
+
+    local onsetBar = math.max(5, peakBar * 0.1)
+    local targetBar = peakBar * 0.9
+    local onsetTime, targetTime
+    for i = 1, #lapData.pos do
+        if lap.isInRange(lapData.pos[i], startPos, endPos) then
+            local pressure = lapData.brake[i] or 0
+            if not onsetTime and pressure >= onsetBar then onsetTime = lapData.times[i] end
+            if onsetTime and pressure >= targetBar then
+                targetTime = lapData.times[i]
+                break
+            end
+        end
+    end
+
+    if not onsetTime or not targetTime then return nil end
+    local riseTime = targetTime - onsetTime
+    if riseTime < 0.02 then riseTime = 0.02 end
+    return (targetBar - onsetBar) / riseTime
+end
+
+--- Note a materially slower brake-pressure ramp than the reference.
+local function analyzeBrakeApplicationRate(currentLap, refLap, data)
+    if not data.refStartPos or not data.refEndPos then return nil end
+    local currentRate = brakeApplicationRate(currentLap, data.refStartPos, data.refEndPos)
+    local refRate = brakeApplicationRate(refLap, data.refStartPos, data.refEndPos)
+    if not currentRate or not refRate or refRate < 50 then return nil end
+
+    local ratio = currentRate / refRate
+    if ratio >= 0.7 or refRate - currentRate < 30 then return nil end
+
+    return {
+        text = string.format("brake application rate %.0f%% slower than reference", (1 - ratio) * 100),
+        severity = "info"
+    }
+end
+
+--- Measure time spent releasing the brake after peak pressure.
+local function trailBrakeDuration(lapData, startPos, endPos)
+    if not lapData or not lapData.pos or not lapData.times then return nil end
+
+    local peakBar, peakIndex = 0, nil
+    for i = 1, #lapData.pos do
+        if lap.isInRange(lapData.pos[i], startPos, endPos) then
+            local pressure = lapData.brake[i] or 0
+            if pressure > peakBar then
+                peakBar, peakIndex = pressure, i
+            end
+        end
+    end
+    if not peakIndex or peakBar < 20 then return nil end
+
+    local releaseBar = math.max(5, peakBar * 0.1)
+    local releaseIndex = nil
+    local belowCount = 0
+    for i = peakIndex + 1, #lapData.pos do
+        if not lap.isInRange(lapData.pos[i], startPos, endPos) then break end
+        if (lapData.brake[i] or 0) <= releaseBar then
+            belowCount = belowCount + 1
+            if belowCount >= 3 then
+                releaseIndex = i - 2
+                break
+            end
+        else
+            belowCount = 0
+        end
+    end
+    if not releaseIndex then return nil end
+    return math.max(0, (lapData.times[releaseIndex] or 0) - (lapData.times[peakIndex] or 0))
+end
+
+--- Note when the reference carries and releases brake pressure for longer.
+local function analyzeReferenceTrailBraking(currentLap, refLap, data)
+    if not data.refStartPos or not data.refEndPos then return nil end
+    local currentDuration = trailBrakeDuration(currentLap, data.refStartPos, data.refEndPos)
+    local refDuration = trailBrakeDuration(refLap, data.refStartPos, data.refEndPos)
+    if not currentDuration or not refDuration then return nil end
+
+    local diff = refDuration - currentDuration
+    if diff < 0.3 or refDuration < currentDuration * 1.3 then return nil end
+
+    return {
+        text = string.format("reference trail-brakes %.1fs longer", diff),
+        severity = "info"
+    }
+end
+
 --- Collect all corner notes by running analysis functions
 ---@param data table Corner comparison data
 ---@param currentLap table Current lap data (optional, for flag-based analysis)
@@ -542,6 +654,7 @@ function corner_analysis.collectNotes(data, currentLap, refLap)
     addNote(analyzeCoasting(data))
     addNote(analyzeEntrySpeed(data))
     addNote(analyzeDownshiftReaction(data))
+    addNote(analyzeLastDownshiftTiming(data))
 
     -- Lap-based analysis (flags, pressure, timing)
     if currentLap then
@@ -556,6 +669,8 @@ function corner_analysis.collectNotes(data, currentLap, refLap)
     if currentLap and refLap then
         addNote(analyzeThrottleTiming(currentLap, refLap, data))
         addNote(analyzeBrakePressure(currentLap, refLap, data))
+        addNote(analyzeBrakeApplicationRate(currentLap, refLap, data))
+        addNote(analyzeReferenceTrailBraking(currentLap, refLap, data))
     end
 
     return notes

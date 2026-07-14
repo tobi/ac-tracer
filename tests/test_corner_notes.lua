@@ -38,6 +38,62 @@ local function createTestLap(opts)
     return l
 end
 
+local function hasNote(notes, text)
+    for _, note in ipairs(notes or {}) do
+        if note.text and note.text:find(text, 1, true) then return true end
+    end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- Tests for coaching comparisons
+--------------------------------------------------------------------------------
+
+suite("Corner coaching comparisons")
+
+test("notes when final downshift is materially later than reference", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local notes = corner_analysis.collectNotes({
+        currentDownshiftLastMs = 1200,
+        refDownshiftLastMs = 700,
+    })
+    assert_true(hasNote(notes, "last downshift 0.5s later than reference"))
+end)
+
+test("notes when brake application rate is materially slower", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+    local reference = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+
+    for i = 1, 60 do
+        current.brake[i] = i < 10 and 0 or math.min(100, (i - 9) * 5)
+        reference.brake[i] = i < 10 and 0 or math.min(100, (i - 9) * 20)
+    end
+
+    local notes = corner_analysis.collectNotes({ refStartPos = 0.1, refEndPos = 0.2 }, current, reference)
+    assert_true(hasNote(notes, "brake application rate"))
+end)
+
+test("notes when reference trail-brakes materially longer", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+    local reference = createTestLap({ numSamples = 60, startPos = 0.1, endPos = 0.2 })
+
+    for i = 1, 60 do
+        if i < 10 then
+            current.brake[i], reference.brake[i] = 0, 0
+        elseif i == 10 then
+            current.brake[i], reference.brake[i] = 100, 100
+        else
+            current.brake[i] = i <= 16 and math.max(0, 100 - (i - 10) * 18) or 0
+            reference.brake[i] = i <= 45 and math.max(0, 100 - (i - 10) * 3) or 0
+        end
+    end
+
+    local notes = corner_analysis.collectNotes({ refStartPos = 0.1, refEndPos = 0.2 }, current, reference)
+    assert_true(hasNote(notes, "reference trail-brakes"))
+end)
+
 --------------------------------------------------------------------------------
 -- Tests for flag-based analysis (lockups, TC, offtrack, etc.)
 --------------------------------------------------------------------------------
