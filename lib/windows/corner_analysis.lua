@@ -1551,28 +1551,7 @@ local function drawMarkerLines(x, y, w, h, currentSpeeds, refSpeeds, data)
         return y + h - ((speed - minSpeed) / speedRange) * h
     end
 
-    -- Find apex from SAMPLED data so marker aligns with visual minimum in graph
-    -- This is more accurate than using raw lap data apex which may fall between samples
-    local curApexPos, curApexIdx, curApexSpeed = findSampledApex(currentSpeeds)
-    local refApexPos, refApexIdx, refApexSpeed = findSampledApex(refSpeeds)
-
-    -- Reference apex line (dashed white) - extends down to the ref speed line
-    if refApexPos then
-        local refApexX = posToX(refApexPos)
-        if refApexX then
-            local lineEndY = refApexSpeed and speedToY(refApexSpeed) or (y + h)
-            ui_utils.drawDashedLine(vec2(refApexX, y), vec2(refApexX, lineEndY), theme.marker.apexRef, 2, 5, 3)
-        end
-    end
-
-    -- Current apex line (solid yellow) - extends down to the current speed line
-    if curApexPos then
-        local curApexX = posToX(curApexPos)
-        if curApexX then
-            local lineEndY = curApexSpeed and speedToY(curApexSpeed) or (y + h)
-            ui.drawLine(vec2(curApexX, y), vec2(curApexX, lineEndY), theme.marker.apex, 3)
-        end
-    end
+    -- Apex/slowest-point marker lines intentionally hidden for now.
 
 end
 
