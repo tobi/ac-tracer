@@ -2061,6 +2061,8 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         -- POSITION section (white lines, early/late labels)
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
         drawPositionBar("Brake", brakeMeters, barMaxPos)
+        -- Turn-in is the next target after initial brake application.
+        drawPositionBar("Turn", displayData.turnInDeltaM, barMaxPos)
         drawPositionBar("Lift", liftOffMeters, barMaxPos)
         
         -- Apex position delta
@@ -2068,8 +2070,6 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             local apexMeters = scoring.positionDeltaToMeters(displayData.currentApexPos, displayData.refApexPos)
             drawPositionBar("Apex", apexMeters, barMaxPos)
         end
-        drawPositionBar("Turn", displayData.turnInDeltaM, barMaxPos)
-
         statsY = statsY + 6
         drawDeltaBar("Grip E", displayData.combinedGripEarlyDelta, 0.5, "g", false, 2)
         drawDeltaBar("Grip M", displayData.combinedGripMidDelta, 0.5, "g", false, 2)
