@@ -27,6 +27,7 @@ test("exports and re-imports lap data", function()
         l.gear[i] = math.min(6, math.floor(i / 5))
         l.fuel[i] = 50 - i * 0.1
         l.gforce[i] = vec3(0.02 * i, 0, 0.03 * i)
+        l.worldPos[i] = vec3(100 + i, 2.5, 200 + i * 2)
     end
 
     l.time = l.times[#l.times] * 1000
@@ -50,6 +51,9 @@ test("exports and re-imports lap data", function()
     assert_equal(loaded1.gear[idx], l.gear[idx], "Gear mismatch")
     assert_near(loaded1.gforce[idx].x, l.gforce[idx].x, 0.02, "G lat mismatch")
     assert_near(loaded1.gforce[idx].z, l.gforce[idx].z, 0.02, "G long mismatch")
+    assert_equal(#loaded1.worldPos, count, "World path should survive CSV import")
+    assert_near(loaded1.worldPos[idx].x, l.worldPos[idx].x, 0.01, "World X mismatch")
+    assert_near(loaded1.worldPos[idx].z, l.worldPos[idx].z, 0.01, "World Z mismatch")
 
     local path2, err2 = csv_export.saveLap(loaded1, { directory = baseDir, filename = "test_export_2.csv" })
     assert_not_nil(path2, err2 or "CSV export failed (second pass)")

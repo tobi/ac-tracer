@@ -7,6 +7,7 @@ local settings = require('lib.core.settings')
 local extended_brake = require('lib.core.brake')
 local theme = require('lib.ui.theme')
 local ui_utils = require('lib.ui.utils')
+local reference_line = require('lib.reference_line')
 
 local main_window = {}
 
@@ -67,21 +68,6 @@ function main_window.updateHistory(car, history, overlapState, isReplay)
         table.remove(history.flags, 1)
     end
 end
-
---- Restore history from a checkpoint snapshot
----@param history table History table to restore into
----@param snapshot table Snapshot to restore from
-function main_window.restoreHistory(history, snapshot)
-    if not snapshot then return end
-    -- Deep copy snapshot back into history
-    for field, arr in pairs(snapshot) do
-        history[field] = {}
-        for i = 1, #arr do
-            history[field][i] = arr[i]
-        end
-    end
-end
-
 
 --------------------------------------------------------------------------------
 -- Drawing Helpers
@@ -308,6 +294,39 @@ local function drawSpeed(origin, cx, y, w, car)
     ui.popFont()
 end
 
+--- Clear rolling samples after a training-sector return so the graph does not
+--- draw a discontinuity across the teleport.
+function main_window.clearHistory(history)
+    for _, values in pairs(history or {}) do
+        if type(values) == 'table' then
+            for i = #values, 1, -1 do table.remove(values, i) end
+        end
+    end
+end
+
+local function drawReferenceOffset(origin, cx, cy, r, car)
+    if settings.racingLineMode() == 0 then return end
+    local offsetCm = reference_line.lateralOffsetCm(state.bestLap, car)
+    if not offsetCm then return end
+
+    local width, height = r * 1.25, 5
+    local left = origin.x + cx - width / 2
+    local y = origin.y + cy + r * 0.40
+    local center = left + width / 2
+    local marker = center + math.clamp(offsetCm / 100, -1, 1) * width / 2
+    local color = rgbm(0.15, 0.55, 1, 0.9)
+    ui.drawRectFilled(vec2(left, y), vec2(left + width, y + height), rgbm(0.08, 0.1, 0.16, 0.9), 2)
+    ui.drawRectFilled(vec2(math.min(center, marker), y), vec2(math.max(center, marker), y + height), color, 1)
+    ui.drawLine(vec2(center, y - 2), vec2(center, y + height + 2), theme.text.muted, 1)
+
+    local direction = math.abs(offsetCm) < 0.5 and "" or (offsetCm > 0 and " R" or " L")
+    local text = string.format("REF %.0f cm%s", math.abs(offsetCm), direction)
+    ui.pushFont(ui.Font.Small)
+    ui.dwriteDrawTextClipped(text, math.max(8, r * 0.16),
+        vec2(left, y + height + 1), vec2(left + width, y + height + 14), 0.5, 0, false, color)
+    ui.popFont()
+end
+
 --------------------------------------------------------------------------------
 -- Window Toggle Buttons
 --------------------------------------------------------------------------------
@@ -427,6 +446,17 @@ local function calculateLayout(windowSize)
     layout.innerW = layout.traceW - layout.tracePad * 2
     layout.innerH = h - layout.tracePad * 2
 
+    if not settings.tracesEnabled() then
+        -- Pack the live pedal and steering controls against the left-side buttons.
+        local liveW = layout.barW * 2 + layout.barGap + layout.elementGap * 2 + layout.wheelR * 2
+        local liveStart = math.max(0, (w - liveW) / 2)
+        layout.traceW = 0
+        layout.innerW = 0
+        layout.brakeX = liveStart
+        layout.throttleX = layout.brakeX + layout.barW + layout.barGap
+        layout.wheelCX = layout.throttleX + layout.barW + layout.elementGap + layout.wheelR
+    end
+
     return layout
 end
 
@@ -460,7 +490,7 @@ function main_window.draw(dt, car, history)
     local origin = vec2(L.contentX, L.contentY)
     local traceOrigin = origin
 
-    if L.traceW > 10 then
+    if settings.tracesEnabled() and L.traceW > 10 then
         -- Dark background behind trace lines
         ui.drawRectFilled(traceOrigin, traceOrigin + vec2(L.traceW, L.traceH), theme.bg.graph, 4)
 
@@ -642,10 +672,11 @@ function main_window.draw(dt, car, history)
 
     drawWheel(origin, L.wheelCX, L.wheelCY, L.wheelR, car.steer, state.getGhostSteering())
     drawGear(origin, L.wheelCX, L.wheelCY, L.wheelR, car.gear, state.getGhostGear())
+    drawReferenceOffset(origin, L.wheelCX, L.wheelCY, L.wheelR, car)
     drawSpeed(origin, L.wheelCX, L.wheelCY + L.wheelR + 2, L.wheelR * 2, car)
 
     -- Toggle window buttons (left side, vertically stacked next to trace area)
-    local numButtons = 4
+    local numButtons = 5
     local availableHeight = L.contentH
     local minBtnSize = 18
     local maxBtnSize = 26
@@ -672,6 +703,7 @@ function main_window.draw(dt, car, history)
     drawToggleButton(vec2(btnLocalX, btnLocalY + btnSize + btnSpacing), "D", "Delta Bar", "delta", buttonSize)
     drawToggleButton(vec2(btnLocalX, btnLocalY + (btnSize + btnSpacing) * 2), "R", "Reference Lap", "referencelap", buttonSize)
     drawToggleButton(vec2(btnLocalX, btnLocalY + (btnSize + btnSpacing) * 3), "C", "Corner Analysis", "corners", buttonSize)
+    drawToggleButton(vec2(btnLocalX, btnLocalY + (btnSize + btnSpacing) * 4), "P", "Training Mode", "training", buttonSize)
 end
 
 return main_window

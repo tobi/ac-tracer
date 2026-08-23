@@ -85,6 +85,8 @@ function csv_export.saveLap(lapObj, options)
     f:write("\n")
 
     -- Header + units (must include Time and Lap Progression for parser)
+    local count = lapObj:length()
+    local hasWorldPath = lapObj.worldPos and #lapObj.worldPos == count
     local headers = {
         "Time",
         "Track",
@@ -136,12 +138,20 @@ function csv_export.saveLap(lapObj, options)
         "",
     }
 
+    if hasWorldPath then
+        headers[#headers + 1] = "Chassis World Pos X"
+        headers[#headers + 1] = "Chassis World Pos Y"
+        headers[#headers + 1] = "Chassis World Pos Z"
+        units[#units + 1] = "m"
+        units[#units + 1] = "m"
+        units[#units + 1] = "m"
+    end
+
     writeLine(f, headers, true)
     writeLine(f, units, true)
     f:write("\n")
 
     -- Data rows
-    local count = lapObj:length()
     for i = 1, count do
         local timeS = (lapObj.times and lapObj.times[i]) or ((i - 1) / lap.SAMPLE_RATE)
         local pos = lapObj.pos and lapObj.pos[i] or (i - 1) / (count - 1)
@@ -178,7 +188,7 @@ function csv_export.saveLap(lapObj, options)
         local clutchPct = (1 - clutchInverted) * 100  -- CSV expects non-inverted
         local steeringDeg = lap.steerToDegrees(steeringNorm)
 
-        writeLine(f, {
+        local row = {
             formatNumber(timeS, "%.3f"),
             lapObj.track or "",
             formatNumber(pos, "%.6f"),
@@ -202,7 +212,14 @@ function csv_export.saveLap(lapObj, options)
             tostring(lockupFR),
             tostring(lockupRL),
             tostring(lockupRR),
-        })
+        }
+        if hasWorldPath then
+            local world = lapObj.worldPos[i]
+            row[#row + 1] = formatNumber(world.x, "%.6f")
+            row[#row + 1] = formatNumber(world.y, "%.6f")
+            row[#row + 1] = formatNumber(world.z, "%.6f")
+        end
+        writeLine(f, row)
     end
 
     f:close()

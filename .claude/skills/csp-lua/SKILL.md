@@ -436,6 +436,27 @@ end
 
 For AI/traffic work, search `physics.setAI*`, `ac.SpawnSet`, and `physics.teleportCarTo`. For checkpoints, prefer `ac.saveCarStateAsync()` and `ac.loadCarState()` when you need a faithful car state snapshot.
 
+### Depth-tested world overlays
+
+For ribbons, gates, and other track-attached app visuals, register a transparent-track callback and set render state inside it:
+```lua
+render.on('main.track.transparent', function()
+  render.setBlendMode(render.BlendMode.AlphaBlend)
+  render.setCullMode(render.CullMode.None)
+  render.setDepthMode(render.DepthMode.ReadOnly)
+  drawWorldOverlay()
+end)
+```
+
+Use a stable, module-level `render.shaderedQuad` parameter table with a fixed `cacheKey`, fixed shader/value keys, and `directValuesExchange = true`. Reuse its `p1`–`p4` vectors and color values for every segment instead of allocating a shader table per draw. Keep logging out of render callbacks.
+
+To draw a track-spanning gate:
+- Get its center with `ac.trackProgressToWorldCoordinateTo(progress, center)`.
+- Sample a nearby progress value for the tangent, then get the across-track vector with `side:setCrossNormalized(tangent, vec3(0, -1, 0))`.
+- Use `ac.getTrackAISplineSides(progress)` to center and size the gate across the actual track width.
+
+For a thin racing-line ribbon, join downsampled consecutive world points with XZ-perpendicular strip quads. Raise them about 0.03–0.05 m to avoid z-fighting, use `DepthMode.ReadOnly` so cars and track geometry occlude them, apply fog in the shader, and cull segments outside the useful distance/progress window.
+
 ## FFI And Memory-Mapped Files
 
 For external telemetry or shared memory, use `ac.readMemoryMappedFile(name, layout, persist)` with a declared layout. Wrap setup in `pcall`; many users will not have the mapped file or companion DLL installed.

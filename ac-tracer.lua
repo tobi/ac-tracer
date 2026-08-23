@@ -9,6 +9,8 @@ local lap_picker = require('lib.windows.lap_picker')
 local delta_bar = require('lib.windows.delta_bar')
 local main_window = require('lib.windows.main')
 local focus = require('lib.windows.focus')
+local training_window = require('lib.windows.training')
+local training_sectors = require('lib.training_sectors')
 
 local ui_utils = require('lib.ui.utils')
 local theme = require('lib.ui.theme')
@@ -461,10 +463,6 @@ local updateTimer = 0
 -- Overlap tracking state (for flag detection)
 local overlapState = { startTime = nil }
 
--- Checkpoint load button hold tracking
-local loadButtonHeldTime = 0
-local loadButtonHeldTriggered = false
-
 -- Current car reference (updated once per frame in script.update)
 local currentCar = nil
 
@@ -478,64 +476,18 @@ function script.update(dt)
     local sim = ac.getSim()
     local isReplay = sim.isReplayActive
 
-    -- Skip all updates during pause (but allow replay)
-    if sim.isPaused then return end
+    -- Trace and telemetry state follows simulation time. Replay and a zero-speed
+    -- simulation must not keep a rolling trace alive.
+    if sim.isPaused or isReplay or (sim.dt or 0) <= 0 then return end
 
-    -- In replay mode, update traces + ghost/delta but skip lap recording, checkpoints, etc.
-    if isReplay then
-        -- Keep track position current so ghost traces and delta work
-        state.trackPosition = currentCar.splinePosition
-
-        updateTimer = updateTimer + dt
-        local sampleInterval = 1 / settings.sampleRate()
-        if updateTimer >= sampleInterval then
-            updateTimer = updateTimer - sampleInterval
-            main_window.updateHistory(currentCar, history, overlapState, true)
-        end
-        return
-    end
-
-    -- Checkpoint keybind polling (check before state update)
-    if settings.checkpointEnabled() then
-        local saveButton = settings.getSaveCheckpointButton()
-        local loadButton = settings.getLoadCheckpointButton()
-
-        -- Save checkpoint on button press (pass trace history to be captured synchronously)
-        if saveButton:pressed() then
-            state.saveCheckpoint(history)
-        end
-
-        -- Load checkpoint: press to cycle, hold to jump to 1/N
-        if loadButton:pressed() then
-            loadButtonHeldTime = 0
-            loadButtonHeldTriggered = false
-            -- Immediate response: cycle to next checkpoint
-            if state.loadCheckpoint() then
-                local traceSnapshot = state.getCheckpointTraceHistory()
-                main_window.restoreHistory(history, traceSnapshot)
-                delta_bar.reset()
-                overlapState.startTime = nil
-            end
-        end
-
-        if loadButton:down() then
-            loadButtonHeldTime = loadButtonHeldTime + dt
-            -- Hold: jump back to checkpoint 1/N
-            if loadButtonHeldTime > 0.5 and not loadButtonHeldTriggered then
-                state.resetCheckpointIndex()
-                if state.loadCheckpoint() then
-                    local traceSnapshot = state.getCheckpointTraceHistory()
-                    main_window.restoreHistory(history, traceSnapshot)
-                    delta_bar.reset()
-                    overlapState.startTime = nil
-                end
-                loadButtonHeldTriggered = true
-            end
-        else
-            loadButtonHeldTime = 0
-            loadButtonHeldTriggered = false
-        end
-
+    -- DynamicReturn-style training sector: hold reloads the selected start,
+    -- release begins timing. The same key maps start then finish in map mode.
+    local teleported = training_sectors.update(sim.dt or dt, currentCar, state.trackCorners,
+        settings.getTrainingButton(), settings.trainingEnabled())
+    if teleported then
+        main_window.clearHistory(history)
+        delta_bar.reset()
+        overlapState.startTime = nil
     end
 
     -- Brake beep toggle hotkey
@@ -585,12 +537,20 @@ function script.update(dt)
     -- Update centralized state (handles lap recording, completion, best lap)
     state.update(dt, currentCar)
 
-    -- Update history for trace display
-    updateTimer = updateTimer + dt
-    local sampleInterval = 1 / settings.sampleRate()
-    if updateTimer >= sampleInterval then
-        updateTimer = updateTimer - sampleInterval
-        main_window.updateHistory(currentCar, history, overlapState)
+    -- Update history only while the rolling graph is enabled.
+    if settings.tracesEnabled() then
+        updateTimer = updateTimer + (sim.dt or dt)
+        local sampleInterval = 1 / settings.sampleRate()
+        if updateTimer >= sampleInterval then
+            updateTimer = updateTimer - sampleInterval
+            main_window.updateHistory(currentCar, history, overlapState)
+        end
+    end
+
+    local racingLineButton = settings.getRacingLineButton()
+    if racingLineButton:pressed() then
+        settings.toggleRacingLineMode()
+        ac.setMessage("Reference racing line", settings.racingLineModeDisplay())
     end
 
     -- Update corner analysis (live tracking)
@@ -647,6 +607,10 @@ end
 
 function script.windowFocus(dt)
     focus.draw(dt)
+end
+
+function script.windowTraining(dt)
+    training_window.draw(dt)
 end
 
 -- Called when app is shutting down

@@ -55,14 +55,15 @@ Full-lap MoTeC-style telemetry comparison:
 - Corner zones highlighted on the graph
 - Auto-hide when driving above configurable speed threshold
 
-### 💾 Checkpoint System (Practice Rewind)
+### 💾 Training Sectors
 
-Save your position and teleport back instantly - perfect for practicing specific corners:
+Map and repeat persistent practice sectors with faithful car-state restoration:
 
-- **Save Checkpoint**: Captures car position, velocity, lap progress, and trace history
-- **Load Checkpoint**: Teleports back to saved position with full state restoration
-- **Audio Feedback**: Distinct sounds for save and load actions
-- **Delta Preservation**: Lap time offset is corrected so delta remains accurate after teleport
+- **Map**: First hotkey press saves the start state; drive on and press again to save the finish
+- **Select**: Pick any saved sector in the Training Mode window
+- **Return**: Hold the same hotkey to restore the start state; timing begins when you release it
+- **Review**: See the last/best sector time and every configured corner traversed
+- **World Gates**: Start and finish gates are visible on the circuit while Training Mode is active
 
 Bind keys in Content Manager: Settings → Assetto Corsa → Controls → Patch → search for `AC_TRACER`
 
@@ -85,6 +86,7 @@ Visual and audio cues for braking points:
 - **Automatic History**: Your laps are automatically saved per car/track combination (persisted across AC restarts)
 - **Session Grouping**: Laps organized by current session vs previous sessions
 - **MoTeC CSV Import**: Load reference laps from MoTeC CSV exports
+- **Reference Racing Line**: Render chassis world-position or GPS data on the circuit in fixed-blue or relative-speed mode
 - **Quick Selection**: Set any lap as reference with one click
 - **Best Lap Tracking**: Separate tracking for overall best and session best
 
@@ -125,6 +127,7 @@ Visual highlights in traces showing driving events:
 The app is highly configurable via the in-game settings window:
 
 **Traces**
+- Disable the rolling traces entirely while retaining live steering, gear, and pedals
 - Toggle individual traces: Throttle, Brake, Clutch, Steering, Speed, Gear
 - Adjust time window (5-30 seconds) and sample rate (10-60 Hz)
 - Enable/disable future traces from reference lap
@@ -138,9 +141,14 @@ The app is highly configurable via the in-game settings window:
 **Telemetry Window**
 - Auto-hide above configurable speed threshold
 
-**Checkpoint**
-- Enable/disable checkpoint system
-- Configure save/load keybinds
+**Training Sectors**
+- Enable/disable sector practice and configure its map/return hotkey
+- Select persistent sectors in the Training Mode window
+
+**Reference Racing Line**
+- Cycle Off → blue position line → relative-speed colors
+- Shows reference lateral offset in centimeters under the gear display
+- Draws brake, turn-in, and apex markers on the circuit
 
 **Brake Beep**
 - Mode: Off, Reference Lap, or Session Best
@@ -164,8 +172,8 @@ Bind keys in Content Manager: Settings → Assetto Corsa → Controls → Patch
 | Action | Control Name |
 |--------|--------------|
 | Reset Best Lap | `APP_AC_TRACER_RESET_BEST` |
-| Save Checkpoint | `__AC_TRACER_SAVE_CHECKPOINT` |
-| Load Checkpoint | `__AC_TRACER_LOAD_CHECKPOINT` |
+| Map / Return Training Sector | `__AC_TRACER_TRAINING_SECTOR` |
+| Cycle Reference Racing Line | `__AC_TRACER_RACING_LINE` |
 | Toggle Brake Beep | `__AC_TRACER_BRAKE_BEEP_TOGGLE` |
 | Toggle Comparison Mode | `__AC_TRACER_COMPARISON_MODE` |
 
@@ -179,10 +187,11 @@ AC Tracer includes multiple windows that can be toggled from the main trace wind
 | Δ | Delta Bar | iRacing-style delta display |
 | R | Reference Lap | Lap picker for selecting reference |
 | C | Corner Analysis | Detailed corner breakdowns |
+| P | Training Mode | Map, select, repeat, and review saved sectors |
 
 ## Technical Notes
 
 - **Sample Rate**: 30 Hz for lap recording, configurable for trace display
 - **Brake Pressure**: Uses cphys DLL for real brake pressure in BAR when available
-- **Storage**: Uses CSP's `ac.storage` for persistence (no external files except corner CSVs)
+- **Storage**: Uses CSP storage plus per-track/car files for corners, laps, and training sectors
 - **Performance**: Optimized for minimal impact during driving

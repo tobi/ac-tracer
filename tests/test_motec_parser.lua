@@ -561,6 +561,22 @@ test("maps gear channels", function()
     assert_equal(mapping.gear, 1)
 end)
 
+test("maps exact world and GPS path channels", function()
+    local channels = {
+        { name = "Chassis World Pos X", unit = "m" },
+        { name = "Chassis World Pos Y", unit = "m" },
+        { name = "Chassis World Pos Z", unit = "m" },
+        { name = "FIA_GpsLatN", unit = "deg" },
+        { name = "FIA_GpsLongE", unit = "deg" },
+    }
+    local mapping = motec.mapChannels(channels)
+    assert_equal(mapping.world_x, 1)
+    assert_equal(mapping.world_y, 2)
+    assert_equal(mapping.world_z, 3)
+    assert_equal(mapping.gps_lat, 4)
+    assert_equal(mapping.gps_lon, 5)
+end)
+
 --------------------------------------------------------------------------------
 -- Tests: LDX Beacon Parser
 --------------------------------------------------------------------------------

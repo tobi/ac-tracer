@@ -17,24 +17,24 @@ end
 local M = {}
 
 --------------------------------------------------------------------------------
--- Checkpoint Keybinds (using ac.ControlButton for configurable keys)
+-- Configurable hotkeys
 --------------------------------------------------------------------------------
 
-local saveCheckpointButton = ac.ControlButton('__AC_TRACER_SAVE_CHECKPOINT')
-local loadCheckpointButton = ac.ControlButton('__AC_TRACER_LOAD_CHECKPOINT')
+local trainingButton = ac.ControlButton('__AC_TRACER_TRAINING_SECTOR')
+local racingLineButton = ac.ControlButton('__AC_TRACER_RACING_LINE')
 local brakeBeepButton = ac.ControlButton('__AC_TRACER_BRAKE_BEEP_TOGGLE')
 local comparisonModeButton = ac.ControlButton('__AC_TRACER_COMPARISON_MODE')
 
---- Get the save checkpoint button (for polling in main loop)
+--- Get the training-sector button (save start, save finish, hold to return)
 ---@return ac.ControlButton
-function M.getSaveCheckpointButton()
-    return saveCheckpointButton
+function M.getTrainingButton()
+    return trainingButton
 end
 
---- Get the load checkpoint button (for polling in main loop)
+--- Get the reference racing-line mode button
 ---@return ac.ControlButton
-function M.getLoadCheckpointButton()
-    return loadCheckpointButton
+function M.getRacingLineButton()
+    return racingLineButton
 end
 
 --- Get the brake beep toggle button (for polling in main loop)
@@ -55,6 +55,7 @@ local config = ac.storage({
     displaySteering = false,
     displaySpeed = false,
     displayGear = false,  -- Stepped gear trace (discrete values)
+    tracesEnabled = true, -- Rolling graph; pedals and steering remain visible when off
 
     -- Units
     useKMH = true,
@@ -82,8 +83,9 @@ local config = ac.storage({
     throttleThreshold = 0.98,  -- 0-1 - when to consider "full throttle"
     speedDropThreshold = 0.05, -- fraction - corner detection sensitivity
 
-    -- Checkpoint system
-    checkpointEnabled = true,  -- Enable/disable checkpoint save/load
+    -- Training sector and reference racing line
+    trainingEnabled = true,
+    racingLineMode = 0, -- 0=off, 1=blue position line, 2=relative-speed colors
 
     -- Brake beep system (countdown beeps before brakepoint)
     -- Values: "off", "on" (uses comparison lap)
@@ -112,6 +114,7 @@ function M.displayClutch() return config.displayClutch end
 function M.displaySteering() return config.displaySteering end
 function M.displaySpeed() return config.displaySpeed end
 function M.displayGear() return config.displayGear end
+function M.tracesEnabled() return config.tracesEnabled end
 
 -- Units
 function M.useKMH() return config.useKMH end
@@ -134,8 +137,18 @@ function M.brakeThreshold() return config.brakeThreshold end
 function M.throttleThreshold() return config.throttleThreshold end
 function M.speedDropThreshold() return config.speedDropThreshold end
 
--- Checkpoint system
-function M.checkpointEnabled() return config.checkpointEnabled end
+-- Training / racing line
+function M.trainingEnabled() return config.trainingEnabled end
+function M.racingLineMode() return math.floor(config.racingLineMode or 0) end
+function M.setRacingLineMode(v) config.racingLineMode = math.floor(v or 0) % 3 end
+function M.toggleRacingLineMode()
+    config.racingLineMode = (math.floor(config.racingLineMode or 0) + 1) % 3
+    return config.racingLineMode
+end
+function M.racingLineModeDisplay()
+    local mode = M.racingLineMode()
+    return mode == 1 and "Position" or (mode == 2 and "Relative speed" or "Off")
+end
 
 -- Brake beep system
 --- Get brake beep mode: "off", "ref", or "session"
@@ -259,6 +272,10 @@ end
 function M.windowSettings()
     -- TRACES
     ui.header("Traces")
+
+    configCheckbox("Show rolling traces", "tracesEnabled")
+    hint("Turn off to keep only the live steering, gear and pedal display.")
+    ui.dummy(vec2(0, 3))
     
     -- Trace toggles in a 2x3 grid
     configCheckbox("Throttle", "displayThrottle")
@@ -338,20 +355,33 @@ function M.windowSettings()
     
     ui.dummy(vec2(0, 8))
     
-    -- CHECKPOINT
-    ui.header("Checkpoint")
-    
-    configCheckbox("Enable checkpoint system", "checkpointEnabled")
-    
-    if config.checkpointEnabled then
-        labeledControl("Save", CONTROL_WIDTH, function()
-            saveCheckpointButton:control(vec2(CONTROL_WIDTH, 0))
+    -- TRAINING SECTORS
+    ui.header("Training Sectors")
+
+    configCheckbox("Enable training sectors", "trainingEnabled")
+
+    if config.trainingEnabled then
+        labeledControl("Map / Return", CONTROL_WIDTH, function()
+            trainingButton:control(vec2(CONTROL_WIDTH, 0))
         end)
-        labeledControl("Load", CONTROL_WIDTH, function()
-            loadCheckpointButton:control(vec2(CONTROL_WIDTH, 0))
-        end)
-        hint("Save position, then Load to teleport back.")
+        hint("First press saves the start, second saves the finish; hold to return and release to start.")
     end
+
+    ui.dummy(vec2(0, 8))
+
+    -- REFERENCE RACING LINE
+    ui.header("Reference Racing Line")
+    labeledControl("Cycle Mode", CONTROL_WIDTH, function()
+        racingLineButton:control(vec2(CONTROL_WIDTH, 0))
+    end)
+    ui.text("Mode")
+    ui.sameLine(ui.availableSpaceX() - 150)
+    if ui.radioButton("Off##line", config.racingLineMode == 0) then config.racingLineMode = 0 end
+    ui.sameLine()
+    if ui.radioButton("Line##line", config.racingLineMode == 1) then config.racingLineMode = 1 end
+    ui.sameLine()
+    if ui.radioButton("Speed##line", config.racingLineMode == 2) then config.racingLineMode = 2 end
+    hint("Requires a reference lap with MoTeC GPS or chassis world-position channels.")
     
     ui.dummy(vec2(0, 8))
     

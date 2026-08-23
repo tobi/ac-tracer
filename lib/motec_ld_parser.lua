@@ -265,6 +265,12 @@ local CHANNEL_MAPPINGS = {
     g_long = { "g force long", "long g", "g long", "longitudinal g" },
     distance = { "distance", "lap distance" },
     pos = { "lap progression" },
+    world_x = { "chassis world pos x", "world position x", "world pos x" },
+    world_y = { "chassis world pos y", "world position y", "world pos y" },
+    world_z = { "chassis world pos z", "world position z", "world pos z" },
+    gps_lat = { "fia_gpslatn", "gps latitude", "gps lat", "latitude" },
+    gps_lon = { "fia_gpslonge", "gps longitude", "gps long", "gps lon", "longitude" },
+    gps_alt = { "fia_gpsalt", "gps altitude", "gps alt", "altitude" },
 }
 
 --- Map MoTeC channel names to ac-tracer telemetry fields
@@ -551,6 +557,12 @@ function M.unifyChannels(lapValues, channels, mapping, durationS)
     unified.fuel = {}
     unified.g_lat = {}
     unified.g_long = {}
+    unified.world_x = {}
+    unified.world_y = {}
+    unified.world_z = {}
+    unified.gps_lat = {}
+    unified.gps_lon = {}
+    unified.gps_alt = {}
 
     for i = 1, numSamples do
         -- Speed (convert to km/h)
@@ -637,6 +649,9 @@ function M.unifyChannels(lapValues, channels, mapping, durationS)
         -- G-forces
         unified.g_lat[i] = fieldToChannel.g_lat and fieldToChannel.g_lat.values[i] or 0
         unified.g_long[i] = fieldToChannel.g_long and fieldToChannel.g_long.values[i] or 0
+        for _, field in ipairs({"world_x", "world_y", "world_z", "gps_lat", "gps_lon", "gps_alt"}) do
+            if fieldToChannel[field] then unified[field][i] = fieldToChannel[field].values[i] or 0 end
+        end
     end
 
     return unified, targetFreq
@@ -759,6 +774,21 @@ function M.exportLapAsCSV(session, lapIndex, outputPath, trackName)
     table.insert(headers, "Gear")
     table.insert(units, "")
 
+    local pathFields = {}
+    local function addPathField(field, header, unit)
+        if session.mapping[field] then
+            table.insert(headers, header)
+            table.insert(units, unit)
+            pathFields[#pathFields + 1] = field
+        end
+    end
+    addPathField("world_x", "Chassis World Pos X", "m")
+    addPathField("world_y", "Chassis World Pos Y", "m")
+    addPathField("world_z", "Chassis World Pos Z", "m")
+    addPathField("gps_lat", "GPS Latitude", "deg")
+    addPathField("gps_lon", "GPS Longitude", "deg")
+    addPathField("gps_alt", "GPS Altitude", "m")
+
     -- Write headers with quotes
     local quotedHeaders = {}
     for _, h in ipairs(headers) do
@@ -794,8 +824,20 @@ function M.exportLapAsCSV(session, lapIndex, outputPath, trackName)
             brakeVal = string.format("%.2f", (unified.brakePos[i] or 0) * 100)
         end
 
-        f:write(string.format('%.3f,"%s",%.3f,%.2f,%.2f,%s,%.2f,%d\n',
-            timeS, trackStr, dist, speed, throttlePct, brakeVal, steerDeg, gear))
+        local row = {
+            string.format("%.3f", timeS),
+            '"' .. tostring(trackStr):gsub('"', '""') .. '"',
+            string.format("%.3f", dist),
+            string.format("%.2f", speed),
+            string.format("%.2f", throttlePct),
+            brakeVal,
+            string.format("%.2f", steerDeg),
+            tostring(gear),
+        }
+        for _, field in ipairs(pathFields) do
+            row[#row + 1] = string.format("%.9f", unified[field][i] or 0)
+        end
+        f:write(table.concat(row, ",") .. "\n")
     end
 
     f:close()

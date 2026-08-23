@@ -40,3 +40,17 @@ test("draw and reset run without errors", function()
     package.loaded['lib.windows.corner_analysis'] = originalCorner
     package.loaded['lib.state'] = originalState
 end)
+
+test("corner display order follows end position rather than CSV order", function()
+    local delta_bar = require('lib.windows.delta_bar')
+    local ordered = delta_bar.getCornerDisplayOrder({
+        { number = 1, endPos = 0.82 },
+        { number = 7, endPos = 0.21 },
+        { number = 3, endPos = 0.55 },
+        { number = 9 },
+    })
+    assert_equal(#ordered, 3)
+    assert_equal(ordered[1].number, 7)
+    assert_equal(ordered[2].number, 3)
+    assert_equal(ordered[3].number, 1)
+end)

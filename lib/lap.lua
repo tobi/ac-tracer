@@ -88,6 +88,8 @@ function lap.new(track, car, sessionId)
         times = {},            -- seconds (elapsed lap time at each sample)
         fuel = {},             -- liters remaining
         gforce = {},           -- vec3 (X = lateral, Z = longitudinal)
+        worldPos = {},         -- vec3 exact reference-car midpoint from AC MoTeC
+        gps = {},              -- {lat, lon, altitude} for real-car MoTeC
         
         -- Suspension travel (for future telemetry alignment with real car data)
         -- Stored as { {FL, FR, RL, RR}, ... } in meters
@@ -343,8 +345,7 @@ end
 --- Add a sample from current car state
 ---@param self table Lap instance
 ---@param car table Car state from ac.getCar()
----@param timeOffsetMs number|nil Optional time offset in ms (for checkpoint restore correction)
-function lap:addSample(car, timeOffsetMs)
+function lap:addSample(car)
     table.insert(self.throttle, car.gas)
     -- Get brake pressure in bar (from cphys DLL or fallback: pedal * 100)
     -- brake = front brake, brake_r = rear brake (or same as front if no DLL)
@@ -356,9 +357,7 @@ function lap:addSample(car, timeOffsetMs)
     table.insert(self.speed, car.speedKmh)
     table.insert(self.gear, car.gear)
     table.insert(self.pos, car.splinePosition)
-    -- Apply time offset correction (for checkpoint restore)
-    local correctedTimeMs = car.lapTimeMs - (timeOffsetMs or 0)
-    table.insert(self.times, correctedTimeMs / 1000)  -- seconds
+    table.insert(self.times, car.lapTimeMs / 1000)  -- seconds
     -- Fuel is recorded as a sparse channel (low-frequency changes)
     self:addSparseSample('fuel', car.splinePosition, car.fuel or 0)
 
@@ -366,6 +365,12 @@ function lap:addSample(car, timeOffsetMs)
     -- Must copy the vec3 values since car.acceleration is reused each frame
     if car.acceleration then
         table.insert(self.gforce, vec3(car.acceleration.x, car.acceleration.y, car.acceleration.z))
+    end
+
+    -- Preserve the car midpoint in world space. This lets an in-game lap be
+    -- exported and later rendered as the same physical racing line.
+    if car.position then
+        table.insert(self.worldPos, vec3(car.position.x, car.position.y, car.position.z))
     end
 
     -- Suspension travel (for future alignment with real car telemetry)
@@ -517,7 +522,7 @@ function lap:pruneToPosition(targetPos)
     if samplesToRemove <= 0 then return 0 end
 
     -- Prune all arrays to pruneIdx length
-    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'gforce', 'suspension', 'flags'}
+    local arrays = {'throttle', 'brake', 'brake_r', 'clutch', 'steering', 'speed', 'gear', 'pos', 'times', 'fuel', 'gforce', 'worldPos', 'gps', 'suspension', 'flags'}
     for _, field in ipairs(arrays) do
         if self[field] then
             for i = originalLength, pruneIdx + 1, -1 do
@@ -1491,6 +1496,8 @@ function lap:serialize()
         times = self.times,  -- Actual elapsed time at each sample
         fuel = self.fuel,    -- Fuel remaining in liters (may be empty if sparse)
         gforce = self.gforce,
+        worldPos = self.worldPos,
+        gps = self.gps,
         suspension = self.suspension,  -- FL, FR, RL, RR suspension travel in meters
         flags = self.flags,  -- In-sim only: TC, limiter, slip, lockups (bitmask per sample)
         sparse = self.sparse,
@@ -1513,13 +1520,15 @@ function lap.deserialize(data)
     if not ok or not parsed or type(parsed) ~= 'table' then return nil end
     local l = setmetatable(parsed, lap)
     if not l.gforce then l.gforce = {} end
+    if not l.worldPos then l.worldPos = {} end
+    if not l.gps then l.gps = {} end
     if not l.suspension then l.suspension = {} end
     ensureSparseTable(l)
     return l
 end
 
 --------------------------------------------------------------------------------
--- Cloning (for checkpoint snapshots)
+-- Cloning
 --------------------------------------------------------------------------------
 
 --- Helper to deep copy an array
@@ -1545,7 +1554,7 @@ local function copySparse(sparse)
     return copy
 end
 
---- Create a deep copy of this lap (for checkpoint snapshots)
+--- Create a deep copy of this lap
 --- This is more efficient than serialize/deserialize for in-memory cloning
 ---@return table New lap instance with copied data
 function lap:clone()
@@ -1582,6 +1591,15 @@ function lap:clone()
                 l.gforce[i] = vec3(g.x, g.y, g.z)
             end
         end
+    end
+
+    l.worldPos = {}
+    for i, point in ipairs(self.worldPos or {}) do
+        if point then l.worldPos[i] = vec3(point.x, point.y, point.z) end
+    end
+    l.gps = {}
+    for i, point in ipairs(self.gps or {}) do
+        if point then l.gps[i] = { point[1], point[2], point[3] } end
     end
 
     -- Deep copy suspension data (4 values per sample)
@@ -1659,6 +1677,8 @@ function lap.fromCSV(filePath, track, car, trackLength)
     l.fuel = data.fuel or {}
     l.gear = data.gear or {}
     l.gforce = {}
+    l.worldPos = {}
+    l.gps = {}
     l.time = parsed.time
     l.completed = parsed.completed
     l.fuelLeftAtStart = parsed.fuelLeftAtStart or 0
@@ -1678,6 +1698,16 @@ function lap.fromCSV(filePath, track, car, trackLength)
             local gx = data.g_lat and data.g_lat[i] or 0
             local gz = data.g_long and data.g_long[i] or 0
             l.gforce[i] = vec3(gx or 0, 0, gz or 0)
+        end
+    end
+
+    if data.world_x and data.world_z and #data.world_x == #l.pos and #data.world_z == #l.pos then
+        for i = 1, #l.pos do
+            l.worldPos[i] = vec3(data.world_x[i] or 0, data.world_y and data.world_y[i] or 0, data.world_z[i] or 0)
+        end
+    elseif data.gps_lat and data.gps_lon and #data.gps_lat == #l.pos and #data.gps_lon == #l.pos then
+        for i = 1, #l.pos do
+            l.gps[i] = { data.gps_lat[i], data.gps_lon[i], data.gps_alt and data.gps_alt[i] or 0 }
         end
     end
 

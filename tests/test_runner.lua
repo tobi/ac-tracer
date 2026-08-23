@@ -266,7 +266,7 @@ if #test_files == 0 then
         "tests/test_corner_detection.lua",
         "tests/test_corner_notes.lua",
         "tests/test_corner_analysis_basic.lua",
-        "tests/test_checkpoint.lua",
+        "tests/test_training_sectors.lua",
         "tests/test_scoring.lua",
         "tests/test_settings.lua",
         "tests/test_ui_utils.lua",

@@ -26,11 +26,6 @@ end
 suite("corner_analysis")
 
 test("analyzeCorner and compareCorners return data", function()
-    local originalState = package.loaded['lib.state']
-    package.loaded['lib.state'] = {
-        onCheckpointLoad = function() end,
-        getLapTimeOffset = function() return 0 end,
-    }
     package.loaded['lib.windows.corner_analysis'] = nil
     local corner_analysis = require('lib.windows.corner_analysis')
 
@@ -52,6 +47,4 @@ test("analyzeCorner and compareCorners return data", function()
     assert_not_nil(displayData)
     assert_equal(displayData.cornerInfo, corner, "comparison should retain corner range for marker rendering")
     assert_equal(comparison.number, 1)
-
-    package.loaded['lib.state'] = originalState
 end)

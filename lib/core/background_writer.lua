@@ -107,6 +107,15 @@ local function initCSVJob(lapObj, basePath)
         "m", "m", "m", "m",
         "", "", "", "", "", ""
     }
+    local hasWorldPath = lapObj.worldPos and #lapObj.worldPos == lapObj:length()
+    if hasWorldPath then
+        headers[#headers + 1] = "Chassis World Pos X"
+        headers[#headers + 1] = "Chassis World Pos Y"
+        headers[#headers + 1] = "Chassis World Pos Z"
+        units[#units + 1] = "m"
+        units[#units + 1] = "m"
+        units[#units + 1] = "m"
+    end
     
     f:write('"' .. table.concat(headers, '","') .. '"\n')
     f:write('"' .. table.concat(units, '","') .. '"\n')
@@ -119,6 +128,7 @@ local function initCSVJob(lapObj, basePath)
         lap = lapObj,
         rowIndex = 1,
         totalRows = lapObj:length(),
+        hasWorldPath = hasWorldPath,
         completed = false,
     }
 end
@@ -170,7 +180,7 @@ local function processCSVChunk(job)
         local clutchPct = (1 - clutchInverted) * 100
         local steeringDeg = lap.steerToDegrees(steeringNorm)
         
-        f:write(string.format("%.3f,%s,%.6f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%d,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%d\n",
+        local row = string.format("%.3f,%s,%.6f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%d,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%d",
             timeS,
             escapeCSV(lapObj.track or ""),
             pos,
@@ -194,7 +204,12 @@ local function processCSVChunk(job)
             lockupFR,
             lockupRL,
             lockupRR
-        ))
+        )
+        if job.hasWorldPath then
+            local world = lapObj.worldPos[i]
+            row = row .. string.format(",%.6f,%.6f,%.6f", world.x, world.y, world.z)
+        end
+        f:write(row .. "\n")
     end
     
     job.rowIndex = endRow + 1

@@ -8,6 +8,20 @@ local state = require('lib.core.state')
 
 local delta_bar = {}
 
+--- Return valid corner definitions in physical track sequence.
+--- CSV row order and corner numbers are deliberately ignored.
+function delta_bar.getCornerDisplayOrder(corners)
+    local ordered = {}
+    for _, corner in ipairs(corners or {}) do
+        if corner.endPos ~= nil then ordered[#ordered + 1] = corner end
+    end
+    table.sort(ordered, function(a, b)
+        if a.endPos == b.endPos then return (a.number or 0) < (b.number or 0) end
+        return a.endPos < b.endPos
+    end)
+    return ordered
+end
+
 --------------------------------------------------------------------------------
 -- Configuration
 --------------------------------------------------------------------------------
@@ -81,10 +95,7 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
         if updateTimer >= updateInterval then
             updateTimer = updateTimer - updateInterval
             if referenceLap and currentPos and not isOutlap then
-                -- Use live car.lapTimeMs for delta calculation, corrected by checkpoint offset
-                -- After checkpoint load, AC doesn't restore lapTimeMs, so we subtract the offset
-                local lapTimeOffset = state.getLapTimeOffset()
-                local currentTimeS = (car.lapTimeMs - lapTimeOffset) / 1000
+                local currentTimeS = car.lapTimeMs / 1000
                 local refTimeS = referenceLap:getTimeAtPos(currentPos)
                 lastDelta = currentTimeS - (refTimeS or currentTimeS)
             else
@@ -201,7 +212,8 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
     -- Positioned by corner number: first corner on left, last on right
     ----------------------------------------
     local recentScores = corner_analysis.getRecentCornerScores()
-    local numCorners = corners and #corners or 0
+    local orderedCorners = delta_bar.getCornerDisplayOrder(corners)
+    local numCorners = #orderedCorners
     
     if recentScores and #recentScores > 0 and numCorners > 0 then
         local wedgeWidth = 24   -- Larger width for visibility
@@ -216,12 +228,14 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
             end
         end
         
-        -- Draw wedges at their corner positions
-        for cornerNum, score in pairs(scoreByCorner) do
-            -- Position: cornerNum 1 = left edge, cornerNum N = right edge
-            local t = numCorners > 1 and ((cornerNum - 1) / (numCorners - 1)) or 0.5
-            local wedgeX = padding + t * availableWidth
-            wedge.drawCompact(wedgeX, wedgeY, wedgeWidth, wedgeHeight, score)
+        -- Draw wedges by corner end position, not CSV row/number order.
+        for displayIndex, corner in ipairs(orderedCorners) do
+            local score = scoreByCorner[corner.number]
+            if score then
+                local t = numCorners > 1 and ((displayIndex - 1) / (numCorners - 1)) or 0.5
+                local wedgeX = padding + t * availableWidth
+                wedge.drawCompact(wedgeX, wedgeY, wedgeWidth, wedgeHeight, score)
+            end
         end
     end
 
@@ -301,7 +315,7 @@ function delta_bar.draw(dt, currentLap, referenceLap, currentPos, corners, car)
     ui.popFont()
 end
 
---- Reset smoothing state (call on lap reset or checkpoint load)
+--- Reset smoothing state after a lap reset or training-sector return.
 function delta_bar.reset()
     smoothedBarWidth = 0
     smoothedDelta = 0

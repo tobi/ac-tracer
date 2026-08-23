@@ -1,6 +1,7 @@
 -- test_csv_parser.lua - Tests for csv_parser.lua module
 
 local csv_parser = require('lib.lap_csv_parser')
+local lap = require('lib.lap')
 
 suite("csv_parser.parseFile")
 
@@ -36,6 +37,36 @@ test("parses a simple Lap Progression CSV", function()
     assert_not_nil(result.csvSource)
     assert_equal(result.csvSource.speed, "speed")
 
+    os.remove(path)
+end)
+
+test("preserves chassis world position channels for reference line", function()
+    io.createDir("tests/tmp")
+    local path = "tests/tmp/test_world_path.csv"
+    local lines = {
+        '"Sample Rate","2"',
+        '"Time","Lap Progression","Ground Speed","Driver Throttle Pos","Brake Pos","Steering Angle","Gear","Chassis World Pos X","Chassis World Pos Y","Chassis World Pos Z"',
+        '"s","","km/h","%","%","deg","","m","m","m"',
+        '',
+        '0,0.01,100,100,0,0,3,10,2,20',
+        '1,0.25,110,100,0,0,3,20,2,30',
+        '2,0.50,120,100,0,0,4,30,2,40',
+        '3,0.75,130,100,0,0,4,40,2,50',
+        '4,0.95,140,100,0,0,5,50,2,60',
+        '5,0.02,150,100,0,0,5,60,2,70',
+    }
+    local f = io.open(path, "w")
+    for _, line in ipairs(lines) do f:write(line .. "\n") end
+    f:close()
+    local result = csv_parser.parseFile(path, nil, 10, nil)
+    assert_not_nil(result)
+    assert_true(#result.data.world_x > 0)
+    assert_true(#result.data.world_z > 0)
+    assert_equal(result.csvSource.world_x, "chassis world pos x")
+    local imported = lap.fromCSV(path, "test_track", "test_car", 5000)
+    assert_not_nil(imported)
+    assert_equal(#imported.worldPos, imported:length())
+    assert_near(imported.worldPos[1].x, 10, 0.01)
     os.remove(path)
 end)
 

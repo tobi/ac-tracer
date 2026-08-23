@@ -30,7 +30,9 @@ const mockSim = {
 function createMockControlButton() {
   return {
     pressed: () => false,
+    released: () => false,
     down: () => false,
+    configured: () => true,
     control: (_size?: unknown) => {},
   };
 }
@@ -80,7 +82,7 @@ export const ac = {
   // Control button factory
   ControlButton: (_name: string, _defaults?: unknown) => createMockControlButton(),
 
-  // Checkpoint/teleport APIs (not available in web)
+  // Car-state/teleport APIs (not available in web)
   isCarResetAllowed: () => false,
   saveCarStateAsync: (_callback: Function) => {
     // No-op

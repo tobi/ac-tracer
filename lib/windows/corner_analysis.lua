@@ -64,6 +64,8 @@ local liveCorner = {
 
 local lastLapCount = 0
 local currentLapTime = 0
+local ignoredCornerAfterJump = 0
+local lastResetCounter = -1
 
 -- Display state (last completed corner)
 local displayData = nil
@@ -1301,9 +1303,7 @@ function corner_analysis.update(car, currentLap, referenceLap, corners, dt)
         end
     end
     
-    -- Apply time offset for checkpoint restore correction
-    local lapTimeOffset = state.getLapTimeOffset()
-    currentLapTime = (car.lapTimeMs - lapTimeOffset) / 1000
+    currentLapTime = car.lapTimeMs / 1000
     
     local currentPos = car.splinePosition
     local currentSpeed = car.speedKmh
@@ -1317,6 +1317,24 @@ function corner_analysis.update(car, currentLap, referenceLap, corners, dt)
     
     -- Check what corner we're in
     local cornerNum, cornerInfo = getCornerAtPos(corners, currentPos)
+
+    -- A teleport can place the car halfway through a corner. Never score that
+    -- fragment: keep the corner empty for this lap and resume once the car has
+    -- fully left it. resetCounter covers resets; justJumped covers car-state loads.
+    local resetCounter = car.resetCounter or 0
+    local jumped = car.justJumped or (lastResetCounter >= 0 and resetCounter > lastResetCounter)
+    lastResetCounter = resetCounter
+    if jumped then
+        resetLiveCorner()
+        clearSequence(0)
+        ignoredCornerAfterJump = cornerNum
+    end
+    if ignoredCornerAfterJump > 0 then
+        if cornerNum == ignoredCornerAfterJump then
+            return
+        end
+        ignoredCornerAfterJump = 0
+    end
     
     if cornerNum > 0 and cornerInfo then
         if liveCorner.cornerNum ~= cornerNum then
@@ -2521,9 +2539,8 @@ function corner_analysis.drawSequenceDots(dt)
     end
 end
 
---- Handle checkpoint load: keep display frozen but reset live tracking
---- Called when user loads a checkpoint (teleports back to saved position)
-function corner_analysis.onCheckpointLoad(pos)
+--- Reset live tracking after a teleport while keeping the last complete result.
+function corner_analysis.onTeleport(pos)
     -- Keep displayData frozen (shows last corner result)
     -- Reset live corner tracking state
     resetLiveCorner()
@@ -2539,7 +2556,9 @@ function corner_analysis.onCheckpointLoad(pos)
         lastLapCount = car.lapCount
     end
 
-    ac.log(string.format("AC Tracer: Corner analysis reset for checkpoint at pos %.3f", pos or 0))
+    local _, corner = getCornerAtPos(state.trackCorners, pos or -1)
+    ignoredCornerAfterJump = corner and corner.number or 0
+    ac.log(string.format("AC Tracer: Corner analysis reset after teleport at pos %.3f", pos or 0))
 end
 
 --- Get recent corner scores (for delta bar display)
@@ -2549,10 +2568,4 @@ function corner_analysis.getRecentCornerScores()
 end
 
 --------------------------------------------------------------------------------
--- Module Initialization
---------------------------------------------------------------------------------
-
--- Register checkpoint callback with state module
-state.onCheckpointLoad(corner_analysis.onCheckpointLoad)
-
 return corner_analysis

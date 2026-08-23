@@ -47,6 +47,15 @@ local COLUMN_MAPPINGS = {
     -- G-forces
     g_lat = { "g force lat", "lat g", "g lat", "lateral g", "lat accel", "lateral accel" },
     g_long = { "g force long", "long g", "g long", "longitudinal g", "long accel", "longitudinal accel" },
+
+    -- Exact reference-car path. AC MoTeC exports chassis world coordinates;
+    -- real-car logs generally expose GPS latitude/longitude instead.
+    world_x = { "chassis world pos x", "world position x", "world pos x" },
+    world_y = { "chassis world pos y", "world position y", "world pos y" },
+    world_z = { "chassis world pos z", "world position z", "world pos z" },
+    gps_lat = { "fia_gpslatn", "gps latitude", "gps lat", "latitude" },
+    gps_lon = { "fia_gpslonge", "gps longitude", "gps long", "gps lon", "longitude" },
+    gps_alt = { "fia_gpsalt", "gps altitude", "gps alt", "altitude" },
 }
 
 -- Conversion constant: 1 PSI = 0.0689476 bar
@@ -342,6 +351,8 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             fuel = {},
             g_lat = {},
             g_long = {},
+            world_x = {}, world_y = {}, world_z = {},
+            gps_lat = {}, gps_lon = {}, gps_alt = {},
         }
         local timeOffset = times[startIdx]
         for i = startIdx, #times do
@@ -360,6 +371,11 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             end
             if rawData.g_long and #rawData.g_long > 0 then
                 table.insert(trimmedData.g_long, rawData.g_long[i])
+            end
+            for _, field in ipairs({"world_x", "world_y", "world_z", "gps_lat", "gps_lon", "gps_alt"}) do
+                if rawData[field] and #rawData[field] > 0 then
+                    table.insert(trimmedData[field], rawData[field][i])
+                end
             end
         end
         times = trimmedTimes
@@ -384,6 +400,8 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
         fuel = {},
         g_lat = {},
         g_long = {},
+        world_x = {}, world_y = {}, world_z = {},
+        gps_lat = {}, gps_lon = {}, gps_alt = {},
     }
 
     for i = 1, numSamples do
@@ -407,6 +425,11 @@ local function normalizeToSampleRate(rawData, lapTime, targetSampleRate)
             end
             if rawData.g_long and #rawData.g_long > 0 then
                 table.insert(normalized.g_long, interpolateAtTime(times, rawData.g_long, t))
+            end
+            for _, field in ipairs({"world_x", "world_y", "world_z", "gps_lat", "gps_lon", "gps_alt"}) do
+                if rawData[field] and #rawData[field] > 0 then
+                    table.insert(normalized[field], interpolateAtTime(times, rawData[field], t))
+                end
             end
         end
     end
@@ -441,6 +464,8 @@ local function parseSingleLap(lines, startIdx, indices, config)
         fuel = {},
         g_lat = {},
         g_long = {},
+        world_x = {}, world_y = {}, world_z = {},
+        gps_lat = {}, gps_lon = {}, gps_alt = {},
     }
     local fuelLeftAtStart = 0
 
@@ -617,6 +642,11 @@ local function parseSingleLap(lines, startIdx, indices, config)
                         end
                         if indices.g_long then
                             table.insert(data.g_long, gLong or 0)
+                        end
+                        for _, field in ipairs({"world_x", "world_y", "world_z", "gps_lat", "gps_lon", "gps_alt"}) do
+                            if indices[field] then
+                                table.insert(data[field], tonumber(fields[field]) or 0)
+                            end
                         end
                     end
                 end
@@ -982,6 +1012,12 @@ function csv_parser.parseFile(filePath, trackLength, targetSampleRate, expectedT
         fuel = indices.fuel and headers[indices.fuel] or nil,
         g_lat = indices.g_lat and headers[indices.g_lat] or nil,
         g_long = indices.g_long and headers[indices.g_long] or nil,
+        world_x = indices.world_x and headers[indices.world_x] or nil,
+        world_y = indices.world_y and headers[indices.world_y] or nil,
+        world_z = indices.world_z and headers[indices.world_z] or nil,
+        gps_lat = indices.gps_lat and headers[indices.gps_lat] or nil,
+        gps_lon = indices.gps_lon and headers[indices.gps_lon] or nil,
+        gps_alt = indices.gps_alt and headers[indices.gps_alt] or nil,
     }
 
     -- Log warnings

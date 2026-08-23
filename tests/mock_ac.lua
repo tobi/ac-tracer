@@ -97,7 +97,9 @@ end
 ac.ControlButton = function(name, defaults)
     return {
         pressed = function() return false end,
+        released = function() return false end,
         down = function() return false end,
+        configured = function() return true end,
         control = function(self, size) end,
     }
 end
@@ -185,7 +187,7 @@ ac.getCarName = function(index, withYear)
     return "Test Car"
 end
 
--- Mock checkpoint/teleport APIs
+-- Mock car-state/teleport APIs
 ac.isCarResetAllowed = function()
     return true
 end
