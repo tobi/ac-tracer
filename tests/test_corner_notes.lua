@@ -171,6 +171,47 @@ test("turn-in backtracks from lateral G onset to steering initiation", function(
         "turn-in should be the start of steering build, not the later G-force hit")
 end)
 
+test("turn-in comparison works without lateral G like real-driver CSV references", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 80 })
+    local reference = createTestLap({ numSamples = 80 })
+    current.gforce, reference.gforce = {}, {}
+    for i = 1, 80 do
+        local currentRamp = math.max(0, math.min(18, (i - 31) * 2))
+        local referenceRamp = math.max(0, math.min(18, (i - 21) * 2))
+        current.steering[i] = lap.normalizeSteer(currentRamp)
+        reference.steering[i] = lap.normalizeSteer(referenceRamp)
+        local speed = 100 + math.abs(60 - i)
+        current.speed[i], reference.speed[i] = speed, speed
+    end
+    local corner = { number = 1, startPos = 0.1, endPos = 0.2 }
+    local currentAnalysis = corner_analysis.analyzeCorner(current, corner)
+    local referenceAnalysis = corner_analysis.analyzeCorner(reference, corner)
+    local comparison = corner_analysis.compareCorners(currentAnalysis, referenceAnalysis)
+    assert_not_nil(comparison.turnInDeltaM)
+    assert_true(comparison.turnInDeltaM > 40, "later steering ramp should compare later without G data")
+    assert_equal(comparison.turnInConfidence, "high")
+end)
+
+test("turn-in comparison normalizes different steering amplitudes", function()
+    local corner_analysis = require('lib.windows.corner_analysis')
+    local current = createTestLap({ numSamples = 80 })
+    local reference = createTestLap({ numSamples = 80 })
+    for i = 1, 80 do
+        local progress = math.max(0, math.min(1, (i - 24) / 10))
+        current.steering[i] = lap.normalizeSteer(progress * 12)
+        reference.steering[i] = lap.normalizeSteer(progress * 24)
+        local speed = 100 + math.abs(60 - i)
+        current.speed[i], reference.speed[i] = speed, speed
+    end
+    local corner = { number = 1, startPos = 0.1, endPos = 0.2 }
+    local comparison = corner_analysis.compareCorners(
+        corner_analysis.analyzeCorner(current, corner),
+        corner_analysis.analyzeCorner(reference, corner))
+    assert_near(comparison.turnInDeltaM, 0, 7,
+        "same steering build should compare similarly despite different peak lock")
+end)
+
 test("flags combined grip underuse early and mid-corner", function()
     local corner_analysis = require('lib.windows.corner_analysis')
     local data = {

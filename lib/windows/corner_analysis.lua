@@ -69,6 +69,54 @@ local currentLapTime = 0
 local displayData = nil
 local displayScore = 0
 local displayLap = nil      -- The lap data at time of corner exit (for flag analysis)
+local lastCompletedResult = nil -- {cornerNum, score, timeDelta}
+
+-- Live state for the tiny Lift -> Brake -> Turn -> Apex dot window.
+local sequenceState = {
+    cornerNum = 0,
+    events = {
+        { relevant = false, visible = false, delta = nil, flash = 0 },
+        { relevant = false, visible = false, delta = nil, flash = 0 },
+        { relevant = false, visible = false, delta = nil, flash = 0 },
+        { relevant = false, visible = false, delta = nil, flash = 0 },
+    },
+    refLiftPos = nil,
+    refBrakePos = nil,
+    refTurnPos = nil,
+    refTurnDirection = nil,
+    refTurnThresholdDeg = nil,
+    refApexPos = nil,
+    entrySteerDeg = 0,
+    turnCandidatePos = nil,
+    turnCandidateTime = 0,
+    apexRiseTime = 0,
+}
+
+local function clearSequence(cornerNum)
+    sequenceState.cornerNum = cornerNum or 0
+    for i = 1, 4 do
+        local event = sequenceState.events[i]
+        event.relevant, event.visible, event.delta, event.flash = false, false, nil, 0
+    end
+    sequenceState.refLiftPos = nil
+    sequenceState.refBrakePos = nil
+    sequenceState.refTurnPos = nil
+    sequenceState.refTurnDirection = nil
+    sequenceState.refTurnThresholdDeg = nil
+    sequenceState.refApexPos = nil
+    sequenceState.entrySteerDeg = 0
+    sequenceState.turnCandidatePos = nil
+    sequenceState.turnCandidateTime = 0
+    sequenceState.apexRiseTime = 0
+end
+
+local function revealSequenceEvent(index, currentPos, referencePos)
+    local event = sequenceState.events[index]
+    if not event.relevant or event.visible or not currentPos or not referencePos then return end
+    event.visible = true
+    event.delta = referencePos and scoring.positionDeltaToMeters(currentPos, referencePos) or nil
+    event.flash = 1
+end
 
 -- Recent corner scores (for delta bar display)
 -- Array of {cornerNum, score, lapNumber}, max 10 entries
@@ -518,7 +566,7 @@ local function analyzeDownshiftReaction(data)
         return nil -- Fast enough, no warning needed
     end
 
-    local text = string.format("downshift after %.1fm of braking", data.currentDownshiftDistanceM)
+    local text = string.format("downshift %.0fm after brake", data.currentDownshiftDistanceM)
     return { text = text, severity = "info" }
 end
 
@@ -527,9 +575,11 @@ local function gforceComponents(sample)
     return sample.x or sample[1], sample.z or sample[3]
 end
 
---- Find steering onset associated with the corner's lateral-load build-up.
---- Uses an approach baseline and a fraction of this corner's eventual peak,
---- avoiding fixed-angle triggers caused by corrections on the straight.
+--- Find the start and shape of the committed steering build for a corner.
+--- This deliberately uses steering only: imported reference laps (including the
+--- real-driver MoTeC files) do not contain lateral G, so using G for one lap but
+--- not the other biases the comparison.  A later comparison uses several
+--- points on this ramp rather than trusting one threshold crossing.
 local function detectTurnIn(lapData, startPos, endPos, apexPos)
     if not lapData or not lapData.pos or not lapData.steering then return nil, nil end
     local endSearch = apexPos or endPos
@@ -539,75 +589,100 @@ local function detectTurnIn(lapData, startPos, endPos, apexPos)
     end
     if #indices < 8 then return nil, nil end
 
-    local steerAbs, latAbs = {}, {}
-    local peakSteer, peakLat, hasGData = 0, 0, false
+    local steer = {}
     for n, i in ipairs(indices) do
-        steerAbs[n] = math.abs(lap.steerToDegrees(lapData.steering[i] or 0.5))
-        local latG = gforceComponents(lapData.gforce and lapData.gforce[i])
-        latAbs[n] = latG and math.abs(latG) or 0
-        if latG ~= nil then hasGData = true end
-        peakSteer = math.max(peakSteer, steerAbs[n])
-        peakLat = math.max(peakLat, latAbs[n])
+        -- Three-sample moving average removes encoder/CSV quantisation without
+        -- moving the result materially at the 50 Hz recording rate.
+        local sum, count = 0, 0
+        for k = math.max(1, i - 1), math.min(#lapData.steering, i + 1) do
+            sum = sum + lap.steerToDegrees(lapData.steering[k] or 0.5)
+            count = count + 1
+        end
+        steer[n] = sum / count
     end
 
-    -- First 15% is treated as the approach. Average suppresses single-sample noise.
-    local baselineCount = math.max(3, math.min(10, math.floor(#indices * 0.15)))
-    local baselineSteer, baselineLat = 0, 0
+    -- Corner definitions include an approach, so this is normally straight-line
+    -- steering. Keep it short so a genuinely early turn-in is not absorbed into
+    -- the baseline.
+    local baselineCount = math.max(3, math.min(10, math.floor(#indices * 0.10)))
+    local baselineSteer = 0
     for n = 1, baselineCount do
-        baselineSteer = baselineSteer + steerAbs[n]
-        baselineLat = baselineLat + latAbs[n]
+        baselineSteer = baselineSteer + steer[n]
     end
     baselineSteer = baselineSteer / baselineCount
-    baselineLat = baselineLat / baselineCount
 
-    local steerRange = peakSteer - baselineSteer
-    local latRange = peakLat - baselineLat
-    if steerRange < 5 then return nil, nil end
-    local committedSteer = baselineSteer + steerRange * 0.45
-    local latThreshold = baselineLat + math.max(0.12, latRange * 0.18)
-    local SUSTAINED = 3
+    local positivePeak, negativePeak = 0, 0
+    for n = baselineCount + 1, #indices do
+        local excursion = steer[n] - baselineSteer
+        positivePeak = math.max(positivePeak, excursion)
+        negativePeak = math.max(negativePeak, -excursion)
+    end
+    local direction = positivePeak >= negativePeak and 1 or -1
+    local peak = math.max(positivePeak, negativePeak)
+    if peak < 4 then return nil, nil end
 
-    local lateralOnset = nil
-    if hasGData and latRange >= 0.15 then
+    local directed = {}
+    for n = 1, #indices do directed[n] = (steer[n] - baselineSteer) * direction end
+
+    local noise = 0
+    for n = 1, baselineCount do noise = math.max(noise, math.abs(directed[n])) end
+    local onsetThreshold = math.max(0.75, noise + 0.35, peak * 0.06)
+    local SUSTAINED = 4
+
+    local function committedHalfCrossing()
+        local threshold = peak * 0.50
         for n = baselineCount + 1, #indices - SUSTAINED + 1 do
-            local sustained = true
+            local ok = true
             for k = n, n + SUSTAINED - 1 do
-                if latAbs[k] < latThreshold then sustained = false break end
+                if directed[k] < threshold then ok = false break end
             end
-            if sustained then lateralOnset = n break end
-        end
-        if not lateralOnset then return nil, nil end
-    else
-        -- Imported laps without G data use committed steering as a fallback.
-        for n = baselineCount + 1, #indices - SUSTAINED + 1 do
-            local sustained = true
-            for k = n, n + SUSTAINED - 1 do
-                if steerAbs[k] < committedSteer then sustained = false break end
+            if ok then
+                -- The input must continue developing after the crossing. This
+                -- rejects a sizeable but brief correction on the approach.
+                local lookEnd = math.min(#indices, n + 11)
+                local held, total = 0, lookEnd - n + 1
+                for k = n, lookEnd do
+                    if directed[k] >= peak * 0.25 then held = held + 1 end
+                end
+                if total >= 4 and held / total >= 0.70 then return n end
             end
-            if sustained then lateralOnset = n break end
         end
-        if not lateralOnset then return nil, nil end
+        return nil
     end
 
-    -- Confirm that the lateral-G event belongs to a committed steering input.
-    local commits = false
-    for n = math.max(baselineCount + 1, lateralOnset - 6), math.min(lateralOnset + 3, #indices) do
-        if steerAbs[n] >= committedSteer then commits = true break end
-    end
-    if not commits then return nil, nil end
+    local p50 = committedHalfCrossing()
+    if not p50 then return nil, nil end
 
-    -- Starting at the lateral-G hit, walk backward through the same contiguous
-    -- steering build. The first sample after steering leaves its approach
-    -- baseline is the physical beginning of turn-in.
-    local baselineExit = baselineSteer + math.max(1, steerRange * 0.07)
-    local onset = lateralOnset
-    local searchStart = math.max(baselineCount + 1, lateralOnset - 20)
-    while onset > searchStart and steerAbs[onset - 1] > baselineExit do
+    -- Locate lower commitment levels only within the continuous build which
+    -- leads to that confirmed 50% point, never in an unrelated earlier wiggle.
+    local function backtrackLevel(from, fraction)
+        local threshold = peak * fraction
+        local n = from
+        while n > baselineCount + 1 and directed[n - 1] >= threshold do n = n - 1 end
+        return n
+    end
+    local p25 = backtrackLevel(p50, 0.25)
+    local p10 = backtrackLevel(p25, 0.10)
+
+    -- Backtrack from established commitment through the same continuous ramp.
+    -- A brief correction which returns to centre is therefore not selected.
+    local onset = p25
+    while onset > baselineCount + 1 and directed[onset - 1] > onsetThreshold do
         onset = onset - 1
     end
+    if p10 < onset then onset = p10 end
 
     local i = indices[onset]
-    return lapData.pos[i], i
+    local profile = {
+        positions = {
+            lapData.pos[indices[p10]],
+            lapData.pos[indices[p25]],
+            lapData.pos[indices[p50]],
+        },
+        direction = direction,
+        peakSteeringDeg = peak,
+    }
+    return lapData.pos[i], i, profile
 end
 
 local function nearestIndexForPos(lapData, targetPos, startIndex)
@@ -664,9 +739,10 @@ local function combinedGripPhases(lapData, turnInIndex, apexPos)
 end
 
 local function analyzeTurnIn(data)
-    if not data.turnInDeltaM or math.abs(data.turnInDeltaM) < 10 then return nil end
+    if not data.turnInDeltaM or math.abs(data.turnInDeltaM) < 3 then return nil end
     local direction = data.turnInDeltaM > 0 and "later" or "earlier"
-    return { text = string.format("turn-in %.0fm %s than reference", math.abs(data.turnInDeltaM), direction), severity = "info" }
+    local qualifier = data.turnInConfidence == "low" and " (low confidence)" or ""
+    return { text = string.format("turn-in %.0fm %s than reference%s", math.abs(data.turnInDeltaM), direction, qualifier), severity = "info" }
 end
 
 local function analyzeCombinedGrip(data, phase)
@@ -868,7 +944,7 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         downshiftDistanceM = math.abs(ui_utils.positionDeltaToMeters(firstDownshiftPos, brakePos) or 0)
     end
 
-    local turnInPos, turnInIndex = detectTurnIn(lapData, cornerDef.startPos, cornerDef.endPos, apexPos)
+    local turnInPos, turnInIndex, turnInProfile = detectTurnIn(lapData, cornerDef.startPos, cornerDef.endPos, apexPos)
     local combinedGripEarly, combinedGripMid = combinedGripPhases(lapData, turnInIndex, apexPos)
     local peakLateralG, turnInLateralG = lateralGMetrics(lapData, cornerDef.startPos, cornerDef.endPos, turnInIndex)
 
@@ -891,6 +967,7 @@ function corner_analysis.analyzeCorner(lapData, cornerDef)
         downshiftLastMs = downshiftLastMs,    -- Total shift time: brake to last downshift
         downshiftDistanceM = downshiftDistanceM,  -- Brake to first downshift distance
         turnInPos = turnInPos,
+        turnInProfile = turnInProfile,
         combinedGripEarly = combinedGripEarly,
         combinedGripMid = combinedGripMid,
         peakLateralG = peakLateralG,
@@ -929,6 +1006,39 @@ function corner_analysis.compareCorners(current, reference)
         timeDelta = currentDuration - refDuration
     end
 
+    -- Compare the 10%, 25% and 50% steering-build positions. Their median is
+    -- resistant to one noisy threshold; their spread becomes confidence.
+    local turnInDeltaM, turnInConfidence = nil, nil
+    local currentTurnInMarker, referenceTurnInMarker = current.turnInPos, reference.turnInPos
+    local currentProfile = current.turnInProfile and current.turnInProfile.positions
+    local referenceProfile = reference.turnInProfile and reference.turnInProfile.positions
+    if currentProfile and referenceProfile then
+        local matches = {}
+        for i = 1, 3 do
+            if currentProfile[i] and referenceProfile[i] then
+                matches[#matches + 1] = {
+                    delta = scoring.positionDeltaToMeters(currentProfile[i], referenceProfile[i]),
+                    currentPos = currentProfile[i],
+                    referencePos = referenceProfile[i],
+                }
+            end
+        end
+        table.sort(matches, function(a, b) return a.delta < b.delta end)
+        if #matches > 0 then
+            local representative = matches[math.floor((#matches + 1) / 2)]
+            turnInDeltaM = representative.delta
+            currentTurnInMarker = representative.currentPos
+            referenceTurnInMarker = representative.referencePos
+            local spread = matches[#matches].delta - matches[1].delta
+            turnInConfidence = (#matches >= 3 and spread <= 5) and "high"
+                or (#matches >= 2 and spread <= 10) and "medium" or "low"
+        end
+    end
+    if not turnInDeltaM and current.turnInPos and reference.turnInPos then
+        turnInDeltaM = scoring.positionDeltaToMeters(current.turnInPos, reference.turnInPos)
+        turnInConfidence = "low"
+    end
+
     return {
         number = current.number,
         -- Reference data
@@ -959,16 +1069,17 @@ function corner_analysis.compareCorners(current, reference)
         refMinGear = reference.minGear,
         refDownshiftFirstMs = reference.downshiftFirstMs,
         refDownshiftLastMs = reference.downshiftLastMs,
-        refTurnInPos = reference.turnInPos,
+        refTurnInPos = referenceTurnInMarker,
         refCombinedGripEarly = reference.combinedGripEarly,
         refCombinedGripMid = reference.combinedGripMid,
         refPeakLateralG = reference.peakLateralG,
         refTurnInLateralG = reference.turnInLateralG,
-        currentTurnInPos = current.turnInPos,
+        currentTurnInPos = currentTurnInMarker,
         currentCombinedGripEarly = current.combinedGripEarly,
         currentCombinedGripMid = current.combinedGripMid,
         currentPeakLateralG = current.peakLateralG,
         currentTurnInLateralG = current.turnInLateralG,
+        turnInConfidence = turnInConfidence,
         -- Deltas
         timeDelta = timeDelta,
         entrySpeedDelta = current.entrySpeed and reference.entrySpeed and
@@ -980,8 +1091,7 @@ function corner_analysis.compareCorners(current, reference)
         steeringDelta = (current.maxSteeringDeg or 0) - (reference.maxSteeringDeg or 0),
         gearDelta = (current.minGear and reference.minGear) and (current.minGear - reference.minGear) or nil,
         refOverlapTime = reference.overlapTime or 0,
-        turnInDeltaM = (current.turnInPos and reference.turnInPos) and
-            scoring.positionDeltaToMeters(current.turnInPos, reference.turnInPos) or nil,
+        turnInDeltaM = turnInDeltaM,
         combinedGripEarlyDelta = (current.combinedGripEarly and reference.combinedGripEarly) and
             (current.combinedGripEarly - reference.combinedGripEarly) or nil,
         combinedGripMidDelta = (current.combinedGripMid and reference.combinedGripMid) and
@@ -1121,7 +1231,7 @@ local function onCornerExit(currentLap, referenceLap, car)
     local currentSpeeds = (#liveCorner.speeds >= 2) and liveCorner.speeds or nil
     local refSpeeds = currentSpeeds and captureRefSpeeds(referenceLap, currentSpeeds) or nil
 
-    local _, score = corner_analysis.compare(cornerInfo, currentLap, referenceLap, {
+    local completedData, score = corner_analysis.compare(cornerInfo, currentLap, referenceLap, {
         currentSpeeds = currentSpeeds,
         refSpeeds = refSpeeds,
         timeDeltaOverride = timeDelta,
@@ -1130,6 +1240,13 @@ local function onCornerExit(currentLap, referenceLap, car)
     -- Store snapshot of current lap for flag analysis (notes section)
     -- Note: This is still a reference, but flags don't change after capture
     displayLap = currentLap
+    if completedData and score then
+        lastCompletedResult = {
+            cornerNum = cornerInfo.number,
+            score = score,
+            timeDelta = completedData.timeDelta,
+        }
+    end
     
     -- Store corner score with lap number for delta bar display
     if score and cornerInfo.number then
@@ -1156,7 +1273,8 @@ end
 ---@param currentLap table Current lap data
 ---@param referenceLap table Reference lap data
 ---@param corners table Array of corner definitions
-function corner_analysis.update(car, currentLap, referenceLap, corners)
+---@param dt number|nil Frame delta time
+function corner_analysis.update(car, currentLap, referenceLap, corners, dt)
     if not car then return end
     
     -- Clear frozen corner state when car starts moving (above 30 km/h)
@@ -1168,10 +1286,12 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     if car.lapCount ~= lastLapCount then
         lastLapCount = car.lapCount
         resetLiveCorner()
+        clearSequence(0)
         -- Clear displayed corner data from previous lap
         displayData = nil
         displayScore = 0
         displayLap = nil
+        lastCompletedResult = nil
         -- Clear corner scores from previous laps (keep only current lap scores)
         -- Remove scores that are from laps before the current one
         for i = #recentCornerScores, 1, -1 do
@@ -1201,6 +1321,7 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     if cornerNum > 0 and cornerInfo then
         if liveCorner.cornerNum ~= cornerNum then
             -- Entering new corner
+            clearSequence(cornerNum)
             liveCorner.cornerNum = cornerNum
             liveCorner.cornerInfo = cornerInfo
             liveCorner.entrySpeed = currentSpeed
@@ -1221,6 +1342,39 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
             liveCorner.wasOnThrottle = false
             liveCorner.speeds = {}
             liveCorner.maxSteeringDeg = 0
+            sequenceState.entrySteerDeg = car.steer or 0
+
+            if referenceLap then
+                local refAnalysis = corner_analysis.analyzeCorner(referenceLap, cornerInfo)
+                if refAnalysis then
+                    sequenceState.refLiftPos = refAnalysis.liftOffPos
+                    sequenceState.refBrakePos = refAnalysis.brakePos
+                    sequenceState.refApexPos = refAnalysis.apexPos
+
+                    -- Lift is a distinct reference event only when it creates a
+                    -- meaningful coast phase at least 10 m before braking.
+                    if refAnalysis.liftOffPos and refAnalysis.brakePos then
+                        local posDelta = refAnalysis.brakePos - refAnalysis.liftOffPos
+                        if posDelta < 0 then posDelta = posDelta + 1 end
+                        local coastMeters = posDelta * (ac.getSim().trackLengthM or 5000)
+                        sequenceState.events[1].relevant = coastMeters >= 10
+                    end
+                    sequenceState.events[2].relevant = refAnalysis.brakePos ~= nil
+                    sequenceState.events[4].relevant = refAnalysis.apexPos ~= nil
+                    if refAnalysis.turnInProfile then
+                        sequenceState.refTurnDirection = refAnalysis.turnInProfile.direction
+                        sequenceState.refTurnThresholdDeg = math.max(4,
+                            (refAnalysis.turnInProfile.peakSteeringDeg or 0) * 0.25)
+                        sequenceState.refTurnPos = refAnalysis.turnInProfile.positions
+                            and refAnalysis.turnInProfile.positions[2] or refAnalysis.turnInPos
+                    else
+                        sequenceState.refTurnPos = refAnalysis.turnInPos
+                    end
+                    sequenceState.events[3].relevant = sequenceState.refTurnPos ~= nil
+                        and sequenceState.refTurnDirection ~= nil
+                        and sequenceState.refTurnThresholdDeg ~= nil
+                end
+            end
         else
             -- In corner - track data
             table.insert(liveCorner.speeds, { pos = currentPos, speed = currentSpeed })
@@ -1244,8 +1398,10 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
             -- Track lift-off (ignore throttle dips during gear shifts)
             if isFullThrottle then
                 liveCorner.wasOnThrottle = true
-            elseif liveCorner.wasOnThrottle and not liveCorner.liftOffPos and not nearGearShift then
+            elseif liveCorner.wasOnThrottle and not liveCorner.liftOffPos and not nearGearShift
+                and not liveCorner.brakePos then
                 liveCorner.liftOffPos = currentPos
+                revealSequenceEvent(1, currentPos, sequenceState.refLiftPos)
             end
 
             -- Track brake point (first touch > 0.1 bar)
@@ -1253,6 +1409,28 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
             local currentBrakeBar = extended_brake.getBrakePressureBar(car)
             if currentBrakeBar > lap.BRAKE_INITIATION_BAR and not liveCorner.brakePos then
                 liveCorner.brakePos = currentPos
+                revealSequenceEvent(2, currentPos, sequenceState.refBrakePos)
+            end
+
+            -- Confirm a sustained steering commitment in the reference corner's
+            -- direction. This corresponds to the 25% steering-build point used
+            -- for the completed turn-in comparison.
+            if not sequenceState.events[3].visible and sequenceState.refTurnDirection
+                and sequenceState.refTurnThresholdDeg then
+                local directedSteer = ((car.steer or 0) - sequenceState.entrySteerDeg)
+                    * sequenceState.refTurnDirection
+                if directedSteer >= sequenceState.refTurnThresholdDeg then
+                    if not sequenceState.turnCandidatePos then
+                        sequenceState.turnCandidatePos = currentPos
+                    end
+                    sequenceState.turnCandidateTime = sequenceState.turnCandidateTime + (dt or 1 / 60)
+                    if sequenceState.turnCandidateTime >= 0.08 then
+                        revealSequenceEvent(3, sequenceState.turnCandidatePos, sequenceState.refTurnPos)
+                    end
+                else
+                    sequenceState.turnCandidatePos = nil
+                    sequenceState.turnCandidateTime = 0
+                end
             end
             
             -- Apex speed: minimum in corner (track continuously)
@@ -1261,9 +1439,18 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
                 liveCorner.apexPos = currentPos
                 -- Reset passedApex since we found a new min speed point
                 liveCorner.passedApex = false
+                sequenceState.apexRiseTime = 0
             else
                 -- Speed is increasing, we've passed the min speed point
                 liveCorner.passedApex = true
+                local meaningfulSpeedDrop = liveCorner.entrySpeed and liveCorner.apexSpeed
+                    and (liveCorner.entrySpeed - liveCorner.apexSpeed) >= 2
+                if meaningfulSpeedDrop and not sequenceState.events[4].visible then
+                    sequenceState.apexRiseTime = sequenceState.apexRiseTime + (dt or 1 / 60)
+                    if sequenceState.apexRiseTime >= 0.10 then
+                        revealSequenceEvent(4, liveCorner.apexPos, sequenceState.refApexPos)
+                    end
+                end
             end
 
             -- Entry speed: max speed before min speed point
@@ -1293,6 +1480,9 @@ function corner_analysis.update(car, currentLap, referenceLap, corners)
     
     -- Detect corner exit
     if wasInCorner and liveCorner.leftCorner then
+        -- Flat-out corners might not produce a large enough speed trough for
+        -- live confirmation; exiting the defined corner confirms their apex.
+        revealSequenceEvent(4, liveCorner.apexPos, sequenceState.refApexPos)
         onCornerExit(currentLap, referenceLap, car)
     end
 end
@@ -1360,6 +1550,12 @@ end
 
 function corner_analysis.getLastCompletedCorner()
     return displayData
+end
+
+--- Export the latest actually driven corner result for compact/remote displays.
+---@return table|nil result {cornerNum, score, timeDelta}
+function corner_analysis.getLastCompletedResult()
+    return lastCompletedResult
 end
 
 function corner_analysis.justExitedCorner()
@@ -1898,10 +2094,29 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             ui.setCursor(vec2(panelInnerX, statsY))
             ui.pushFont(ui.Font.Small)
             ui.pushStyleColor(ui.StyleColor.Text, color)
-            ui.text(note.text)
+            local noteWidth = math.max(40, panelW - panelPadding * 2)
+            -- Wrap explicitly using measured word widths. This avoids CSP
+            -- version/context differences in textWrapped() wrap coordinates
+            -- when drawing in a manually positioned right-hand panel.
+            local lines, line = {}, ""
+            for word in tostring(note.text):gmatch("%S+") do
+                local candidate = line == "" and word or (line .. " " .. word)
+                if line ~= "" and ui.measureText(candidate).x > noteWidth then
+                    lines[#lines + 1] = line
+                    line = word
+                else
+                    line = candidate
+                end
+            end
+            if line ~= "" then lines[#lines + 1] = line end
+            if #lines == 0 then lines[1] = "" end
+            for i, wrappedLine in ipairs(lines) do
+                ui.setCursor(vec2(panelInnerX, statsY + (i - 1) * lineH))
+                ui.text(wrappedLine)
+            end
             ui.popStyleColor()
             ui.popFont()
-            statsY = statsY + lineH
+            statsY = statsY + #lines * lineH
         end
 
         -- Helper to get delta color for speed (positive = faster = good)
@@ -1925,12 +2140,22 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
         local barH = 14
         local barSpacing = 2
         local labelW = 38
-        local valueW = 50  -- Width for value text with unit
+
+        local function drawBarValue(barStartX, barW, valueText, color)
+            ui.pushFont(ui.Font.Small)
+            local textSize = ui.measureText(valueText)
+            local textPos = vec2(barStartX + barW - textSize.x - 4, statsY + 1)
+            -- Small shadow keeps the value readable over fills and markers
+            -- without reserving a separate value column.
+            ui.drawText(valueText, vec2(textPos.x + 1, textPos.y + 1), rgbm(0, 0, 0, 0.9))
+            ui.drawText(valueText, textPos, color)
+            ui.popFont()
+        end
         
         local function drawDeltaBar(label, delta, maxDelta, unit, invertColor, decimals)
             if delta == nil then return end
             
-            local barW = barTotalW - labelW - valueW - 8
+            local barW = barTotalW - labelW - 4
             local barStartX = panelInnerX + labelW + 4
             local centerX = barStartX + barW / 2
             
@@ -1978,35 +2203,31 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
                 end
             end
             
-            -- Value text with unit (right side)
+            -- Value text, right-aligned inside the full-width bar.
             local sign = delta >= 0 and "+" or ""
-            local valueText = string.format("%s%." .. tostring(decimals or 0) .. "f %s", sign, delta, unit)
+            local valueText = string.format("%s%." .. tostring(decimals or 0) .. "f%s", sign, delta, unit)
             local valueColor = delta > 0 and theme.delta.positive or (delta < 0 and theme.delta.negative or theme.text.muted)
             if invertColor then
                 valueColor = delta < 0 and theme.delta.positive or (delta > 0 and theme.delta.negative or theme.text.muted)
             end
-            ui.pushFont(ui.Font.Small)
-            ui.setCursor(vec2(barStartX + barW + 4, statsY + 1))
-            ui.pushStyleColor(ui.StyleColor.Text, valueColor)
-            ui.text(valueText)
-            ui.popStyleColor()
-            ui.popFont()
+            drawBarValue(barStartX, barW, valueText, valueColor)
             
             statsY = statsY + barH + barSpacing
         end
         
         -- SPEED section
-        drawDeltaBar("Entry", displayData.entrySpeedDelta, barMaxSpeed, "km/h", false)
-        drawDeltaBar("Apex", displayData.apexSpeedDelta, barMaxSpeed, "km/h", false)
-        drawDeltaBar("Exit", displayData.exitSpeedDelta, barMaxSpeed, "km/h", false)
+        drawDeltaBar("Entry", displayData.entrySpeedDelta, barMaxSpeed, "kmh", false)
+        drawDeltaBar("Apex", displayData.apexSpeedDelta, barMaxSpeed, "kmh", false)
+        drawDeltaBar("Exit", displayData.exitSpeedDelta, barMaxSpeed, "kmh", false)
         
         statsY = statsY + 6
         
-        -- Position bar helper: white line marker, "Xm early/late" format
+        -- Position bar helper. Position is signed relative to the reference:
+        -- early is negative/yellow, late is positive/red, and +/-2 m is green.
         local function drawPositionBar(label, meters, maxMeters)
             if meters == nil then return end
             
-            local barW = barTotalW - labelW - valueW - 8
+            local barW = barTotalW - labelW - 4
             local barStartX = panelInnerX + labelW + 4
             local centerX = barStartX + barW / 2
             
@@ -2024,6 +2245,14 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
                 vec2(barStartX + barW, statsY + barH),
                 rgbm(0.15, 0.15, 0.15, 0.8), 2
             )
+
+            -- Green target zone: matching the reference within two metres.
+            local targetHalfW = math.min(barW / 2 - 2, (2 / maxMeters) * (barW / 2 - 2))
+            ui.drawRectFilled(
+                vec2(centerX - targetHalfW, statsY + 2),
+                vec2(centerX + targetHalfW, statsY + barH - 2),
+                rgbm(0.20, 0.70, 0.20, 0.45), 1
+            )
             
             -- Center line (reference position) - more visible dashed style
             ui.drawLine(
@@ -2033,37 +2262,30 @@ function corner_analysis.draw(dt, currentLap, referenceLap, corners)
             )
             
             -- Position marker (vertical line)
-            local onTarget = math.abs(meters) < 1
-            local markerColor = onTarget and theme.delta.positive or theme.text.primary
+            local onTarget = math.abs(meters) <= 2
+            local markerColor = onTarget and theme.delta.positive
+                or (meters > 0 and theme.delta.negative or rgbm(1, 0.78, 0.12, 1))
             local normalized = math.clamp(meters / maxMeters, -1, 1)
             local markerX = centerX + normalized * (barW / 2 - 2)
             ui.drawLine(
                 vec2(markerX, statsY + 1),
                 vec2(markerX, statsY + barH - 1),
-                markerColor, 2
+                markerColor, 3
             )
             
-            -- Value text: "Xm early" or "Xm late" (positive = later in track)
-            local direction = meters >= 0 and "late" or "early"
-            local valueText = string.format("%.0fm %s", math.abs(meters), direction)
-            if onTarget then valueText = "on target" end
+            -- Compact signed value leaves more room for the actual bar.
+            local valueText = string.format("%+.0fm", meters)
             
-            ui.pushFont(ui.Font.Small)
-            ui.setCursor(vec2(barStartX + barW + 4, statsY + 1))
-            ui.pushStyleColor(ui.StyleColor.Text, theme.text.primary)
-            ui.text(valueText)
-            ui.popStyleColor()
-            ui.popFont()
+            drawBarValue(barStartX, barW, valueText, markerColor)
             
             statsY = statsY + barH + barSpacing
         end
         
-        -- POSITION section (white lines, early/late labels)
+        -- POSITION section (signed metres; marker color communicates direction)
         local brakeMeters, liftOffMeters = scoring.getMeterDeltas(displayData)
-        drawPositionBar("Brake", brakeMeters, barMaxPos)
-        -- Turn-in is the next target after initial brake application.
-        drawPositionBar("Turn", displayData.turnInDeltaM, barMaxPos)
         drawPositionBar("Lift", liftOffMeters, barMaxPos)
+        drawPositionBar("Brake", brakeMeters, barMaxPos)
+        drawPositionBar("Turn", displayData.turnInDeltaM, barMaxPos)
         
         -- Apex position delta
         if displayData.currentApexPos and displayData.refApexPos then
@@ -2173,9 +2395,130 @@ function corner_analysis.reset()
     displayData = nil
     displayScore = 0
     displayLap = nil
+    lastCompletedResult = nil
     resetLiveCorner()
     corner_analysis.clearFrozenCorner()
     recentCornerScores = {}
+end
+
+--- Draw a tiny Lift -> Brake -> Turn -> Apex sequence.
+--- Dot color is a continuous position delta gradient:
+--- early = blue, within +/-2 m = green, late = red.
+function corner_analysis.drawSequenceDots(dt)
+    local size = ui.availableSpace()
+    local width = math.max(1, size.x)
+    local height = math.max(1, size.y)
+
+    ui.drawRectFilled(vec2(0, 0), vec2(width, height), rgbm(0.055, 0.055, 0.065, 0.92), 5)
+    ui.drawRect(vec2(0, 0), vec2(width, height), rgbm(0.3, 0.3, 0.35, 0.45), 5, 1)
+
+    local early = { r = 0.20, g = 0.55, b = 1.00 }
+    local target = { r = 0.25, g = 1.00, b = 0.35 }
+    local late = { r = 1.00, g = 0.25, b = 0.25 }
+    local exact = { r = 0.72, g = 0.30, b = 1.00 }
+    local function mix(a, b, t, alpha)
+        return rgbm(
+            a.r + (b.r - a.r) * t,
+            a.g + (b.g - a.g) * t,
+            a.b + (b.b - a.b) * t,
+            alpha or 1)
+    end
+    local function colorFor(delta)
+        if delta == nil then return rgbm(0.35, 0.35, 0.38, 0.65) end
+        -- Same displayed metre (rounds to 0 m) gets a distinct perfect-match color.
+        if math.abs(delta) < 0.5 then
+            return rgbm(exact.r, exact.g, exact.b, 1)
+        end
+        if delta < -2 then
+            local t = math.clamp((-delta - 2) / 8, 0, 1)
+            return mix(target, early, t)
+        elseif delta > 2 then
+            local t = math.clamp((delta - 2) / 8, 0, 1)
+            return mix(target, late, t)
+        end
+        return rgbm(target.r, target.g, target.b, 1)
+    end
+
+    local result = corner_analysis.getLastCompletedResult()
+    -- Always reserve the score/delta area. Previously the first corner's dots
+    -- used the full width, then jumped closer together as soon as a result
+    -- appeared. Keeping this geometry fixed makes all four lights stay put.
+    local resultReserve = math.min(96, math.max(66, width * 0.47))
+    local dotsRightEdge = width - resultReserve
+    local cy = height * 0.5
+    local radius = math.max(3.5, math.min(6, height * 0.19))
+    local left = math.max(radius + 7, dotsRightEdge * 0.12)
+    local right = math.min(dotsRightEdge - radius - 7, dotsRightEdge * 0.88)
+    local gap = (right - left) / 3
+    local labels = { "L", "B", "T", "A" }
+
+    ui.drawLine(vec2(left, cy), vec2(right, cy), rgbm(0.35, 0.35, 0.38, 0.35), 1)
+    for i = 1, 4 do
+        local center = vec2(left + gap * (i - 1), cy)
+        local event = sequenceState.events[i]
+        if event.visible then
+            local settled = colorFor(event.delta)
+            local flash = math.clamp(event.flash or 0, 0, 1)
+            local color = mix(
+                { r = settled.r, g = settled.g, b = settled.b },
+                { r = 1, g = 1, b = 1 },
+                flash * 0.72)
+            local glow = 0.10 + flash * 0.28
+            ui.drawCircleFilled(center, radius + 3 + flash * 1.5,
+                rgbm(color.r, color.g, color.b, glow), 18)
+            ui.drawCircleFilled(center, radius + 1.5,
+                rgbm(color.r, color.g, color.b, 0.24 + flash * 0.18), 18)
+            ui.drawCircleFilled(center, radius, color, 18)
+            ui.drawCircle(center, radius, rgbm(1, 1, 1, 0.22 + flash * 0.35), 18, 1)
+            event.flash = math.max(0, flash - (dt or 1 / 60) * 4.5)
+        else
+            if event.relevant then
+                -- A relevant event has not happened yet.
+                ui.drawCircle(center, radius, rgbm(0.42, 0.42, 0.46, 0.30), 18, 1)
+            else
+                -- Irrelevant techniques are neutral, light-gray filled dots.
+                ui.drawCircleFilled(center, radius, rgbm(0.68, 0.68, 0.72, 0.52), 18)
+                ui.drawCircle(center, radius, rgbm(0.9, 0.9, 0.92, 0.28), 18, 1)
+            end
+        end
+
+        -- Keep the sequence identifiable without adding external labels or
+        -- changing its fixed geometry. A dark glyph reads clearly on active
+        -- colors; inactive lights use a restrained light-gray glyph.
+        local labelColor = event.visible
+            and rgbm(0.025, 0.025, 0.03, 0.88)
+            or rgbm(0.82, 0.82, 0.86, event.relevant and 0.55 or 0.78)
+        ui.dwriteDrawTextClipped(labels[i], math.max(6, radius * 1.55),
+            center - vec2(radius, radius), center + vec2(radius, radius),
+            0.5, 0.5, false, labelColor)
+    end
+
+    if result then
+        local separatorX = dotsRightEdge + 1
+        ui.drawLine(vec2(separatorX, 5), vec2(separatorX, height - 5),
+            rgbm(0.42, 0.42, 0.46, 0.28), 1)
+
+        local score = math.floor((result.score or 0) + 0.5)
+        local scoreText = tostring(score)
+        local scoreColor = score >= 80 and theme.delta.positive
+            or (score >= 60 and rgbm(1, 0.78, 0.12, 1) or theme.delta.negative)
+        ui.pushFont(ui.Font.Main)
+        local scoreSize = ui.measureText(scoreText)
+        local scorePos = vec2(separatorX + 7, (height - scoreSize.y) * 0.5)
+        ui.drawText(scoreText, scorePos, scoreColor)
+        ui.popFont()
+
+        if result.timeDelta ~= nil then
+            local deltaText = string.format("%+.2fs", result.timeDelta)
+            local deltaColor = math.abs(result.timeDelta) < 0.005 and theme.text.muted
+                or (result.timeDelta < 0 and theme.delta.positive or theme.delta.negative)
+            ui.pushFont(ui.Font.Small)
+            local deltaSize = ui.measureText(deltaText)
+            local deltaX = math.min(width - deltaSize.x - 5, scorePos.x + scoreSize.x + 8)
+            ui.drawText(deltaText, vec2(deltaX, (height - deltaSize.y) * 0.5), deltaColor)
+            ui.popFont()
+        end
+    end
 end
 
 --- Handle checkpoint load: keep display frozen but reset live tracking

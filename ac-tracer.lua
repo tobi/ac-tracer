@@ -594,7 +594,7 @@ function script.update(dt)
     end
 
     -- Update corner analysis (live tracking)
-    corner_analysis.update(currentCar, state.currentLap, state.getComparisonLap(), state.trackCorners)
+    corner_analysis.update(currentCar, state.currentLap, state.getComparisonLap(), state.trackCorners, dt)
 
     -- Hide focus window entirely when no notes/images exist for this track.
     -- Only act on transitions to avoid fighting manual toggles every frame.
@@ -624,6 +624,10 @@ end
 function script.windowCorners(dt)
     -- corner_analysis.update() handles corner tracking internally
     corner_analysis.draw(dt, state.currentLap, state.getComparisonLap(), state.trackCorners)
+end
+
+function script.windowCornerSequence(dt)
+    corner_analysis.drawSequenceDots(dt)
 end
 
 function script.windowTelemetry(dt)
