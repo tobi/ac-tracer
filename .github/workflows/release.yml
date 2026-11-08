@@ -31,8 +31,8 @@ jobs:
           # Copy all icons
           cp *.png package/apps/lua/ac-tracer/
 
-          # Copy entire tracks directory
-          cp -r tracks package/apps/lua/ac-tracer/
+          # Include runtime modules, corner definitions, and reference tracks
+          cp -r lib corners tracks package/apps/lua/ac-tracer/
 
           # Copy dwrite.dll to AC root folder (for extended brake pressure)
           # The DLL goes in assettocorsa/ (root), not in the app folder
@@ -44,6 +44,26 @@ jobs:
           # Create the zip file from within the package directory
           cd package
           zip -r ../ac-tracer.zip .
+
+      - name: Verify packaged runtime files
+        shell: python
+        run: |
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          files = [Path('ac-tracer.lua'), Path('manifest.ini')]
+          for directory in ('lib', 'corners', 'tracks'):
+              files.extend(path for path in Path(directory).rglob('*') if path.is_file())
+
+          with ZipFile('ac-tracer.zip') as archive:
+              bad_entry = archive.testzip()
+              if bad_entry is not None:
+                  raise ValueError(f'Corrupt ZIP entry: {bad_entry}')
+              for path in files:
+                  entry = f'apps/lua/ac-tracer/{path.as_posix()}'
+                  if archive.read(entry) != path.read_bytes():
+                      raise ValueError(f'Packaged file differs from source: {entry}')
+          print(f'Verified {len(files)} runtime files in ac-tracer.zip')
 
       - name: Delete existing release
         run: |
